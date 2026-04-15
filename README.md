@@ -186,6 +186,8 @@ vcs git-diff --branch main
 ```
 Shows exactly what would change in Git before publishing.
 
+<img width="846" height="987" alt="Captura de pantalla 2026-04-15 205958" src="https://github.com/user-attachments/assets/1e38c28e-a0ed-4bc6-9bf3-a30dc5dc1ccb" />
+
 ### 9. View VCS diagnostics
 ```bash
 vcs doctor
@@ -197,6 +199,18 @@ vcs doctor
 vcs stats
 ```
 <img width="355" height="246" alt="Captura de pantalla 2026-04-14 200413" src="https://github.com/user-attachments/assets/d46becf9-f5f3-41b7-8374-8933fa7d0977" />
+
+### 11. View Track list
+```bash
+vcs track list
+```
+<img width="444" height="121" alt="Captura de pantalla 2026-04-15 210828" src="https://github.com/user-attachments/assets/d683b86f-1853-422b-8f5f-2e29a908bca1" />
+
+### 12. View Track switch
+```bash
+vcs track switch Experimental
+```
+<img width="705" height="85" alt="Captura de pantalla 2026-04-15 211011" src="https://github.com/user-attachments/assets/ef2f1b48-14fb-446b-a1f4-2a0ac6251f55" />
 
 ---
 
@@ -241,8 +255,9 @@ This safely:
 
 ### Publish Specific Snapshot
 ```bash
-vcs publish 1776186005719 --branch develop
+vcs publish 1776279259531 --branch master
 ```
+<img width="644" height="237" alt="Captura de pantalla 2026-04-15 210347" src="https://github.com/user-attachments/assets/1a084f77-20dd-4de9-adab-7f6b82fbfa81" />
 
 ### Safety Guarantees for Git Publish
 
