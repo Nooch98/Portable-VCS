@@ -212,6 +212,12 @@ vcs track switch Experimental
 ```
 <img width="705" height="85" alt="Captura de pantalla 2026-04-15 211011" src="https://github.com/user-attachments/assets/ef2f1b48-14fb-446b-a1f4-2a0ac6251f55" />
 
+### 13. View VCS tree
+```bash
+vcs tree
+```
+<img width="437" height="577" alt="Captura de pantalla 2026-04-15 211407" src="https://github.com/user-attachments/assets/1d1aefec-1a00-4c47-86f4-59e583b6cebb" />
+
 ---
 
 # Git Sync Workflow
