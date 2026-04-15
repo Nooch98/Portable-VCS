@@ -4,11 +4,16 @@
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Portable encrypted offline snapshot versioning with multi-track workflow for disconnected development environments.
+Portable encrypted offline snapshot versioning with secure multi-track workflows for disconnected development environments.
 
-**Portable VCS** is an experimental offline-first encrypted snapshot versioning tool designed as a secure local companion to Git — not a replacement.
+**Portable VCS** is an experimental offline-first encrypted snapshot versioning system built for secure portable development workflows.
 
-It allows you to create encrypted project snapshots on removable drives (USB, external SSD, HDD), restore them later without internet access, and safely publish offline work back into Git repositories when connectivity returns.
+It is designed as a standalone encrypted snapshot VCS that interoperates with Git when needed — while focusing on portability, encryption, simplified track workflows, and offline resilience.
+
+Portable VCS is not trying to replace Git’s collaborative branching model.  
+Instead, it solves a different problem:
+
+> secure encrypted portable version history for offline and disconnected environments.
 
 ---
 
@@ -19,7 +24,8 @@ Portable VCS was built for situations where:
 - internet access is unavailable,
 - GitHub / GitLab cannot be reached,
 - remote repositories are inaccessible,
-- you still need safe versioned backups of your work.
+- encrypted portable backups are required,
+- secure offline recovery matters more than distributed collaboration.
 
 Typical examples:
 
@@ -27,7 +33,29 @@ Typical examples:
 - travel coding without internet
 - secure isolated environments
 - air-gapped systems
-- portable external backup workflows
+- removable-drive encrypted repositories
+- portable secure development vaults
+
+---
+
+# Why not Git?
+
+Git is excellent for:
+
+- collaboration
+- distributed development
+- merges and rebases
+- branch-heavy workflows
+
+Portable VCS focuses instead on:
+
+- encrypted portable snapshots
+- removable-drive repositories
+- simplified multi-track workflows
+- secure offline recovery
+- encrypted version continuity without network dependency
+
+Portable VCS is designed for different priorities than Git.
 
 ---
 
@@ -37,7 +65,7 @@ Typical examples:
 
 Portable VCS is stable enough for real personal use, but is still evolving.
 
-It is not yet intended as a production-grade replacement for Git.
+It is not intended as a production-grade replacement for Git.
 
 Always keep independent backups of critical projects.
 
@@ -48,12 +76,12 @@ Always keep independent backups of critical projects.
 Portable VCS is:
 
 ✅ Offline-first  
-✅ Local encrypted snapshot versioning  
-✅ USB/external drive portable  
-✅ Git companion workflow  
-✅ Safe offline backup tool  
-✅ Snapshot restore + Git publish bridge  
-✅ Multi-track offline snapshot lanes
+✅ Encrypted snapshot versioning  
+✅ USB/external-drive portable  
+✅ Multi-track snapshot workflow  
+✅ Secure offline recovery system  
+✅ Git interoperable when needed  
+✅ Simplified encrypted alternative to branch-heavy workflows
 
 ---
 
@@ -61,11 +89,11 @@ Portable VCS is:
 
 Portable VCS is NOT:
 
-❌ A Git replacement  
-❌ A distributed version control system  
-❌ A team collaboration platform  
+❌ A Git clone  
+❌ A distributed collaboration platform  
 ❌ A merge conflict resolver  
-❌ A cloud sync system
+❌ A cloud sync service  
+❌ A replacement for team Git workflows
 
 ---
 
@@ -211,12 +239,6 @@ vcs track list
 vcs track switch Experimental
 ```
 <img width="705" height="85" alt="Captura de pantalla 2026-04-15 211011" src="https://github.com/user-attachments/assets/ef2f1b48-14fb-446b-a1f4-2a0ac6251f55" />
-
-### 13. View VCS tree
-```bash
-vcs tree
-```
-<img width="437" height="577" alt="Captura de pantalla 2026-04-15 211407" src="https://github.com/user-attachments/assets/1d1aefec-1a00-4c47-86f4-59e583b6cebb" />
 
 ---
 
