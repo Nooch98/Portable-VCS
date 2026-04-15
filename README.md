@@ -1,5 +1,6 @@
 # Portable VCS
 
+![Dart](https://img.shields.io/badge/language-Dart-blue)
 ![Version](https://img.shields.io/badge/version-0.2.0--experimental-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -100,48 +101,6 @@ Portable VCS is NOT:
 
 ---
 
-# Core Features
-
-### Snapshot System
-* Encrypted snapshot creation
-* Snapshot restore / revert
-* Snapshot integrity verification
-* Snapshot history log
-* Snapshot diff comparison
-* Snapshot pruning
-
-### Track System
-* Multiple independent snapshot tracks
-* Track switching with optional restore
-* Track-specific history isolation
-* Safe parallel experimental workflows
-
-### Repository Management
-* USB drive portable repositories
-* Clone repositories between machines
-* Bind folders to existing repositories
-* Repository health diagnostics
-* Repository statistics
-
-### Git Integration
-* Safe Git repository detection
-* Git branch-aware publishing
-* Dry-run Git publishing
-* Safe snapshot-to-Git synchronization
-* Protected working tree validation
-* Git snapshot preview diff before publish
-
-If no Git remote exists:
-* Portable VCS still creates local Git commit
-* Push is skipped safely
-
-### Ignore Support
-* `.gitignore` compatibility
-
-
-
----
-
 # Installation
 
 ### Build executable
@@ -230,6 +189,46 @@ vcs track switch Experimental
 
 ---
 
+# Core Features
+
+### Snapshot System
+* Encrypted snapshot creation
+* Snapshot restore / revert
+* Snapshot integrity verification
+* Snapshot history log
+* Snapshot diff comparison
+* Snapshot pruning
+
+### Track System
+* Multiple independent snapshot tracks
+* Track switching with optional restore
+* Track-specific history isolation
+* Safe parallel experimental workflows
+
+### Repository Management
+* USB drive portable repositories
+* Clone repositories between machines
+* Bind folders to existing repositories
+* Repository health diagnostics
+* Repository statistics
+
+### Git Integration
+* Safe Git repository detection
+* Git branch-aware publishing
+* Dry-run Git publishing
+* Safe snapshot-to-Git synchronization
+* Protected working tree validation
+* Git snapshot preview diff before publish
+
+If no Git remote exists:
+* Portable VCS still creates local Git commit
+* Push is skipped safely
+
+### Ignore Support
+* `.gitignore` compatibility
+
+---
+
 # Git Sync Workflow
 Portable VCS safely bridges offline work into Git.
 
@@ -277,71 +276,84 @@ vcs publish 1776279259531 --branch master
 
 ### Safety Guarantees for Git Publish
 
-Portable VCS will refuse publish if:
+The `publish` command is designed to be the ultimate safe passage between your private sandbox and your official Git history. It treats your Git repository with the highest priority, enforcing strict safety protocols before a single byte is changed.
 
-* current folder is not Git repo
-* Git working tree has uncommitted changes
-* snapshot is invalid
-* snapshot decryption fails
+#### Automatic Fail-Safe Protections
+**Portable VCS** will automatically abort the operation if any of these risks are detected:
+* **Dirty Working Tree:** If you have uncommitted changes in Git, VCS stops to prevent overwriting your unsaved work.
+* **Environment Check:** Operation is blocked if the current directory is not a valid Git repository.
+* **Integrity Failure:** If the snapshot is corrupted or decryption fails (wrong password), no files are touched.
+* **Remote Awareness:** If no Git remote is found, VCS intelligently completes the Local Commit but skips the push safely.
 
-if remote does not exist:
-* publish continues as local git commit only
+#### Human-in-the-Loop Verification
+You are always in control. Before any action, VCS requires your explicit confirmation:
+1. **Restore Check:** Confirming the decryption and file extraction.
+2. **Commit Check:** Reviewing the Git commit message and author.
+3. **Push Check:** Final "Go/No-Go" before sending data to the remote server.
+4. **Safety Backup:** VCS creates a temporary backup of your current state before overwriting files.
 
-Before publish it always:
 
-- ✅ asks confirmation before restore
-- ✅ asks confirmation before commit
-- ✅ asks confirmation before push
-- ✅ creates backup before overwrite
+### Recommended Publish Flow
+Don't guess what you are about to commit. Follow this standard protocol to maintain a 100% clean Git history:
 
-# Recommended Safe Git Publish Flow
-
-Before publishing offline work into Git:
-
+1. The Preview (Visual Diff)
+See exactly what changed between your encrypted snapshot and your current Git branch.
 ```bash
 vcs git-diff --branch main
+```
+2. The Simulation (Dry Run)
+Run the entire logic without writing a single file. This checks password validity, Git status, and remote availability.
+```bash
 vcs publish --branch main --dry-run
+```
+3. The Execution (Final Publish)
+Once verified, perform the actual migration to Git.
+```bash
 vcs publish --branch main
 ```
 
-This gives you:
+### Why this matters
+This flow ensures that when you finally say **"Feature Complete"** in Git, the code is:
 
-1. Exact Git diff preview
-2. Safe dry-run validation
-3. Final confirmed publish
+✅ Decrypted correctly.  
+✅ Verified for integrity.  
+✅ Previewed for changes.  
+✅ Committed cleanly without WIP noise.
 
 # Main Commands
-| Command | Description |
-| --- | --- |
-| `setup` | Prepare USB drive |
-| `init` |	Initialize project |
-| `list` |	List repositories on USB |
-| `clone <repo_id>` |	Clone repo from USB |
-| `bind <repo_id>` |	Bind folder to existing repo |
-| `status` |	Show pending changes |
-| `push "msg"` |	Save encrypted snapshot |
-| `push "msg" -a <name>` | Save encrypted snapshot with author signature |
-| `log` |	Show snapshot history |
-| `show <id>` |	Show snapshot details |
-| `diff [id1] [id2]` |	Compare snapshots |
-| `pull` |	Restore latest snapshot |
-| `revert <id>` |	Restore specific snapshot |
-| `restore <id>` |	Restore snapshot elsewhere |
-| `verify <id> [--all]` | Verify snapshot integrity |
-| `doctor` |	Diagnose repository health |
-| `stats` |	Show repository stats |
-| `prune` |	Delete old snapshots |
-| `clear-history` |	Remove snapshots |
-| `purge` |	Delete repo from USB |
-| `git-prepare` |	Prepare snapshot into Git tree |
-| `publish` |	Commit + push snapshot into Git |
-| `tree` | Show file tree of latest snapshot |
-| `git-diff` | Compare snapshot against Git branch HEAD |
-| `track list` | List all tracks |
-| `track create <name>` | Create a new track |
-| `track switch <name>` | Switch active track |
-| `track delete <name>` | Delete a track |
-| `version` | Show current Portable VCS version |
+### 🛠️ Command Reference
+
+| Category | Command | Description |
+| :--- | :--- | :--- |
+| **Setup** | `vcs setup` | Prepare a USB drive or external storage for Vault use. |
+| | `vcs init` | Initialize a new project and link it to the Vault. |
+| | `vcs list` | List all available repositories in the connected Vault. |
+| | `vcs clone <id>` | Clone a repository from the Vault into a new local folder. |
+| | `vcs bind <id>` | Bind current folder to an existing Vault repository. |
+| **Workflow** | `vcs status` | Compare working tree against the latest snapshot. |
+| | `vcs push "msg" [-a name]` | Create an encrypted snapshot (optional author signature). |
+| | `vcs pull` | Restore the latest snapshot from the active track. |
+| | `vcs revert <id>` | Roll back the current folder to a specific snapshot. |
+| | `vcs restore <id> --to <dir>` | Export a specific snapshot to an external directory. |
+| **Inspection**| `vcs log [--full]` | Show snapshot history (use `--full` for deep details). |
+| | `vcs show <id>` | Display detailed metadata of a specific snapshot. |
+| | `vcs diff [id1] [id2]` | Compare differences between snapshots or working tree. |
+| | `vcs tree [id]` | Visualize the file structure inside a snapshot. |
+| **Tracks** | `vcs track list` | Show all available history tracks. |
+| | `vcs track create <name>` | Start a new independent development lane. |
+| | `vcs track switch <name>` | Switch the active track (context switch). |
+| | `vcs track delete <name>` | Remove a track and its associated history. |
+| **Git Bridge** | `vcs git-diff` | Preview changes between VCS snapshot and Git branch. |
+| | `vcs git-prepare` | Restore snapshot into Git tree and stage files. |
+| | `vcs publish [--dry-run]` | **Atomic move:** Restore, commit, and push to Git. |
+| **Maintenance**| `vcs verify [--all]` | Run SHA-256 integrity checks on snapshots. |
+| | `vcs doctor` | Run repository diagnostics and health checks. |
+| | `vcs stats` | Show Vault size, snapshot counts, and storage info. |
+| | `vcs prune` | Clean up old snapshots to save space. |
+| | `vcs clear-history` | Wipe all snapshots but keep project structure. |
+| | `vcs purge` | Permanently delete the project from the Vault. |
+| **General** | `vcs version` | Show current Portable VCS version. |
+| | `vcs help` | Show help message. |
 
 # Encryption
 Snapshots are encrypted locally before storage.
@@ -357,35 +369,64 @@ Example:
 node_modules/
 build/
 .dart_tool/
-vcs.exe
 ```
 
 # Example Real Workflow
-### Online:
+1. Create a "Safe Lab" in VCS
+Don't create a Git branch yet. Just create a track in your encrypted Vault.
 ```bash
-git commit -m "feature complete"
-git push origin main
+vcs track create "new-auth-logic"
+```
+2. Iterate and Fail (Dirty Work)
+Save snapshots as you break things. If you mess up, `vcs pull` and try again.
+```bash
+vcs push "First attempt: broken"
+vcs push "Second attempt: compiling but buggy"
+vcs push "Final attempt: logic verified ✅"
 ```
 
-### Offline:
-```bash
-vcs push "offline backup while traveling"
-```
-
-### Back online:
+3. Move to Production (Git)
+Only once the code in your VCS track is perfect, you "promote" it to Git.
 ```bash
 vcs publish --branch main
 ```
+Result: Git only sees one perfect commit. All the failures stay hidden and encrypted in your Vault.
 
-# Track Workflow Example
-Each track keeps independent snapshot history and can be restored separately.
+# Parallel Reality Workflow (Multi-Track
+Tracks allow you to maintain multiple independent versions of your project. You can jump between a risky experiment and a stable fix in seconds, keeping your Git working tree ready for what matters.
+
+### Scenario: The "What If" Experiment
+You have a crazy idea for a refactor, but you don't want to mess up your current stable progress or create a messy Git branch.
+
+1. Create and enter your sandbox:
 ```bash
-vcs track create Experimental
-vcs track switch Experimental
-vcs push "try new refactor"
+vcs track create Brainstorming
+vcs track switch Brainstorming
+```
 
+2. Work and fail safely:
+```bash
+# Save a snapshot of your risky changes
+vcs push "Total refactor of the UI core"
+```
+
+3. Instant context switch:
+Suddenly, a bug appears in your main version. You need to go back instantly.
+```bash
 vcs track switch main
-vcs push "stable release work"
+vcs pull  # Restores your stable code in 1 second
+```
+
+4. Fix and Secure:
+```bash
+vcs push "Critical hotfix for production" -a "Nooch98"
+```
+
+5. Back to the experiment:
+Now that the crisis is over, go back to your "Brainstorming" track exactly where you left off.
+```bash
+vcs track switch Brainstorming
+vcs pull
 ```
 
 # Current Limitations
@@ -439,13 +480,13 @@ Currently tested:
 
 Planned improvements:
 
-* smarter line-ending normalization in Git diff
-* incremental snapshots
-* advanced track merging
-* track diff comparison
-* conflict-aware Git publish
-* export/import bundle mode
-* snapshot compression optimization
+* - [ ] smarter line-ending normalization in Git diff
+* - [ ] incremental snapshots
+* - [ ] advanced track merging
+* - [ ] track diff comparison
+* - [ ] conflict-aware Git publish
+* - [ ] export/import bundle mode
+* - [ ] snapshot compression optimization
 
 # Contributing
 
