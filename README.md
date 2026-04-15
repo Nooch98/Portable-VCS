@@ -1,10 +1,10 @@
 # Portable VCS
 
-![Version](https://img.shields.io/badge/version-0.1.0--experimental-blue)
+![Version](https://img.shields.io/badge/version-0.2.0--experimental-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Portable encrypted offline snapshot versioning for disconnected development environments.
+Portable encrypted offline snapshot versioning with multi-track workflow for disconnected development environments.
 
 **Portable VCS** is an experimental offline-first encrypted snapshot versioning tool designed as a secure local companion to Git — not a replacement.
 
@@ -52,7 +52,8 @@ Portable VCS is:
 ✅ USB/external drive portable  
 ✅ Git companion workflow  
 ✅ Safe offline backup tool  
-✅ Snapshot restore + Git publish bridge
+✅ Snapshot restore + Git publish bridge  
+✅ Multi-track offline snapshot lanes
 
 ---
 
@@ -79,7 +80,7 @@ vcs push "offline work before travel"
 ```bash
 vcs publish --branch main
 ```
-This safely restores the latest offline snapshot into your Git repo and pushes it upstream.
+This safely restores the latest offline snapshot into your Git repo and publishes it into Git locally or upstream if a remote exists.
 
 ---
 
@@ -92,6 +93,12 @@ This safely restores the latest offline snapshot into your Git repo and pushes i
 * Snapshot history log
 * Snapshot diff comparison
 * Snapshot pruning
+
+### Track System
+* Multiple independent snapshot tracks
+* Track switching with optional restore
+* Track-specific history isolation
+* Safe parallel experimental workflows
 
 ### Repository Management
 * USB drive portable repositories
@@ -106,9 +113,15 @@ This safely restores the latest offline snapshot into your Git repo and pushes i
 * Dry-run Git publishing
 * Safe snapshot-to-Git synchronization
 * Protected working tree validation
+* Git snapshot preview diff before publish
+
+If no Git remote exists:
+* Portable VCS still creates local Git commit
+* Push is skipped safely
 
 ### Ignore Support
 * `.gitignore` compatibility
+
 
 
 ---
@@ -167,13 +180,19 @@ vcs diff 1776186005719 1776184573501
 ```
 <img width="634" height="938" alt="Captura de pantalla 2026-04-14 200339" src="https://github.com/user-attachments/assets/8246c0a3-8a02-47ea-9af8-5bcb0d20923e" />
 
-### 8. View VCS diagnostics
+### 8. Preview Git Publish Changes
+```bash
+vcs git-diff --branch main
+```
+Shows exactly what would change in Git before publishing.
+
+### 9. View VCS diagnostics
 ```bash
 vcs doctor
 ```
 <img width="428" height="603" alt="Captura de pantalla 2026-04-14 200356" src="https://github.com/user-attachments/assets/184b8914-59f8-4f14-b65d-a98ce773c9f4" />
 
-### 9. View VCS repo stats
+### 10. View VCS repo stats
 ```bash
 vcs stats
 ```
@@ -183,6 +202,14 @@ vcs stats
 
 # Git Sync Workflow
 Portable VCS safely bridges offline work into Git.
+
+### Preview Git Changes Before Publishing
+```bash
+vcs git-diff --branch main
+```
+Compares the latest Portable VCS snapshot against the current Git branch HEAD without modifying anything.
+
+Useful to inspect exactly what would be committed before publish.
 
 ### Safe Preview Before Publishing
 ```bash
@@ -210,7 +237,7 @@ This safely:
 3. restores latest snapshot
 4. stages files
 5. creates Git commit
-6. pushes to remote branch
+6. pushes to remote branch (if configured)
 
 ### Publish Specific Snapshot
 ```bash
@@ -223,9 +250,11 @@ Portable VCS will refuse publish if:
 
 * current folder is not Git repo
 * Git working tree has uncommitted changes
-* target remote does not exist
 * snapshot is invalid
 * snapshot decryption fails
+
+if remote does not exist:
+* publish continues as local git commit only
 
 Before publish it always:
 
@@ -233,6 +262,22 @@ Before publish it always:
 - ✅ asks confirmation before commit
 - ✅ asks confirmation before push
 - ✅ creates backup before overwrite
+
+# Recommended Safe Git Publish Flow
+
+Before publishing offline work into Git:
+
+```bash
+vcs git-diff --branch main
+vcs publish --branch main --dry-run
+vcs publish --branch main
+```
+
+This gives you:
+
+1. Exact Git diff preview
+2. Safe dry-run validation
+3. Final confirmed publish
 
 # Main Commands
 | Command | Description |
@@ -250,7 +295,7 @@ Before publish it always:
 | `pull` |	Restore latest snapshot |
 | `revert <id>` |	Restore specific snapshot |
 | `restore <id>` |	Restore snapshot elsewhere |
-| `verify <id>` |	Verify snapshot integrity |
+| `verify <id> [--all]` | Verify snapshot integrity |
 | `doctor` |	Diagnose repository health |
 | `stats` |	Show repository stats |
 | `prune` |	Delete old snapshots |
@@ -258,6 +303,13 @@ Before publish it always:
 | `purge` |	Delete repo from USB |
 | `git-prepare` |	Prepare snapshot into Git tree |
 | `publish` |	Commit + push snapshot into Git |
+| `tree` | Show file tree of latest snapshot |
+| `git-diff` | Compare snapshot against Git branch HEAD |
+| `track list` | List all tracks |
+| `track create <name>` | Create a new track |
+| `track switch <name>` | Switch active track |
+| `track delete <name>` | Delete a track |
+| `version` | Show current Portable VCS version |
 
 # Encryption
 Snapshots are encrypted locally before storage.
@@ -293,8 +345,19 @@ vcs push "offline backup while traveling"
 vcs publish --branch main
 ```
 
+# Track Workflow Example
+Each track keeps independent snapshot history and can be restored separately.
+```bash
+vcs track create Experimental
+vcs track switch Experimental
+vcs push "try new refactor"
+
+vcs track switch main
+vcs push "stable release work"
+```
+
 # Current Limitations
-* No branch system inside Portable VCS yet
+* Tracks exist, but advanced branch merge workflows are not supported yet
 * No merge conflict resolution
 * Full snapshot storage (not incremental yet)
 * Large projects consume more storage
@@ -344,9 +407,10 @@ Currently tested:
 
 Planned improvements:
 
-* smarter diff engine
+* smarter line-ending normalization in Git diff
 * incremental snapshots
-* branch support
+* advanced track merging
+* track diff comparison
 * conflict-aware Git publish
 * export/import bundle mode
 * snapshot compression optimization
@@ -362,6 +426,5 @@ MIT License
 
 # Author
 
-Created by Nooch98
-
-Portable offline encrypted snapshot versioning for disconnected environments.
+Created by Nooch98  
+Portable offline encrypted multi-track snapshot versioning for disconnected environments.
