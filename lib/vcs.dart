@@ -8,12 +8,21 @@ import 'package:args/args.dart';
 import 'package:crypto/crypto.dart' as hash;
 import 'package:cryptography/cryptography.dart' as crypto_alg;
 import 'package:path/path.dart' as p;
+import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
+import 'package:vcs/models/diff_line.dart';
 import 'package:vcs/models/file_change.dart';
+import 'package:vcs/models/git_check.dart';
 import 'package:vcs/models/ignore_rule.dart';
+import 'package:vcs/models/range.dart';
 import 'package:vcs/models/repo_context.dart';
 import 'package:vcs/models/repo_meta.dart';
 import 'package:vcs/models/snapshot_log_entry.dart';
+import 'package:vcs/models/track_state.dart';
+import 'package:vcs/models/tree_node.dart';
+
+const String version = 'Portable VCS Version 0.2.0-Experimental';
+enum LogViewMode { summary, standard, full}
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -53,6 +62,13 @@ class PortableVcs {
     print('  ${'clone [repo_id] [--into dir]'.green.padRight(28)} Clone a repository from USB into a local folder.');
     print('  ${'bind [repo_id]'.green.padRight(28)} Bind the current folder to an existing remote repository.');
 
+    print('\n${"Tracks".cyan}');
+    print('  ${'track list'.green.padRight(28)} List all tracks.');
+    print('  ${'track current'.green.padRight(28)} Show active track.');
+    print('  ${'track create <name>'.green.padRight(28)} Create a new empty track.');
+    print('  ${'track switch <name>'.green.padRight(28)} Switch to another track.');
+    print('  ${'track delete <name>'.green.padRight(28)} Delete an existing non-active track.');
+
     print('\n${"Snapshot workflow".cyan}');
     print('  ${'push "message" [-a author]'.green.padRight(28)} Create a new encrypted snapshot of the current project.');
     print('  ${'pull'.green.padRight(28)} Restore the latest snapshot into the current project.');
@@ -64,14 +80,19 @@ class PortableVcs {
     print('  ${'diff'.green.padRight(28)} Compare working tree vs latest snapshot.');
     print('  ${'diff <id>'.green.padRight(28)} Compare a specific snapshot vs working tree.');
     print('  ${'diff <id1> <id2>'.green.padRight(28)} Compare two snapshots.');
-    print('  ${'log'.green.padRight(28)} Show full snapshot history.');
+    print('  ${'log'.green.padRight(28)} Show compact snapshot history.');
+    print('  ${'log --standard'.green.padRight(28)} Show history with short change preview.');
+    print('  ${'log --full'.green.padRight(28)} Show full detailed snapshot history.');
     print('  ${'show <snapshot_id>'.green.padRight(28)} Show detailed information about one snapshot.');
-    print('  ${'verify <snapshot_id>'.green.padRight(28)} Verify that a snapshot can be decrypted and read.');
+    print('  ${'verify <snapshot_id>'.green.padRight(28)} Verify one snapshot integrity.');
+    print('  ${'verify --all'.green.padRight(28)} Verify entire repository integrity.');
+    print('  ${'tree [snapshot_id]'.green.padRight(28)} Show file tree of latest or selected snapshot.');
 
     print('\n${"Git integration".cyan}');
     print('  ${'git-prepare [id] --branch main'.green.padRight(28)} Prepare current Git repo from a snapshot.');
     print('  ${'publish [id] --branch main'.green.padRight(28)} Commit and push snapshot to Git safely.');
     print('  ${'publish [id] --branch main --dry-run'.green.padRight(28)} Show what would happen without changing anything.');
+    print('  ${'git-diff [snapshot_id] --branch main'.green.padRight(28)} Compare snapshot against current Git branch HEAD.');
 
     print('\n${"Maintenance".cyan}');
     print('  ${'doctor'.green.padRight(28)} Run repository diagnostics and health checks.');
@@ -83,6 +104,7 @@ class PortableVcs {
 
     print('\n${"General".cyan}');
     print('  ${'help'.green.padRight(28)} Show this help message.');
+    print('  ${'version'.green.padRight(28)} Show tool version.');
 
     print('\n${"Examples".cyan}');
     print('  ${'vcs setup'.green}');
@@ -551,9 +573,17 @@ class PortableVcs {
         changeSummary: changes.map((e) => e.toTag()).toList(),
       );
 
+      final updatedTracks = Map<String, TrackState>.from(
+        context.remoteMeta.tracks,
+      );
+
+      updatedTracks[context.remoteMeta.activeTrack] = TrackState(
+        logs: [entry, ...context.remoteMeta.logs],
+      );
+
       final updatedMeta = context.remoteMeta.copyWith(
         updatedAt: DateTime.now().toUtc().toIso8601String(),
-        logs: [entry, ...context.remoteMeta.logs],
+        tracks: updatedTracks,
       );
 
       await _atomicWriteString(
@@ -565,7 +595,7 @@ class PortableVcs {
     });
   }
 
-  Future<void> log() async {
+  Future<void> log({LogViewMode mode = LogViewMode.summary}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -583,8 +613,9 @@ class PortableVcs {
       final entry = logs[i];
       final createdAt = _formatDateForList(entry.createdAt);
       final author = entry.author ?? '-';
-
       final isLatest = i == logs.length - 1;
+
+      final counts = countChanges(entry.changeSummary);
 
       print(
         '[${i.toString().padLeft(2, '0')}] '
@@ -596,21 +627,67 @@ class PortableVcs {
       print('     ${"Author:".yellow.padRight(10)} $author');
       print('     ${"Message:".yellow.padRight(10)} ${entry.message.cyan}');
 
-      if (entry.changeSummary.isEmpty) {
-        print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
-      } else {
-        print('     ${"Changes:".yellow.padRight(10)}');
-        for (final c in entry.changeSummary) {
-          if (c.startsWith('[N]')) {
-            print('       ${c.green}');
-          } else if (c.startsWith('[M]')) {
-            print('       ${c.yellow}');
-          } else if (c.startsWith('[D]')) {
-            print('       ${c.red}');
+      switch (mode) {
+        case LogViewMode.summary:
+          if (entry.changeSummary.isEmpty) {
+            print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
           } else {
-            print('       $c');
+            print(
+              '     ${"Changes:".yellow.padRight(10)} '
+              '${counts.total.toString().green} file(s) '
+              '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
+            );
           }
-        }
+          break;
+
+        case LogViewMode.standard:
+          if (entry.changeSummary.isEmpty) {
+            print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
+          } else {
+            print(
+              '     ${"Changes:".yellow.padRight(10)} '
+              '${counts.total.toString().green} file(s) '
+              '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
+            );
+
+            final preview = entry.changeSummary.take(5).toList();
+            for (final c in preview) {
+              if (c.startsWith('[N]')) {
+                print('       ${c.green}');
+              } else if (c.startsWith('[M]')) {
+                print('       ${c.yellow}');
+              } else if (c.startsWith('[D]')) {
+                print('       ${c.red}');
+              } else {
+                print('       $c');
+              }
+            }
+
+            final remaining = entry.changeSummary.length - preview.length;
+            if (remaining > 0) {
+              print('       ${"... and $remaining more change(s)".yellow}');
+            }
+          }
+          break;
+
+        case LogViewMode.full:
+          if (entry.changeSummary.isEmpty) {
+            print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
+          } else {
+            print('     ${"Changes:".yellow.padRight(10)}');
+            for (final c in entry.changeSummary) {
+              if (c.startsWith('[N]')) {
+                print('       ${c.green}');
+              } else if (c.startsWith('[M]')) {
+                print('       ${c.yellow}');
+              } else if (c.startsWith('[D]')) {
+                print('       ${c.red}');
+              } else {
+                print('       $c');
+              }
+            }
+          }
+          break;
       }
 
       if (i != logs.length - 1) {
@@ -619,6 +696,28 @@ class PortableVcs {
     }
 
     print('═' * 60);
+  }
+
+  ChangeCounts countChanges(List<String> changes) {
+    var added = 0;
+    var modified = 0;
+    var deleted = 0;
+
+    for (final c in changes) {
+      if (c.startsWith('[N]')) {
+        added++;
+      } else if (c.startsWith('[M]')) {
+        modified++;
+      } else if (c.startsWith('[D]')) {
+        deleted++;
+      }
+    }
+
+    return ChangeCounts(
+      added: added,
+      modified: modified,
+      deleted: deleted,
+    );
   }
 
   Future<void> showSnapshot(String snapshotId) async {
@@ -679,26 +778,128 @@ class PortableVcs {
     print('═' * 60);
   }
 
-  Future<void> verify(String snapshotId) async {
+  Future<void> verify({
+    String? snapshotId,
+    bool verifyAll = false,
+  }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
     final password = askPassword();
     if (password == null) return;
 
+    if (verifyAll) {
+      await _verifyAllSnapshots(context, password);
+      return;
+    }
+
+    if (snapshotId == null || snapshotId.trim().isEmpty) {
+      print('❌ ${"Usage: vcs verify <snapshot_id> OR vcs verify --all".red}');
+      return;
+    }
+
     final snapshot = await readSnapshot(
       context,
       snapshotId,
       password: password,
     );
+
     if (snapshot == null) return;
 
     try {
       ZipDecoder().decodeBytes(snapshot.zipBytes, verify: true);
-      print('✅ Snapshot is valid and decryptable.');
+      print('✅ ${"Snapshot is valid and decryptable.".green}');
     } catch (e) {
-      print('❌ Snapshot verification failed: $e');
+      print('❌ ${"Snapshot verification failed:".red} $e');
     }
+  }
+
+  Future<void> _verifyAllSnapshots(
+    RepoContext context,
+    String password,
+  ) async {
+    final logs = context.remoteMeta.logs;
+    final snapshotsDir = Directory(
+      p.join(context.remoteRepoDir.path, 'snapshots'),
+    );
+
+    print('\n🔍 ${"Verifying all snapshots...".cyan}');
+    print('═' * 60);
+
+    int valid = 0;
+    int failed = 0;
+
+    final expectedFiles = <String>{};
+
+    for (final entry in logs) {
+      expectedFiles.add(entry.fileName);
+
+      final file = File(
+        p.join(snapshotsDir.path, entry.fileName),
+      );
+
+      if (!file.existsSync()) {
+        failed++;
+        print('${"[FAIL]".red} ${entry.id.yellow} -> missing file');
+        continue;
+      }
+
+      try {
+        final snapshot = await readSnapshot(
+          context,
+          entry.id,
+          password: password,
+        );
+
+        if (snapshot == null) {
+          failed++;
+          print('${"[FAIL]".red} ${entry.id.yellow} -> cannot decrypt');
+          continue;
+        }
+
+        ZipDecoder().decodeBytes(snapshot.zipBytes, verify: true);
+
+        valid++;
+        print('${"[OK]".green} ${entry.id.green}');
+      } catch (e) {
+        failed++;
+        print('${"[FAIL]".red} ${entry.id.yellow} -> $e');
+      }
+    }
+
+    final orphanFiles = <String>[];
+
+    if (snapshotsDir.existsSync()) {
+      for (final entity in snapshotsDir.listSync()) {
+        if (entity is File) {
+          final name = p.basename(entity.path);
+          if (!expectedFiles.contains(name)) {
+            orphanFiles.add(name);
+          }
+        }
+      }
+    }
+
+    print('═' * 60);
+    print('${"Snapshots checked:".yellow.padRight(20)} ${logs.length}');
+    print('${"Valid:".yellow.padRight(20)} ${valid.toString().green}');
+    print('${"Failed:".yellow.padRight(20)} ${failed.toString().red}');
+    print('${"Orphan files:".yellow.padRight(20)} ${orphanFiles.length.toString().yellow}');
+
+    if (orphanFiles.isNotEmpty) {
+      print('\n🗂️ ${"Orphan snapshot files:".yellow}');
+      for (final orphan in orphanFiles) {
+        print('  ${orphan.yellow}');
+      }
+    }
+
+    if (failed == 0) {
+      print('\n✅ ${"Repository verification complete.".green}');
+    } else {
+      print('\n⚠️ ${"Repository verification completed with errors.".yellow}');
+    }
+
+    print('');
   }
 
   Future<void> doctor() async {
@@ -940,6 +1141,7 @@ class PortableVcs {
 
     print('${"Project:".yellow.padRight(18)} ${context.remoteMeta.projectName.green}');
     print('${"Repo ID:".yellow.padRight(18)} ${context.remoteMeta.repoId}');
+    print('${"Track:".yellow.padRight(18)} ${context.remoteMeta.activeTrack.green}');
     print('${"Format version:".yellow.padRight(18)} ${context.remoteMeta.formatVersion}');
     print('${"Created:".yellow.padRight(18)} $createdAt');
     print('${"Updated:".yellow.padRight(18)} $updatedAt');
@@ -983,33 +1185,36 @@ class PortableVcs {
 
     final now = DateTime.now().toUtc();
     final logs = List<SnapshotLogEntry>.from(context.remoteMeta.logs);
-    final toDelete = <SnapshotLogEntry>{};
+    final toDeleteIds = <String>{};
 
     if (olderThanDays != null) {
       for (final entry in logs) {
         final created = DateTime.tryParse(entry.createdAt)?.toUtc();
         if (created == null) continue;
+
         final age = now.difference(created).inDays;
         if (age > olderThanDays) {
-          toDelete.add(entry);
+          toDeleteIds.add(entry.id);
         }
       }
     }
 
     if (keep != null && keep >= 0 && logs.length > keep) {
       for (var i = keep; i < logs.length; i++) {
-        toDelete.add(logs[i]);
+        toDeleteIds.add(logs[i].id);
       }
     }
 
-    if (toDelete.length >= logs.length && logs.isNotEmpty) {
-      toDelete.remove(logs.first);
+    if (toDeleteIds.length >= logs.length && logs.isNotEmpty) {
+      toDeleteIds.remove(logs.first.id);
     }
 
-    if (toDelete.isEmpty) {
+    if (toDeleteIds.isEmpty) {
       print('ℹ️ Nothing to prune.');
       return;
     }
+
+    final toDelete = logs.where((e) => toDeleteIds.contains(e.id)).toList();
 
     print('Snapshots selected for deletion:');
     for (final entry in toDelete) {
@@ -1024,16 +1229,27 @@ class PortableVcs {
 
     await _withLock(context.remoteRepoDir, () async {
       for (final entry in toDelete) {
-        final file = File(p.join(context.remoteRepoDir.path, 'snapshots', entry.fileName));
+        final file = File(
+          p.join(context.remoteRepoDir.path, 'snapshots', entry.fileName),
+        );
         if (file.existsSync()) {
           file.deleteSync();
         }
       }
 
-      final remaining = logs.where((e) => !toDelete.contains(e)).toList();
+      final remaining = logs.where((e) => !toDeleteIds.contains(e.id)).toList();
+
+      final updatedTracks = Map<String, TrackState>.from(
+        context.remoteMeta.tracks,
+      );
+
+      updatedTracks[context.remoteMeta.activeTrack] = TrackState(
+        logs: remaining,
+      );
+
       final updatedMeta = context.remoteMeta.copyWith(
         updatedAt: DateTime.now().toUtc().toIso8601String(),
-        logs: remaining,
+        tracks: updatedTracks,
       );
 
       await _atomicWriteString(
@@ -1042,7 +1258,7 @@ class PortableVcs {
       );
 
       print('✅ Pruned ${toDelete.length} snapshots.');
-      print('ℹ️ Remaining snapshots: ${remaining.length}');
+      print('ℹ️ Remaining snapshots in track "${context.remoteMeta.activeTrack}": ${remaining.length}');
     });
   }
 
@@ -1186,9 +1402,17 @@ class PortableVcs {
       }
       await snapshotsDir.create(recursive: true);
 
+      final updatedTracks = Map<String, TrackState>.from(
+        context.remoteMeta.tracks,
+      );
+
+      updatedTracks[context.remoteMeta.activeTrack] = TrackState(
+        logs: [],
+      );
+
       final updatedMeta = context.remoteMeta.copyWith(
         updatedAt: DateTime.now().toUtc().toIso8601String(),
-        logs: [],
+        tracks: updatedTracks,
       );
 
       await _atomicWriteString(
@@ -1501,6 +1725,21 @@ class PortableVcs {
     return changes;
   }
 
+  bool _filesDiffer(Uint8List a, Uint8List b) {
+    if (_bytesEqual(a, b)) {
+      return false;
+    }
+
+    final aText = _normalizeUtf8BytesForComparison(a);
+    final bText = _normalizeUtf8BytesForComparison(b);
+
+    if (aText != null && bText != null) {
+      return aText != bText;
+    }
+
+    return true;
+  }
+
   Future<void> _printDiffBetweenFileMaps(
     Map<String, Uint8List> left,
     Map<String, Uint8List> right, {
@@ -1536,7 +1775,7 @@ class PortableVcs {
         continue;
       }
 
-      if (!_bytesEqual(a, b)) {
+      if (_filesDiffer(a, b)) {
         modifiedFiles.add(path);
       }
     }
@@ -1585,8 +1824,8 @@ class PortableVcs {
         print('${'[MOD]'.yellow} ${path.cyan}');
         print('─' * 60);
 
-        final aText = _tryDecodeUtf8(a);
-        final bText = _tryDecodeUtf8(b);
+        final aText = _normalizeUtf8BytesForComparison(a);
+        final bText = _normalizeUtf8BytesForComparison(b);
 
         if (aText == null || bText == null) {
           print('  ${"(binary or non-UTF8 content changed)".yellow}');
@@ -1597,7 +1836,14 @@ class PortableVcs {
         final lines = _simpleLineDiff(aText, bText);
 
         if (lines.isEmpty) {
-          print('  ${"(content changed, but no line diff available)".yellow}');
+          final normalizedA = aText.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+          final normalizedB = bText.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+
+          if (normalizedA == normalizedB) {
+            print('  ${"(line-ending or encoding-only change)".yellow}');
+          } else {
+            print('  ${"(content changed, but no line diff available)".yellow}');
+          }
           print('');
           continue;
         }
@@ -1691,7 +1937,7 @@ class PortableVcs {
     return _compressDiffIntoBlocks(rawLines, context: 1);
   }
 
-  List<_DiffLine> _buildRawDiffLines(List<String> left, List<String> right) {
+  List<DiffLine> _buildRawDiffLines(List<String> left, List<String> right) {
     final lcs = List.generate(
       left.length + 1,
       (_) => List<int>.filled(right.length + 1, 0),
@@ -1707,43 +1953,43 @@ class PortableVcs {
       }
     }
 
-    final output = <_DiffLine>[];
+    final output = <DiffLine>[];
     var i = 0;
     var j = 0;
 
     while (i < left.length && j < right.length) {
       if (left[i] == right[j]) {
-        output.add(_DiffLine.context(left[i]));
+        output.add(DiffLine.context(left[i]));
         i++;
         j++;
       } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-        output.add(_DiffLine.removed(left[i]));
+        output.add(DiffLine.removed(left[i]));
         i++;
       } else {
-        output.add(_DiffLine.added(right[j]));
+        output.add(DiffLine.added(right[j]));
         j++;
       }
     }
 
     while (i < left.length) {
-      output.add(_DiffLine.removed(left[i]));
+      output.add(DiffLine.removed(left[i]));
       i++;
     }
 
     while (j < right.length) {
-      output.add(_DiffLine.added(right[j]));
+      output.add(DiffLine.added(right[j]));
       j++;
     }
 
     return output;
   }
 
-  List<String> _compressDiffIntoBlocks(List<_DiffLine> lines, {int context = 2}) {
+  List<String> _compressDiffIntoBlocks(List<DiffLine> lines, {int context = 2}) {
     if (lines.isEmpty) return [];
 
     final changeIndexes = <int>[];
     for (var i = 0; i < lines.length; i++) {
-      if (lines[i].type != _DiffLineType.context) {
+      if (lines[i].type != DiffLineType.context) {
         changeIndexes.add(i);
       }
     }
@@ -1752,14 +1998,14 @@ class PortableVcs {
       return [];
     }
 
-    final ranges = <_Range>[];
+    final ranges = <Range>[];
 
     for (final index in changeIndexes) {
       final start = max(0, index - context);
       final end = min(lines.length - 1, index + context);
 
       if (ranges.isEmpty) {
-        ranges.add(_Range(start, end));
+        ranges.add(Range(start, end));
         continue;
       }
 
@@ -1767,7 +2013,7 @@ class PortableVcs {
       if (start <= last.end + 1) {
         last.end = max(last.end, end);
       } else {
-        ranges.add(_Range(start, end));
+        ranges.add(Range(start, end));
       }
     }
 
@@ -1779,13 +2025,13 @@ class PortableVcs {
       for (var j = range.start; j <= range.end; j++) {
         final line = lines[j];
         switch (line.type) {
-          case _DiffLineType.context:
+          case DiffLineType.context:
             output.add('  ${line.text}');
             break;
-          case _DiffLineType.added:
+          case DiffLineType.added:
             output.add('+ ${line.text}');
             break;
-          case _DiffLineType.removed:
+          case DiffLineType.removed:
             output.add('- ${line.text}');
             break;
         }
@@ -2191,9 +2437,9 @@ class PortableVcs {
       return;
     }
 
-    if (!await _gitRemoteExists(remote)) {
-      print('❌ Git remote "$remote" was not found.');
-      return;
+    final remoteExists = await _gitRemoteExists(remote);
+    if (!remoteExists) {
+      print('ℹ️ ${'Notice:'.yellow} Remote "$remote" not found. The snapshot will be committed locally but not pushed.');
     }
 
     if (!await _gitWorkingTreeIsClean()) {
@@ -2227,7 +2473,7 @@ class PortableVcs {
     print('${"Snapshot:".yellow.padRight(14)} ${entry.id.green}');
     print('${"Message:".yellow.padRight(14)} ${entry.message}');
     print('${"Branch:".yellow.padRight(14)} ${branch.green}');
-    print('${"Remote:".yellow.padRight(14)} ${remote.green}');
+    print('${"Remote:".yellow.padRight(14)} ${remoteExists ? remote.green : "None (local only)".yellow}');
     print('${"Branch exists:".yellow.padRight(14)} ${branchExists ? "yes".green : "no".yellow}');
     print('${"Commit message:".yellow.padRight(14)} $commitMessage');
     print('${"Mode:".yellow.padRight(14)} ${dryRun ? "dry-run".yellow : "publish".green}');
@@ -2261,14 +2507,16 @@ class PortableVcs {
 
     await _gitCommit(commitMessage);
 
-    if (!confirmAction('Push commit to "$remote/$branch" now?')) {
-      print('ℹ️ Commit created locally. Push skipped by user.');
-      return;
+    if (remoteExists) {
+      if (!confirmAction('Push commit to "$remote/$branch" now?')) {
+        print('ℹ️ Commit created locally. Push skipped by user.');
+        return;
+      }
+      await _gitPush(remote, branch);
+      print('✅ Snapshot ${entry.id} published and pushed to Git.');
+    } else {
+      print('✅ Snapshot ${entry.id} published to local Git (no remote configured).');
     }
-
-    await _gitPush(remote, branch);
-
-    print('✅ Snapshot ${entry.id} published to Git.');
   }
 
   Future<void> _restoreSnapshotIntoWorkingTree(
@@ -2328,7 +2576,7 @@ class PortableVcs {
     }
   }
 
-  Future<_GitCheckResult> _checkGitRepository() async {
+  Future<GitCheckResult> _checkGitRepository() async {
     final result = await Process.run(
       'git',
       ['rev-parse', '--is-inside-work-tree'],
@@ -2338,7 +2586,7 @@ class PortableVcs {
     final ok = result.exitCode == 0 &&
         result.stdout.toString().trim().toLowerCase() == 'true';
 
-    return _GitCheckResult(
+    return GitCheckResult(
       ok: ok,
       message: ok ? 'Git repository detected.' : 'Current folder is not a Git repository.',
     );
@@ -2423,10 +2671,18 @@ class PortableVcs {
     throw Exception('Failed to inspect staged changes: ${result.stderr}');
   }
 
-  Future<void> _gitCommit(String message) async {
+  Future<void> _gitCommit(String message, {String? snapshotId, String? track}) async {
+    final fullMessage = StringBuffer()
+      ..writeln(message)
+      ..writeln()
+      ..writeln('---')
+      ..writeln('VCS-Snapshot: ${snapshotId ?? "N/A"}')
+      ..writeln('VCS-Track: ${track ?? "N/A"}')
+      ..writeln('VCS-Sync-Date: ${DateTime.now().toUtc().toIso8601String()}');
+
     final result = await Process.run(
       'git',
-      ['commit', '-m', message],
+      ['commit', '-m', fullMessage.toString()],
       workingDirectory: _cwd.path,
     );
 
@@ -2459,6 +2715,440 @@ class PortableVcs {
     return (stdin.readLineSync() ?? '').trim().toLowerCase() == 'y';
   }
 
+  Future<void> tree([String? snapshotId]) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    if (context.remoteMeta.logs.isEmpty) {
+      print('ℹ️ ${"No snapshots available.".yellow}');
+      return;
+    }
+
+    final targetId = snapshotId ?? context.remoteMeta.logs.first.id;
+
+    SnapshotLogEntry? entry;
+    for (final item in context.remoteMeta.logs) {
+      if (item.id == targetId) {
+        entry = item;
+        break;
+      }
+    }
+
+    if (entry == null) {
+      print('❌ ${"Snapshot not found:".red} $targetId');
+      return;
+    }
+
+    final password = askPassword();
+    if (password == null) return;
+
+    final snapshot = await readSnapshot(context, targetId, password: password);
+    if (snapshot == null) return;
+
+    final files = await _decodeSnapshotFiles(snapshot);
+    final paths = files.keys.toList()..sort();
+
+    if (paths.isEmpty) {
+      print('\n🌳 ${"Snapshot tree".cyan}');
+      print('═' * 60);
+      print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green}');
+      print('${"Project:".yellow.padRight(12)} ${context.remoteMeta.projectName.green}');
+      print('${"Status:".yellow.padRight(12)} ${"(empty snapshot)".yellow}');
+      print('═' * 60);
+      print('');
+      return;
+    }
+
+    final root = _buildTree(paths);
+
+    print('\n🌳 ${"Snapshot tree".cyan}');
+    print('═' * 60);
+    print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green}');
+    print('${"Project:".yellow.padRight(12)} ${context.remoteMeta.projectName.green}');
+    print('${"Created:".yellow.padRight(12)} ${_formatDateForList(entry.createdAt)}');
+    print('${"Files:".yellow.padRight(12)} ${paths.length.toString().green}');
+    print('─' * 60);
+    print('.');
+
+    final stats = TreeStats();
+    _printTreeNode(root, prefix: '', stats: stats);
+
+    print('─' * 60);
+    print('${"Directories:".yellow.padRight(12)} ${stats.directories.toString().green}');
+    print('${"Files:".yellow.padRight(12)} ${stats.files.toString().green}');
+    print('═' * 60);
+    print('');
+  }
+
+  TreeNode _buildTree(List<String> paths) {
+    final root = TreeNode('');
+
+    for (final rawPath in paths) {
+      final normalized = rawPath.replaceAll('\\', '/');
+      final parts = normalized.split('/');
+
+      var current = root;
+      for (var i = 0; i < parts.length; i++) {
+        final part = parts[i];
+        final isFile = i == parts.length - 1;
+
+        current.children.putIfAbsent(
+          part,
+          () => TreeNode(part, isFile: isFile),
+        );
+
+        final next = current.children[part]!;
+        if (!isFile) {
+          next.isFile = false;
+        }
+
+        current = next;
+      }
+    }
+
+    return root;
+  }
+
+  void _printTreeNode(
+    TreeNode node, {
+    required String prefix,
+    required TreeStats stats,
+  }) {
+    final entries = node.children.values.toList()
+      ..sort((a, b) {
+        if (a.isFile != b.isFile) {
+          return a.isFile ? 1 : -1;
+        }
+        return a.name.compareTo(b.name);
+      });
+
+    for (var i = 0; i < entries.length; i++) {
+      final child = entries[i];
+      final isLast = i == entries.length - 1;
+      final branch = isLast ? '└── ' : '├── ';
+
+      if (child.isFile) {
+        stats.files++;
+        print('$prefix$branch${child.name.green}');
+      } else {
+        stats.directories++;
+        print('$prefix$branch${child.name.cyan}');
+        _printTreeNode(
+          child,
+          prefix: '$prefix${isLast ? '    ' : '│   '}',
+          stats: stats,
+        );
+      }
+    }
+  }
+
+  Future<void> gitDiff({
+    String? snapshotId,
+    required String branch,
+  }) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final gitCheck = await _checkGitRepository();
+    if (!gitCheck.ok) {
+      print('❌ ${gitCheck.message}'.red);
+      return;
+    }
+
+    final branchExists = await _gitBranchExists(branch);
+    if (!branchExists) {
+      print('❌ ${'Git branch not found:'.red} $branch');
+      return;
+    }
+
+    if (context.remoteMeta.logs.isEmpty) {
+      print('ℹ️ ${"No snapshots available.".yellow}');
+      return;
+    }
+
+    final targetId = snapshotId ?? context.remoteMeta.logs.first.id;
+
+    SnapshotLogEntry? entry;
+    for (final item in context.remoteMeta.logs) {
+      if (item.id == targetId) {
+        entry = item;
+        break;
+      }
+    }
+
+    if (entry == null) {
+      print('❌ ${"Snapshot not found:".red} $targetId');
+      return;
+    }
+
+    final password = askPassword();
+    if (password == null) return;
+
+    final snapshot = await readSnapshot(context, targetId, password: password);
+    if (snapshot == null) return;
+
+    final snapshotFiles = await _decodeSnapshotFiles(snapshot);
+    final gitFiles = await _readGitTreeFiles(branch);
+
+    await _printDiffBetweenFileMaps(
+      gitFiles,
+      snapshotFiles,
+      leftLabel: 'git:$branch@HEAD',
+      rightLabel: 'vcs:snapshot:${entry.id}',
+    );
+  }
+
+  Future<Map<String, Uint8List>> _readGitTreeFiles(String branch) async {
+    final files = <String, Uint8List>{};
+
+    final listResult = await Process.run(
+      'git',
+      ['ls-tree', '-r', '--name-only', branch],
+      workingDirectory: _cwd.path,
+    );
+
+    if (listResult.exitCode != 0) {
+      throw Exception('Failed to list files for branch "$branch": ${listResult.stderr}');
+    }
+
+    final output = listResult.stdout.toString().trim();
+    if (output.isEmpty) {
+      return files;
+    }
+
+    final paths = const LineSplitter()
+        .convert(output)
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList()
+      ..sort();
+
+    for (final path in paths) {
+      final normalizedPath = path.replaceAll('\\', '/');
+
+      if (await _isIgnoredPath(normalizedPath)) {
+        continue;
+      }
+
+      final showResult = await Process.run(
+        'git',
+        ['show', '$branch:$path'],
+        workingDirectory: _cwd.path,
+        stdoutEncoding: null,
+        stderrEncoding: utf8,
+      );
+
+      if (showResult.exitCode != 0) {
+        throw Exception('Failed to read "$path" from branch "$branch": ${showResult.stderr}');
+      }
+
+      final stdoutValue = showResult.stdout;
+
+      if (stdoutValue is Uint8List) {
+        files[normalizedPath] = stdoutValue;
+      } else if (stdoutValue is List<int>) {
+        files[normalizedPath] = Uint8List.fromList(stdoutValue);
+      } else {
+        throw Exception('Unexpected git blob output type for "$path".');
+      }
+    }
+    return files;
+  }
+
+  String _normalizeTextForComparison(String text) {
+    var normalized = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    if (normalized.isNotEmpty && normalized.codeUnitAt(0) == 0xFEFF) {
+      normalized = normalized.substring(1);
+    }
+    return normalized;
+  }
+
+  String? _normalizeUtf8BytesForComparison(Uint8List bytes) {
+    final text = _tryDecodeUtf8(bytes);
+    if (text == null) return null;
+    return _normalizeTextForComparison(text);
+  }
+
+  bool _isValidTrackName(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return false;
+    return RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(trimmed);
+  }
+
+  Future<void> _saveRemoteMeta(RepoContext context, RepoMeta meta) async {
+    final metaFile = File(p.join(context.remoteRepoDir.path, remoteMetaFileName));
+    await metaFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(meta.toJson()),
+      flush: true,
+    );
+  }
+
+  Future<void> trackList() async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final trackNames = context.remoteMeta.tracks.keys.toList()..sort();
+
+    print('\n🎯 ${"Tracks".cyan}');
+    print('═' * 60);
+
+    for (var i = 0; i < trackNames.length; i++) {
+      final name = trackNames[i];
+      final track = context.remoteMeta.tracks[name]!;
+      final isActive = name == context.remoteMeta.activeTrack;
+
+      print(
+        '[${i.toString().padLeft(2, '0')}] '
+        '${name.green}'
+        '${isActive ? " ${"(active)".cyan}" : ""}',
+      );
+      print('     ${"Snapshots:".yellow.padRight(12)} ${track.logs.length.toString().green}');
+    }
+
+    print('═' * 60);
+    print('');
+  }
+
+  Future<void> trackCurrent() async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    print('\n🎯 ${"Current track".cyan}');
+    print('═' * 60);
+    print('${"Name:".yellow.padRight(12)} ${context.remoteMeta.activeTrack.green}');
+    print(
+      '${"Snapshots:".yellow.padRight(12)} '
+      '${context.remoteMeta.tracks[context.remoteMeta.activeTrack]!.logs.length.toString().green}',
+    );
+    print('═' * 60);
+    print('');
+  }
+
+  Future<void> trackCreate(String name) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final trackName = name.trim();
+
+    if (!_isValidTrackName(trackName)) {
+      print('❌ ${"Invalid track name.".red} Use only letters, numbers, "_" and "-".');
+      return;
+    }
+
+    if (context.remoteMeta.tracks.containsKey(trackName)) {
+      print('❌ ${"Track already exists:".red} $trackName');
+      return;
+    }
+
+    final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+    updatedTracks[trackName] = TrackState(logs: []);
+
+    final updatedMeta = context.remoteMeta.copyWith(
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+      tracks: updatedTracks,
+    );
+
+    await _saveRemoteMeta(context, updatedMeta);
+
+    print('✅ ${"Track created:".green} $trackName');
+  }
+
+  Future<void> trackDelete(String name) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final trackName = name.trim();
+
+    if (!context.remoteMeta.tracks.containsKey(trackName)) {
+      print('❌ ${"Track not found:".red} $trackName');
+      return;
+    }
+
+    if (trackName == 'main') {
+      print('❌ ${'The "main" track cannot be deleted.'.red}');
+      return;
+    }
+
+    if (trackName == context.remoteMeta.activeTrack) {
+      print('❌ ${"Cannot delete the active track.".red}');
+      return;
+    }
+
+    final snapshotCount = context.remoteMeta.tracks[trackName]!.logs.length;
+    if (!confirmAction('Delete track "$trackName" with $snapshotCount snapshot(s)?')) {
+      print('Cancelled.');
+      return;
+    }
+
+    final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+    updatedTracks.remove(trackName);
+
+    final updatedMeta = context.remoteMeta.copyWith(
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+      tracks: updatedTracks,
+    );
+
+    await _saveRemoteMeta(context, updatedMeta);
+
+    print('✅ ${"Track deleted:".green} $trackName');
+  }
+
+  Future<void> trackSwitch(String name) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final trackName = name.trim();
+
+    if (!context.remoteMeta.tracks.containsKey(trackName)) {
+      print('❌ ${"Track not found:".red} $trackName');
+      return;
+    }
+
+    if (trackName == context.remoteMeta.activeTrack) {
+      print('ℹ️ ${"Already on track:".yellow} $trackName');
+      return;
+    }
+
+    final targetTrack = context.remoteMeta.tracks[trackName]!;
+
+    final updatedMeta = context.remoteMeta.copyWith(
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+      activeTrack: trackName,
+    );
+
+    await _saveRemoteMeta(context, updatedMeta);
+
+    if (targetTrack.logs.isEmpty) {
+      print('✅ ${"Switched to track:".green} $trackName');
+      print('ℹ️ ${'Track "$trackName" is empty. The next push will start its history.'.yellow}');
+      return;
+    }
+
+    final latest = targetTrack.logs.first;
+    final password = askPassword();
+    if (password == null) return;
+
+    final refreshedContext = await loadRepoContext();
+    if (refreshedContext == null) return;
+
+    final snapshot = await readSnapshot(
+      refreshedContext,
+      latest.id,
+      password: password,
+    );
+    if (snapshot == null) return;
+
+    if (!confirmAction('Track "$trackName" has snapshots. Restore its latest snapshot into the working tree now?')) {
+      print('ℹ️ ${'Switched to track:'.yellow} $trackName');
+      print('ℹ️ ${'Working tree was not restored.'.yellow}');
+      return;
+    }
+
+    await _restoreSnapshotIntoWorkingTree(refreshedContext, snapshot);
+
+    print('✅ ${"Switched to track:".green} $trackName');
+    print('✅ ${"Restored latest snapshot:".green} ${latest.id}');
+  }
 }
 
 extension ColorConsole on String {
@@ -2475,7 +3165,13 @@ Future<void> main(List<String> args) async {
     ..addCommand('setup')
     ..addCommand('init')
     ..addCommand('status')
-    ..addCommand('log')
+    ..addCommand(
+      'log',
+      ArgParser()
+        ..addFlag('full', negatable: false)
+        ..addFlag('summary', negatable: false)
+        ..addFlag('standard', negatable: false),
+    )
     ..addCommand('show')
     ..addCommand('pull')
     ..addCommand('list')
@@ -2484,9 +3180,18 @@ Future<void> main(List<String> args) async {
     ..addCommand('help')
     ..addCommand('clear-history')
     ..addCommand('purge')
-    ..addCommand('verify')
+    ..addCommand(
+      'verify',
+      ArgParser()
+        ..addFlag(
+          'all',
+          negatable: false,
+          help: 'Verify all snapshots in repository',
+        ),
+    )
     ..addCommand('bind')
     ..addCommand('diff')
+    ..addCommand('tree')
     ..addCommand(
       'push',
       ArgParser()..addOption('author', abbr: 'a'),
@@ -2513,6 +3218,21 @@ Future<void> main(List<String> args) async {
         ..addFlag('dry-run', negatable: false),
     )
     ..addCommand(
+      'git-diff',
+      ArgParser()
+        ..addOption('branch', defaultsTo: 'main'),
+    )
+    ..addCommand(
+      'track',
+      ArgParser()
+        ..addCommand('list')
+        ..addCommand('current')
+        ..addCommand('create')
+        ..addCommand('switch')
+        ..addCommand('delete'),
+    )
+    ..addCommand('version')
+    ..addCommand(
       'publish',
       ArgParser()
         ..addOption('branch', defaultsTo: 'main')
@@ -2528,6 +3248,9 @@ Future<void> main(List<String> args) async {
   try {
     final result = parser.parse(args);
     switch (result.command?.name) {
+      case 'version':
+        print(version.cyan);
+        break;
       case 'setup':
         await app.setupDrive();
         break;
@@ -2549,7 +3272,18 @@ Future<void> main(List<String> args) async {
         await app.diff(result.command?.rest ?? []);
         break;
       case 'log':
-        await app.log();
+        final cmd = result.command!;
+        LogViewMode mode = LogViewMode.summary;
+
+        if (cmd['full'] == true) {
+          mode = LogViewMode.full;
+        } else if (cmd['standard'] == true) {
+          mode = LogViewMode.standard;
+        } else if (cmd['summary'] == true) {
+          mode = LogViewMode.summary;
+        }
+
+        await app.log(mode: mode);
         break;
       case 'show':
         final rest = result.command?.rest ?? [];
@@ -2575,12 +3309,15 @@ Future<void> main(List<String> args) async {
         await app.purge();
         break;
       case 'verify':
-        final rest = result.command?.rest ?? [];
-        if (rest.isEmpty) {
-          print('❌ You must provide a snapshot ID.');
-          return;
-        }
-        await app.verify(rest.first);
+        final cmd = result.command!;
+        final verifyAll = cmd['all'] == true;
+        final rest = cmd.rest;
+        final snapshotId = rest.isNotEmpty ? rest.first : null;
+
+        await app.verify(
+          snapshotId: snapshotId,
+          verifyAll: verifyAll,
+        );
         break;
       case 'revert':
         final rest = result.command?.rest ?? [];
@@ -2647,44 +3384,69 @@ Future<void> main(List<String> args) async {
           dryRun: cmd['dry-run'] == true,
         );
         break;
+      case 'tree':
+        final rest = result.command?.rest ?? [];
+        final snapshotId = rest.isNotEmpty ? rest.first : null;
+        await app.tree(snapshotId);
+        break;
+      case 'git-diff':
+        final cmd = result.command!;
+        final snapshotId = cmd.rest.isNotEmpty ? cmd.rest.first : null;
+        await app.gitDiff(
+          snapshotId: snapshotId,
+          branch: cmd['branch'].toString(),
+        );
+        break;
+      case 'track':
+        final trackCmd = result.command!;
+        final sub = trackCmd.command;
+
+        if (sub == null) {
+          print('❌ ${"Usage: vcs track <list|current|create|switch|delete> [name]".red}');
+          break;
+        }
+
+        switch (sub.name) {
+          case 'list':
+            await app.trackList();
+            break;
+
+          case 'current':
+            await app.trackCurrent();
+            break;
+
+          case 'create':
+            if (sub.rest.isEmpty) {
+              print('❌ ${"Track name required.".red}');
+            } else {
+              await app.trackCreate(sub.rest.first);
+            }
+            break;
+
+          case 'switch':
+            if (sub.rest.isEmpty) {
+              print('❌ ${"Track name required.".red}');
+            } else {
+              await app.trackSwitch(sub.rest.first);
+            }
+            break;
+
+          case 'delete':
+            if (sub.rest.isEmpty) {
+              print('❌ ${"Track name required.".red}');
+            } else {
+              await app.trackDelete(sub.rest.first);
+            }
+            break;
+
+          default:
+            print('❌ ${"Usage: vcs track <list|current|create|switch|delete> [name]".red}');
+        }
+        break;
       default:
         app.showHelp();
     }
   } catch (e) {
     print('❌ Error: $e');
   }
-}
-
-enum _DiffLineType {
-  context,
-  added,
-  removed,
-}
-
-class _DiffLine {
-  final String text;
-  final _DiffLineType type;
-
-  _DiffLine(this.text, this.type);
-
-  factory _DiffLine.context(String text) => _DiffLine(text, _DiffLineType.context);
-  factory _DiffLine.added(String text) => _DiffLine(text, _DiffLineType.added);
-  factory _DiffLine.removed(String text) => _DiffLine(text, _DiffLineType.removed);
-}
-
-class _Range {
-  int start;
-  int end;
-
-  _Range(this.start, this.end);
-}
-
-class _GitCheckResult {
-  final bool ok;
-  final String message;
-
-  _GitCheckResult({
-    required this.ok,
-    required this.message,
-  });
 }
