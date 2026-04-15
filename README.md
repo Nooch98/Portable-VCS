@@ -15,6 +15,9 @@ Instead, it solves a different problem:
 
 > secure encrypted portable version history for offline and disconnected environments.
 
+> [!NOTE]
+> This is a tool created for my personal use and is not intended to compete with anything. It's a complement to use with Git.
+
 ---
 
 # Why this exists
