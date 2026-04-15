@@ -100,21 +100,6 @@ Portable VCS is NOT:
 
 ---
 
-# Main Use Case
-
-### Offline workflow:
-
-```bash
-vcs push "offline work before travel"
-```
-### Later when internet returns:
-```bash
-vcs publish --branch main
-```
-This safely restores the latest offline snapshot into your Git repo and publishes it into Git locally or upstream if a remote exists.
-
----
-
 # Core Features
 
 ### Snapshot System
