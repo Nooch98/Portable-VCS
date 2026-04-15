@@ -335,6 +335,7 @@ This gives you:
 | `bind <repo_id>` |	Bind folder to existing repo |
 | `status` |	Show pending changes |
 | `push "msg"` |	Save encrypted snapshot |
+| `push "msg" -a <name>` | Save encrypted snapshot with author signature |
 | `log` |	Show snapshot history |
 | `show <id>` |	Show snapshot details |
 | `diff [id1] [id2]` |	Compare snapshots |
