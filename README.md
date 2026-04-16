@@ -222,7 +222,7 @@ By default, the dashboard will be accessible at `http://localhost:8080`.
 For security and data integrity, destructive or high-risk operations require manual confirmation. If you trigger these commands from the Web UI, the process will pause and wait for you to confirm the action in your physical system terminal:
 
 | Command | Why it requires terminal confirmation |
-|--| |--|
+|-- |--
 | `vcs revert` | To prevent accidental overwriting of your local working directory. |
 | `vcs prune` | To ensure you don't accidentally delete multiple historical snapshots. |
 | `vcs bind` | To acknowledge differences between local files and the remote repository. |
