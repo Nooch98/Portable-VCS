@@ -104,14 +104,28 @@ Portable VCS is NOT:
 # Installation
 
 ### Build executable
+Windows:
 ```bash
 dart compile exe lib/vcs.dart -o vcs.exe
 ```
+
+Linux:
+```bash
+dart compile exe lib/vcs.dart -o vcs
+chmod +x vcs
+```
+
 ### Optional: Add to PATH
 Example Windows:
 ```bash
 C:\Tools\vcs\
 ```
+
+Example Linux:
+```bash
+sudo cp vcs /usr/bin/
+```
+
 Then use globally:
 ```bash
 vcs help
