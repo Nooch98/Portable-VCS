@@ -202,6 +202,42 @@ vcs track switch Experimental
 <img width="705" height="85" alt="Captura de pantalla 2026-04-15 211011" src="https://github.com/user-attachments/assets/ef2f1b48-14fb-446b-a1f4-2a0ac6251f55" />
 
 ---
+# Web Dashboard (Local UI)
+Portable VCS includes a built-in **Web Terminal & Dashboard**, providing an interface to visualize your project history, explore encrypted snapshots, and manage repositories without relying solely on the CLI.
+
+### Launching the Dashboard
+To start the local server, run the following command from your project root:
+```bash
+vcs ui
+```
+By default, the dashboard will be accessible at `http://localhost:8080`.
+
+### Key Features
+* Integrated Web Terminal: Execute any VCS command directly from the browser with full ANSI color support.
+* Visual Snapshot Timeline: Browse through your history with a clean UI showing authors, timestamps, and full 13-digit Snapshot IDs.
+* Secure Snapshot Inspection: Preview the file tree and content of past snapshots. Data is decrypted on-the-fly in memory using your session password
+* Live Repository Context: The dashboard tracks your active branch (track), project metadata, and storage status in real-time.
+
+### Manual Confirmation Policy
+For security and data integrity, destructive or high-risk operations require manual confirmation. If you trigger these commands from the Web UI, the process will pause and wait for you to confirm the action in your physical system terminal:
+
+| Command | Why it requires terminal confirmation |
+|--| |--|
+| `vcs revert` | To prevent accidental overwriting of your local working directory. |
+| `vcs prune` | To ensure you don't accidentally delete multiple historical snapshots. |
+| `vcs bind` | To acknowledge differences between local files and the remote repository. |
+| `vcs purge` | To prevent the total deletion of remote repository data. |
+
+> [!IMPORTANT]
+> If a command appears to "hang" or stay in a loading state within the Web Terminal, check your OS terminal window for a (y/N) prompt.
+
+#### Dashboard Preview
+The UI is designed to be lightweight and portable, requiring no external dependencies or internet connection to function.
+
+<img width="1868" height="1038" alt="Captura de pantalla 2026-04-17 011901" src="https://github.com/user-attachments/assets/c72bbe5e-2f3b-4444-8981-5f98001419b3" />
+
+#### Tip: Session Passwords
+When prompted for a password in the Web UI, it is used only for the duration of the current command's execution and is never stored on disk or in the server logs, keeping your AES-256 encryption keys completely secure.
 
 # Core Features
 
