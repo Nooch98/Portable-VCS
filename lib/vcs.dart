@@ -32,6 +32,7 @@ class PortableVcs {
   static const String remoteReposDir = 'repos';
   static const String remoteMetaFileName = 'meta.json';
   static const String lockFileName = '.lock';
+  String? currentWebPassword;
 
   final List<String> internalIgnoredNames = const [
     '.git',
@@ -2339,6 +2340,10 @@ class PortableVcs {
   }
 
   String? askPassword() {
+    if (currentWebPassword != null && currentWebPassword!.isNotEmpty) {
+      return currentWebPassword;
+    }
+
     stdout.write('🔑 Project password: ');
     final password = _readHiddenLine();
     stdout.writeln();
@@ -3250,7 +3255,6 @@ class PortableVcs {
           final rawInput = params['raw'] ?? '';
           final webPass = params['password'];
           String output = '';
-          bool shouldRefresh = false;
 
           if (rawInput.isEmpty) {
             request.response..statusCode = 400..close();
@@ -3262,67 +3266,21 @@ class PortableVcs {
             await runZoned(() async {
               try {
                 final args = _parseRawCommand(rawInput);
-                if (args.isEmpty) return;
-
-                final commandName = args[0];
-                final commandArgs = args.sublist(1);
-
-                switch (commandName) {
-                  case 'help': showHelp(); break;
-                  case 'status': await status(password: webPass); break;
-                  case 'pull': 
-                    await pull(password: webPass); 
-                    shouldRefresh = true; 
-                    break;
-                  case 'push':
-                    if (commandArgs.isEmpty) {
-                      print('❌ Error: Snapshot message required.');
-                    } else {
-                      String? author;
-                      List<String> messageParts = [];
-
-                      for (int i = 0; i < commandArgs.length; i++) {
-                        if ((commandArgs[i] == '-a' || commandArgs[i] == '--author') && i + 1 < commandArgs.length) {
-                          author = commandArgs[i + 1];
-                          i++;
-                        } else {
-                          messageParts.add(commandArgs[i]);
-                        }
-                      }
-
-                      final message = messageParts.join(' ');
-                      if (message.isEmpty) {
-                        print('❌ Error: Snapshot message required.');
-                      } else {
-                        await push(message, author: author, password: webPass);
-                        shouldRefresh = true;
-                      }
-                    }
-                    break;
-                  case 'diff': 
-                    await diff(commandArgs, password: webPass); 
-                    break;
-                  case 'publish':
-                    await publish(branch: 'main', remote: 'origin'); 
-                    break;
-                  case 'doctor': await doctor(); break;
-                  case 'stats': await stats(); break;
-                  case 'log': await log(); break;
-                  default:
-                    print('Unknown command: $commandName');
-                }
+                await runWithArgs(args, this, password: webPass);
+                
               } catch (e) {
-                print('❌ Error: $e');
+                print('❌ Execution Error: $e');
               }
             }, zoneSpecification: ZoneSpecification(
-              print: (self, parent, zone, line) {
-                buffer.writeln(line);
-              },
+              print: (self, parent, zone, line) => buffer.writeln(line),
             ));
+
             output = _ansiToHtml(buffer.toString());
           });
 
-          if (shouldRefresh) context = await loadRepoContext() ?? context;
+          final cmdName = rawInput.split(' ')[0];
+          final refreshCommands = ['push', 'pull', 'track', 'revert', 'purge', 'init', 'bind'];
+          bool shouldRefresh = refreshCommands.contains(cmdName);
 
           request.response
             ..headers.contentType = ContentType.json
@@ -3715,6 +3673,13 @@ extension ColorConsole on String {
 
 Future<void> main(List<String> args) async {
   final app = PortableVcs();
+  await runWithArgs(args, app);
+}
+
+
+Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password}) async {
+  app.currentWebPassword = password;
+  
 
   final parser = ArgParser()
     ..addCommand('setup')
