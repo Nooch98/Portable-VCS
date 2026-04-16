@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -87,11 +88,13 @@ class PortableVcs {
     print('  ${'verify <snapshot_id>'.green.padRight(28)} Verify one snapshot integrity.');
     print('  ${'verify --all'.green.padRight(28)} Verify entire repository integrity.');
     print('  ${'tree [snapshot_id]'.green.padRight(28)} Show file tree of latest or selected snapshot.');
+    print('   ${'ui'.green.padRight(28)} Launch the local web dashboard to visualize history.');
 
     print('\n${"Git integration".cyan}');
     print('  ${'git-prepare [id] --branch main'.green.padRight(28)} Prepare current Git repo from a snapshot.');
     print('  ${'publish [id] --branch main'.green.padRight(28)} Commit and push snapshot to Git safely.');
     print('  ${'publish [id] --branch main --dry-run'.green.padRight(28)} Show what would happen without changing anything.');
+    print('  ${'publish [id] --branch main --no-verify'.green.padRight(28)}Skip security hooks scan.');
     print('  ${'git-diff [snapshot_id] --branch main'.green.padRight(28)} Compare snapshot against current Git branch HEAD.');
 
     print('\n${"Maintenance".cyan}');
@@ -409,7 +412,7 @@ class PortableVcs {
     print('✅ Current folder is now bound to repo_id=${selected.meta.repoId}');
   }
 
-  Future<void> status() async {
+  Future<void> status({String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -428,16 +431,19 @@ class PortableVcs {
       return;
     }
 
-    final password = askPassword();
-    if (password == null) return;
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null) return;
 
     final lastEntry = logs.first;
     final snapshot = await readSnapshot(
       context,
       lastEntry.id,
-      password: password,
+      password: finalPassword,
     );
-    if (snapshot == null) return;
+    
+    if (snapshot == null) {
+      return;
+    }
 
     final lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
     final changes = diffFingerprints(lastFingerprint, current);
@@ -462,12 +468,12 @@ class PortableVcs {
     }
   }
 
-  Future<void> diff(List<String> args) async {
+  Future<void> diff(List<String> args, {String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final password = askPassword();
-    if (password == null) return;
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null) return;
 
     late final Map<String, Uint8List> leftFiles;
     late final Map<String, Uint8List> rightFiles;
@@ -481,7 +487,7 @@ class PortableVcs {
       }
 
       final latest = context.remoteMeta.logs.first;
-      final snapshot = await readSnapshot(context, latest.id, password: password);
+      final snapshot = await readSnapshot(context, latest.id, password: finalPassword);
       if (snapshot == null) return;
 
       leftFiles = await _decodeSnapshotFiles(snapshot);
@@ -489,7 +495,7 @@ class PortableVcs {
       leftLabel = 'snapshot:${latest.id}';
       rightLabel = 'working-tree';
     } else if (args.length == 1) {
-      final snapshot = await readSnapshot(context, args[0], password: password);
+      final snapshot = await readSnapshot(context, args[0], password: finalPassword);
       if (snapshot == null) return;
 
       leftFiles = await _decodeSnapshotFiles(snapshot);
@@ -497,10 +503,10 @@ class PortableVcs {
       leftLabel = 'snapshot:${args[0]}';
       rightLabel = 'working-tree';
     } else if (args.length == 2) {
-      final leftSnapshot = await readSnapshot(context, args[0], password: password);
+      final leftSnapshot = await readSnapshot(context, args[0], password: finalPassword);
       if (leftSnapshot == null) return;
 
-      final rightSnapshot = await readSnapshot(context, args[1], password: password);
+      final rightSnapshot = await readSnapshot(context, args[1], password: finalPassword);
       if (rightSnapshot == null) return;
 
       leftFiles = await _decodeSnapshotFiles(leftSnapshot);
@@ -520,12 +526,12 @@ class PortableVcs {
     );
   }
 
-  Future<void> push(String message, {String? author}) async {
+  Future<void> push(String message, {String? author, String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final password = askPassword();
-    if (password == null) return;
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null) return;
 
     await _withLock(context.remoteRepoDir, () async {
       final currentFingerprint = await buildFingerprint(_cwd);
@@ -536,7 +542,7 @@ class PortableVcs {
         final lastSnapshot = await readSnapshot(
           context,
           lastEntry.id,
-          password: password,
+          password: finalPassword,
         );
         if (lastSnapshot == null) return;
         lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
@@ -554,7 +560,7 @@ class PortableVcs {
         message: message,
         author: author,
         fingerprint: currentFingerprint,
-        password: password,
+        password: finalPassword,
       );
 
       final snapshotId = DateTime.now().millisecondsSinceEpoch.toString();
@@ -1262,7 +1268,7 @@ class PortableVcs {
     });
   }
 
-  Future<void> pull() async {
+  Future<void> pull({String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -1271,17 +1277,17 @@ class PortableVcs {
       return;
     }
 
-    final password = askPassword();
-    if (password == null) return;
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null) return;
 
-    await revertWithPassword(context.remoteMeta.logs.first.id, password);
+    await revertWithPassword(context.remoteMeta.logs.first.id, finalPassword);
   }
 
-  Future<void> revert(String snapshotId) async {
-    final password = askPassword();
-    if (password == null) return;
+  Future<void> revert(String snapshotId, {String? password}) async {
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null) return;
 
-    await revertWithPassword(snapshotId, password);
+    await revertWithPassword(snapshotId, finalPassword);
   }
 
   Future<void> revertWithPassword(String snapshotId, String password) async {
@@ -2427,6 +2433,7 @@ class PortableVcs {
     required String branch,
     String remote = 'origin',
     bool dryRun = false,
+    bool verify = true,
   }) async {
     final context = await loadRepoContext();
     if (context == null) return;
@@ -2477,6 +2484,7 @@ class PortableVcs {
     print('${"Branch exists:".yellow.padRight(14)} ${branchExists ? "yes".green : "no".yellow}');
     print('${"Commit message:".yellow.padRight(14)} $commitMessage');
     print('${"Mode:".yellow.padRight(14)} ${dryRun ? "dry-run".yellow : "publish".green}');
+    print('${"Hooks:".yellow.padRight(14)} ${verify ? "active".green : "disabled".red}');
     print('═' * 60);
 
     if (dryRun) {
@@ -2491,6 +2499,21 @@ class PortableVcs {
 
     await _gitCheckoutBranch(branch);
     await _restoreSnapshotIntoWorkingTree(context, snapshot);
+
+    if (verify) {
+      print('\n🛡️  ${"Running security hooks...".cyan}');
+      final issues = await _runSecurityScanner();
+      if (issues.isNotEmpty) {
+        print('\n🚨 ${"Critical issues found during pre-publish scan:".red}');
+        for (var issue in issues) {
+          print('   ⚠️ $issue');
+        }
+        print('\n${"Publish aborted for safety.".red}');
+        print('ℹ️  Fix the issues above or use --no-verify to bypass.');
+        return; 
+      }
+      print('✅ ${"Security check passed.".green}\n');
+    }
 
     await _gitAddAll();
 
@@ -2517,6 +2540,53 @@ class PortableVcs {
     } else {
       print('✅ Snapshot ${entry.id} published to local Git (no remote configured).');
     }
+  }
+
+  Future<List<String>> _runSecurityScanner() async {
+    final List<String> issues = [];
+    final directory = Directory.current;
+
+    final Map<String, RegExp> rules = {
+      "Google API Key": RegExp(r"""AIza[0-9A-Za-z-_]{35}"""),
+      "OpenAI API Key": RegExp(r"""sk-[a-zA-Z0-9]{48}"""),
+      "Generic Secret": RegExp(
+        r"""(?i)(password|secret|passwd|aws_key|access_token|api_key)\s*[:=]\s*['"].{8,}['"]""",
+      ),
+      "Private Key Header": RegExp(r"""-----BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY-----"""),
+      "GitHub Token": RegExp(r"""ghp_[a-zA-Z0-9]{36}"""),
+    };
+
+    final ignoredPaths = ['.git', '.vcs', '.dart_tool', 'node_modules', 'build', 'bin', 'obj'];
+
+    try {
+      await for (final entity in directory.list(recursive: true, followLinks: false)) {
+        if (entity is File) {
+          final isIgnored = ignoredPaths.any((p) => entity.path.contains('${Platform.pathSeparator}$p${Platform.pathSeparator}'));
+          final isBinary = entity.path.endsWith('.exe') || entity.path.endsWith('.dll') || entity.path.endsWith('.so');
+
+          if (isIgnored || isBinary) continue;
+
+          try {
+            final lines = await entity.readAsLines();
+            for (var i = 0; i < lines.length; i++) {
+              final line = lines[i];
+              
+              rules.forEach((name, regex) {
+                if (regex.hasMatch(line)) {
+                  issues.add('$name detected in ${entity.path} (Line ${i + 1})');
+                }
+              });
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+    } catch (e) {
+      print('⚠️ Error during security scan: $e'.yellow);
+    }
+
+    return issues;
   }
 
   Future<void> _restoreSnapshotIntoWorkingTree(
@@ -3149,6 +3219,491 @@ class PortableVcs {
     print('✅ ${"Switched to track:".green} $trackName');
     print('✅ ${"Restored latest snapshot:".green} ${latest.id}');
   }
+
+  Future<void> launchUI({int port = 8080}) async {
+    var context = await loadRepoContext();
+    if (context == null) {
+      print('❌ No active repository found.'.red);
+      return;
+    }
+
+    try {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+      final url = 'http://localhost:$port';
+      print('\n🌐 Portable VCS Web Terminal active at: $url'.cyan);
+
+      await _openBrowser(url);
+
+      await for (HttpRequest request in server) {
+        final path = request.uri.path;
+        final params = request.uri.queryParameters;
+
+        if (path == '/') {
+          final freshContext = await loadRepoContext();
+          request.response
+            ..headers.contentType = ContentType.html
+            ..write(_generateDashboardHtml(freshContext!.remoteMeta))
+            ..close();
+        } 
+        
+        else if (path == '/api/command') {
+          final rawInput = params['raw'] ?? '';
+          final webPass = params['password'];
+          String output = '';
+          bool shouldRefresh = false;
+
+          if (rawInput.isEmpty) {
+            request.response..statusCode = 400..close();
+            continue;
+          }
+
+          await runZoned(() async {
+            final buffer = StringBuffer();
+            await runZoned(() async {
+              try {
+                final args = _parseRawCommand(rawInput);
+                if (args.isEmpty) return;
+
+                final commandName = args[0];
+                final commandArgs = args.sublist(1);
+
+                switch (commandName) {
+                  case 'help': showHelp(); break;
+                  case 'status': await status(password: webPass); break;
+                  case 'pull': 
+                    await pull(password: webPass); 
+                    shouldRefresh = true; 
+                    break;
+                  case 'push':
+                    if (commandArgs.isEmpty) {
+                      print('❌ Error: Snapshot message required.');
+                    } else {
+                      String? author;
+                      List<String> messageParts = [];
+
+                      for (int i = 0; i < commandArgs.length; i++) {
+                        if ((commandArgs[i] == '-a' || commandArgs[i] == '--author') && i + 1 < commandArgs.length) {
+                          author = commandArgs[i + 1];
+                          i++;
+                        } else {
+                          messageParts.add(commandArgs[i]);
+                        }
+                      }
+
+                      final message = messageParts.join(' ');
+                      if (message.isEmpty) {
+                        print('❌ Error: Snapshot message required.');
+                      } else {
+                        await push(message, author: author, password: webPass);
+                        shouldRefresh = true;
+                      }
+                    }
+                    break;
+                  case 'diff': 
+                    await diff(commandArgs, password: webPass); 
+                    break;
+                  case 'publish':
+                    await publish(branch: 'main', remote: 'origin'); 
+                    break;
+                  case 'doctor': await doctor(); break;
+                  case 'stats': await stats(); break;
+                  case 'log': await log(); break;
+                  default:
+                    print('Unknown command: $commandName');
+                }
+              } catch (e) {
+                print('❌ Error: $e');
+              }
+            }, zoneSpecification: ZoneSpecification(
+              print: (self, parent, zone, line) {
+                buffer.writeln(line);
+              },
+            ));
+            output = _ansiToHtml(buffer.toString());
+          });
+
+          if (shouldRefresh) context = await loadRepoContext() ?? context;
+
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'success': true, 
+              'output': output.isEmpty ? 'Done.' : output,
+              'refresh': shouldRefresh
+            }))
+            ..close();
+        }
+        
+        else if (path == '/api/inspect') {
+          final id = params['id'];
+          final pass = params['password'];
+          try {
+            final snapshot = await readSnapshot(context!, id!, password: pass!);
+            if (snapshot != null) {
+              final logEntry = context.remoteMeta.logs.firstWhere((l) => l.id == id);
+              final summary = logEntry.changeSummary;
+              final archive = ZipDecoder().decodeBytes(snapshot.zipBytes);
+              final files = archive.files.where((f) => f.isFile).map((f) {
+                String status = 'unchanged';
+                for (var c in summary) {
+                  if (c.contains(f.name)) {
+                    if (c.startsWith('[N]')) status = 'added';
+                    else if (c.startsWith('[M]')) status = 'modified';
+                    else if (c.startsWith('[D]')) status = 'deleted';
+                  }
+                }
+                return {'name': f.name, 'status': status};
+              }).toList();
+              request.response..headers.contentType = ContentType.json
+                ..write(jsonEncode({'success': true, 'files': files}))..close();
+            } else {
+              request.response..statusCode = 401..write(jsonEncode({'success': false}))..close();
+            }
+          } catch (e) {
+            request.response..statusCode = 500..write(jsonEncode({'success': false, 'error': e.toString()}))..close();
+          }
+        }
+        
+        else if (path == '/api/content') {
+          final id = params['id'];
+          final pass = params['password'];
+          final fileName = params['file'];
+          try {
+            final snapshot = await readSnapshot(context!, id!, password: pass!);
+            final archive = ZipDecoder().decodeBytes(snapshot!.zipBytes);
+            final file = archive.findFile(fileName!);
+            request.response..headers.contentType = ContentType.text
+              ..write(file != null ? utf8.decode(file.content) : 'File not found')..close();
+          } catch (e) {
+            request.response..statusCode = 500..write('Error')..close();
+          }
+        }
+        else { request.response..statusCode = 404..close(); }
+      }
+    } catch (e) {
+      print('❌ Server error: $e'.red);
+    }
+  }
+
+  List<String> _parseRawCommand(String input) {
+    final shellRegex = RegExp(r'([^\s"理論]+)|"([^"]*)"');
+    return shellRegex.allMatches(input)
+        .map((m) => m.group(2) ?? m.group(1) ?? '')
+        .toList();
+  }
+
+  String _ansiToHtml(String text) {
+    return text
+        .replaceAll('[0m', '</span>')
+        .replaceAll('[32m', '<span style="color:var(--added)">')
+        .replaceAll('[31m', '<span style="color:var(--error)">')
+        .replaceAll('[33m', '<span style="color:var(--warning)">')
+        .replaceAll('[36m', '<span style="color:var(--accent)">')
+        .replaceAll('[1m', '<span style="font-weight:bold">')
+        .replaceAll(RegExp(r'\[[0-9;]*m'), '');
+  }
+
+  String _generateDashboardHtml(RepoMeta meta) {
+    final String css = r"""
+      :root { 
+        --bg: #0d1117; --card: #161b22; --accent: #58a6ff; 
+        --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
+        --success: #238636; --error: #f85149; --warning: #d29922;
+        --added: #3fb950; --modified: #d29922; --deleted: #f85149;
+        --term-bg: #010409;
+      }
+      * { box-sizing: border-box; }
+      body { 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; 
+        background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden;
+      }
+      
+      /* Sidebar */
+      .sidebar { 
+        width: 300px; border-right: 1px solid var(--border); padding: 25px; 
+        display: flex; flex-direction: column; background: #010409;
+      }
+      .stats-card { background: var(--card); border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin-bottom: 10px; }
+      .stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 1px; }
+      .stat-value { font-size: 14px; font-weight: bold; color: var(--accent); display: block; margin-top: 2px; }
+
+      /* Buttons */
+      .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; }
+      .btn-action { 
+        background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 12px;
+        border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: 0.2s;
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+      }
+      .btn-action:hover { border-color: var(--accent); background: #1c2128; transform: translateY(-2px); }
+
+      /* Main Area with Terminal */
+      .workspace { flex: 1; display: flex; flex-direction: column; height: 100vh; }
+      .main-content { flex: 1; overflow-y: auto; padding: 40px; }
+      
+      /* Terminal UI */
+      .terminal-container {
+        height: 250px; background: var(--term-bg); border-top: 1px solid var(--border);
+        display: flex; flex-direction: column; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      }
+      .terminal-output { flex: 1; overflow-y: auto; padding: 15px; font-size: 13px; line-height: 1.5; color: #d1d5da; }
+      .terminal-output div {
+        white-space: pre-wrap; /* Mantiene la alineación de las tablas y el diff */
+        word-break: break-all;
+      }
+      .terminal-input-area { 
+        display: flex; align-items: center; padding: 10px 15px; background: #090c10; border-top: 1px solid #21262d;
+      }
+      .prompt { color: var(--added); margin-right: 10px; font-weight: bold; }
+      .cmd-input { 
+        flex: 1; background: transparent; border: none; color: white; font-family: inherit; font-size: 14px; outline: none;
+      }
+
+      /* Snapshots */
+      .snapshot-card { 
+        background: var(--card); border: 1px solid var(--border); padding: 15px; 
+        margin-bottom: 10px; border-radius: 8px; cursor: pointer; 
+        display: flex; justify-content: space-between; align-items: center; transition: 0.1s;
+      }
+      .snapshot-card:hover { border-color: var(--accent); background: #1c2128; }
+      
+      /* Modals & Viewers */
+      #codeViewer { 
+        display: none; position: fixed; inset: 20px; background: var(--term-bg); border: 1px solid var(--border);
+        border-radius: 12px; z-index: 1000; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,0.7);
+      }
+      #passwordModal { 
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); 
+        backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 2000;
+      }
+      .modal-content { background: var(--card); padding: 30px; border-radius: 12px; border: 1px solid var(--border); width: 350px; text-align: center;}
+      .modal-content input { 
+        width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); 
+        color: white; border-radius: 6px; margin: 15px 0; outline: none;
+      }
+      .badge-status { padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid; }
+      .added { color: var(--added); border-color: var(--added); }
+      .modified { color: var(--modified); border-color: var(--modified); }
+      .deleted { color: var(--deleted); border-color: var(--deleted); }
+    """;
+
+    final snapshotsHtml = meta.logs.map((log) {
+      return """
+        <div class="snapshot-card" onclick="openInspector('${log.id}', '${log.message}')">
+          <div>
+            <div style="font-weight:600; color:#f0f6fc;">${log.message}</div>
+            <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">
+              <strong>${log.author ?? "Anonymous"}</strong> • ${log.createdAt}
+            </div>
+          </div>
+          <div style="font-family:monospace; font-size:11px; background:#30363d; padding:4px 8px; border-radius:4px;">${log.id}</div>
+        </div>
+      """;
+    }).join('');
+
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>VCS Terminal Dashboard</title>
+      <style>$css</style>
+    </head>
+    <body>
+      <div class="sidebar">
+        <h2 style="font-size: 18px; margin-bottom: 20px;">📁 Repository</h2>
+        <div class="stats-card">
+          <span class="stat-label">Project</span>
+          <span class="stat-value">${meta.projectName}</span>
+        </div>
+        <div class="stats-card">
+          <span class="stat-label">Track</span>
+          <span class="stat-value" style="color:var(--added)">${meta.activeTrack}</span>
+        </div>
+
+        <div class="actions-grid">
+          <button class="btn-action" onclick="setCmd('status')">🔍 Status</button>
+          <button class="btn-action" onclick="setCmd('diff')">🌓 Diff</button>
+          <button class="btn-action" onclick="setCmd('push \\"\\" -a ')">📤 Push</button>
+          <button class="btn-action" onclick="setCmd('pull')">📥 Pull</button>
+          <button class="btn-action" onclick="setCmd('publish --branch main')">🚀 Publish</button>
+          <button class="btn-action" onclick="setCmd('doctor')">🩺 Doctor</button>
+          <button class="btn-action" onclick="executeRaw('help')" style="grid-column: span 2; border-color: var(--warning);">❓ Help Guide</button>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <div class="main-content">
+          <div id="viewList">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+              <h1 style="font-size:24px;">History</h1>
+              <input type="text" placeholder="Filter..." oninput="filterLogs(this.value)" style="background:var(--card); border:1px solid var(--border); color:white; padding:8px; border-radius:6px; outline:none;">
+            </div>
+            <div id="snapshotList">$snapshotsHtml</div>
+          </div>
+
+          <div id="fileInspector" style="display:none">
+            <button onclick="closeInspector()" style="background:transparent; color:var(--accent); border:none; cursor:pointer; padding:0; margin-bottom:10px;">← Back to snapshots</button>
+            <h1 id="inspectTitle" style="margin:0 0 20px 0; font-size:24px;">Files</h1>
+            <div id="fileList" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:12px;"></div>
+          </div>
+        </div>
+
+        <div class="terminal-container">
+          <div class="terminal-output" id="termOut">Welcome to Portable VCS Web Terminal. Type your command below...</div>
+          <div class="terminal-input-area">
+            <span class="prompt">vcs ></span>
+            <input type="text" class="cmd-input" id="cmdIn" placeholder="Enter command..." autofocus onkeypress="handleTermKey(event)">
+          </div>
+        </div>
+      </div>
+
+      <div id="passwordModal">
+        <div class="modal-content">
+          <h3 id="modalTitle">🔒 Unlock Snapshot</h3>
+          <input type="password" id="passInput" placeholder="Password...">
+          <div style="display:flex; gap:10px;">
+            <button onclick="submitPassword()" style="flex:1; padding:10px; background:var(--success); color:white; border:none; border-radius:6px; cursor:pointer;">Confirm</button>
+            <button onclick="closeModal()" style="flex:1; background:transparent; color:var(--text-dim); border:none; cursor:pointer;">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="codeViewer">
+        <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:#161b22;">
+          <strong id="fileNameDisplay"></strong>
+          <button onclick="closeCode()" style="background:var(--error); color:white; border:none; padding:5px 15px; border-radius:4px; cursor:pointer;">Close</button>
+        </div>
+        <pre id="codeContent" style="margin:0; padding:20px; overflow:auto; flex:1; font-size:13px;"></pre>
+      </div>
+
+      <script>
+        let currentId = null, currentPass = null;
+        let pendingCommand = null;
+
+        function setCmd(c) {
+          const input = document.getElementById('cmdIn');
+          input.value = c;
+          input.focus();
+          if(c.includes('""')) {
+            const pos = c.indexOf('"') + 1;
+            input.setSelectionRange(pos, pos);
+          }
+        }
+
+        function handleTermKey(e) {
+          if(e.key === 'Enter') {
+            const raw = e.target.value.trim();
+            const needsAuth = raw.startsWith('push') || 
+                              raw.startsWith('pull') || 
+                              raw.startsWith('status') || 
+                              raw.startsWith('diff');
+
+            if (needsAuth) {
+              pendingCommand = raw;
+              document.getElementById('modalTitle').innerText = "🔑 Authentication Required";
+              document.getElementById('passwordModal').style.display = 'flex';
+              document.getElementById('passInput').focus();
+            } else {
+              executeRaw(raw);
+            }
+          }
+        }
+
+        async function executeRaw(raw, pass = '') {
+          if(!raw.trim()) return;
+          const out = document.getElementById('termOut');
+          const input = document.getElementById('cmdIn');
+          
+          out.innerHTML += `<div style="color:var(--accent); margin-top:10px;">\$ vcs \${raw}</div>`;
+          input.value = '';
+
+          try {
+            const resp = await fetch(`/api/command?raw=\${encodeURIComponent(raw)}&password=\${encodeURIComponent(pass)}`);
+            const data = await resp.json();
+            out.innerHTML += `<div>\${data.output.replace(/\\n/g, '<br>')}</div>`;
+            out.scrollTop = out.scrollHeight;
+            if(data.refresh) setTimeout(() => location.reload(), 1500);
+          } catch(e) {
+            out.innerHTML += `<div style="color:var(--error)">Network error.</div>`;
+          }
+        }
+
+        function openInspector(id, msg) {
+          currentId = id;
+          pendingCommand = null;
+          document.getElementById('modalTitle').innerText = "🔒 Unlock Snapshot";
+          document.getElementById('passwordModal').style.display = 'flex';
+          document.getElementById('passInput').focus();
+        }
+
+        function closeModal() { 
+          document.getElementById('passwordModal').style.display = 'none';
+          document.getElementById('passInput').value = '';
+        }
+
+        function closeInspector() { 
+          document.getElementById('fileInspector').style.display = 'none';
+          document.getElementById('viewList').style.display = 'block';
+        }
+
+        async function submitPassword() {
+          const pass = document.getElementById('passInput').value;
+          if (pendingCommand) {
+            closeModal();
+            executeRaw(pendingCommand, pass);
+            pendingCommand = null;
+          } else {
+            currentPass = pass;
+            const resp = await fetch(`/api/inspect?id=\${currentId}&password=\${currentPass}`);
+            const data = await resp.json();
+            if (data.success) {
+              closeModal();
+              renderFiles(data.files);
+            } else { alert("Wrong password"); }
+          }
+        }
+
+        function renderFiles(files) {
+          document.getElementById('viewList').style.display = 'none';
+          document.getElementById('fileInspector').style.display = 'block';
+          document.getElementById('fileList').innerHTML = files.map(f => `
+            <div class="snapshot-card" onclick="viewCode('\${f.name}')">
+              <span>📄 \${f.name}</span>
+              <span class="badge-status \${f.status}">\${f.status}</span>
+            </div>
+          `).join('');
+        }
+
+        async function viewCode(file) {
+          const resp = await fetch(`/api/content?id=\${currentId}&password=\${currentPass}&file=\${file}`);
+          document.getElementById('codeContent').innerText = await resp.text();
+          document.getElementById('fileNameDisplay').innerText = file;
+          document.getElementById('codeViewer').style.display = 'flex';
+        }
+        
+        function closeCode() { document.getElementById('codeViewer').style.display = 'none'; }
+        
+        function filterLogs(q) {
+          const query = q.toLowerCase();
+          document.querySelectorAll('.snapshot-card').forEach(c => {
+            c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
+          });
+        }
+      </script>
+    </body>
+    </html>
+    """;
+  }
+
+  Future<void> _openBrowser(String url) async {
+    if (Platform.isWindows) {
+      await Process.run('start', [url], runInShell: true);
+    } else if (Platform.isLinux) {
+      await Process.run('xdg-open', [url]);
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [url]);
+    }
+  }
 }
 
 extension ColorConsole on String {
@@ -3232,12 +3787,14 @@ Future<void> main(List<String> args) async {
         ..addCommand('delete'),
     )
     ..addCommand('version')
+    ..addCommand('ui')
     ..addCommand(
       'publish',
       ArgParser()
-        ..addOption('branch', defaultsTo: 'main')
-        ..addOption('remote', defaultsTo: 'origin')
-        ..addFlag('dry-run', negatable: false),
+        ..addOption('branch', defaultsTo: 'main', abbr: 'b')
+        ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
+        ..addFlag('dry-run', negatable: false)
+        ..addFlag('verify', defaultsTo: true, help: 'Run security hooks before publishing'),
     );
 
   if (args.isEmpty) {
@@ -3382,6 +3939,7 @@ Future<void> main(List<String> args) async {
           branch: cmd['branch'].toString(),
           remote: cmd['remote'].toString(),
           dryRun: cmd['dry-run'] == true,
+          verify: cmd['verify'] == true,
         );
         break;
       case 'tree':
@@ -3442,6 +4000,9 @@ Future<void> main(List<String> args) async {
           default:
             print('❌ ${"Usage: vcs track <list|current|create|switch|delete> [name]".red}');
         }
+        break;
+      case 'ui':
+        await app.launchUI();
         break;
       default:
         app.showHelp();
