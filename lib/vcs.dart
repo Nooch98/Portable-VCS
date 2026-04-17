@@ -64,46 +64,39 @@ class PortableVcs {
     print('  ${'clone [repo_id] [--into dir]'.green.padRight(28)} Clone a repository from USB into a local folder.');
     print('  ${'bind [repo_id]'.green.padRight(28)} Bind the current folder to an existing remote repository.');
 
-    print('\n${"Tracks".cyan}');
-    print('  ${'track list'.green.padRight(28)} List all tracks.');
-    print('  ${'track current'.green.padRight(28)} Show active track.');
+    print('\n${"Tracks Management".cyan}');
+    print('  ${'track list'.green.padRight(28)} List all available tracks.');
+    print('  ${'track current'.green.padRight(28)} Show the name of the active track.');
     print('  ${'track create <name>'.green.padRight(28)} Create a new empty track.');
-    print('  ${'track switch <name>'.green.padRight(28)} Switch to another track.');
+    print('  ${'track switch <name>'.green.padRight(28)} Switch to another track (Optional tree restore).');
     print('  ${'track delete <name>'.green.padRight(28)} Delete an existing non-active track.');
 
-    print('\n${"Snapshot workflow".cyan}');
-    print('  ${'push "message" [-a author]'.green.padRight(28)} Create a new encrypted snapshot of the current project.');
-    print('  ${'pull'.green.padRight(28)} Restore the latest snapshot into the current project.');
-    print('  ${'revert <snapshot_id>'.green.padRight(28)} Restore a specific snapshot into the current project.');
-    print('  ${'restore <snapshot_id> --to dir'.green.padRight(28)} Restore a specific snapshot into another folder.');
+    print('\n${"Snapshot workflow (Multi-track support)".cyan}');
+    print('  ${'push "msg" [-a aut] [--track t]'.green.padRight(28)} Create a snapshot (defaults to active track).');
+    print('  ${'pull [--track name]'.green.padRight(28)} Restore latest snapshot from a specific track.');
+    print('  ${'revert <snapshot_id>'.green.padRight(28)} Restore a specific snapshot from the active track.');
+    print('  ${'restore <id> --to dir'.green.padRight(28)} Restore a specific snapshot into another folder.');
 
-    print('\n${"Inspection".cyan}');
-    print('  ${'status'.green.padRight(28)} Compare current files against the latest snapshot.');
-    print('  ${'diff'.green.padRight(28)} Compare working tree vs latest snapshot.');
-    print('  ${'diff <id>'.green.padRight(28)} Compare a specific snapshot vs working tree.');
-    print('  ${'diff <id1> <id2>'.green.padRight(28)} Compare two snapshots.');
-    print('  ${'log'.green.padRight(28)} Show compact snapshot history.');
-    print('  ${'log --standard'.green.padRight(28)} Show history with short change preview.');
-    print('  ${'log --full'.green.padRight(28)} Show full detailed snapshot history.');
-    print('  ${'show <snapshot_id>'.green.padRight(28)} Show detailed information about one snapshot.');
-    print('  ${'verify <snapshot_id>'.green.padRight(28)} Verify one snapshot integrity.');
-    print('  ${'verify --all'.green.padRight(28)} Verify entire repository integrity.');
-    print('  ${'tree [snapshot_id]'.green.padRight(28)} Show file tree of latest or selected snapshot.');
-    print('   ${'ui'.green.padRight(28)} Launch the local web dashboard to visualize history.');
+    print('\n${"Inspection & Web Interface".cyan}');
+    print('  ${'ui'.green.padRight(28)} Launch the local web dashboard for visual history.');
+    print('  ${'status'.green.padRight(28)} Compare tree against latest of the active track.');
+    print('  ${'diff [id]'.green.padRight(28)} Compare working tree vs latest or specific ID in active track.');
+    print('  ${'diff <id1> <id2>'.green.padRight(28)} Compare two specific snapshots.');
+    print('  ${'log [--track name]'.green.padRight(28)} Show history (Standard/Full options available).');
+    print('  ${'show <id>'.green.padRight(28)} Show detailed information about a snapshot in active track.');
+    print('  ${'verify <id|--all>'.green.padRight(28)} Verify integrity of one or all snapshots.');
+    print('  ${'tree [id]'.green.padRight(28)} Show file tree of a specific snapshot in active track.');
 
     print('\n${"Git integration".cyan}');
-    print('  ${'git-prepare [id] --branch main'.green.padRight(28)} Prepare current Git repo from a snapshot.');
-    print('  ${'publish [id] --branch main'.green.padRight(28)} Commit and push snapshot to Git safely.');
-    print('  ${'publish [id] --branch main --dry-run'.green.padRight(28)} Show what would happen without changing anything.');
-    print('  ${'publish [id] --branch main --no-verify'.green.padRight(28)}Skip security hooks scan.');
-    print('  ${'git-diff [snapshot_id] --branch main'.green.padRight(28)} Compare snapshot against current Git branch HEAD.');
+    print('  ${'git-prepare [id] --branch b'.green.padRight(28)} Prepare current Git repo from a snapshot.');
+    print('  ${'publish [id] --branch b'.green.padRight(28)} Commit and push snapshot to Git safely.');
+    print('  ${'git-diff [id] --branch b'.green.padRight(28)} Compare snapshot against current Git HEAD.');
 
     print('\n${"Maintenance".cyan}');
     print('  ${'doctor'.green.padRight(28)} Run repository diagnostics and health checks.');
-    print('  ${'stats'.green.padRight(28)} Show repository size, snapshot count, and storage statistics.');
-    print('  ${'prune --keep N'.green.padRight(28)} Keep only the newest N snapshots.');
-    print('  ${'prune --older-than D'.green.padRight(28)} Delete snapshots older than D days.');
-    print('  ${'clear-history'.green.padRight(28)} Delete all snapshots for this repo, but keep repo structure.');
+    print('  ${'stats'.green.padRight(28)} Show size, snapshot count, and storage statistics.');
+    print('  ${'prune --keep N'.green.padRight(28)} Keep only the newest N snapshots in the active track.');
+    print('  ${'clear-history'.green.padRight(28)} Delete all snapshots for the active track.');
     print('  ${'purge'.green.padRight(28)} Completely delete this repository from USB/storage.');
 
     print('\n${"General".cyan}');
@@ -111,19 +104,16 @@ class PortableVcs {
     print('  ${'version'.green.padRight(28)} Show tool version.');
 
     print('\n${"Examples".cyan}');
-    print('  ${'vcs setup'.green}');
-    print('  ${'vcs init'.green}');
-    print('  ${'vcs push "offline checkpoint" -a Nooch98'.green}');
-    print('  ${'vcs log'.green}');
-    print('  ${'vcs diff'.green}');
-    print('  ${'vcs revert 1776137235094'.green}');
-    print('  ${'vcs clone'.green}');
-    print('  ${'vcs prune --keep 10'.green}');
+    print('  ${'vcs ui'.green} (Launch web dashboard)');
+    print('  ${'vcs push "feat: login" --track main'.green} (Push to main without switching)');
+    print('  ${'vcs log --track Experimental'.green} (View history of another track)');
+    print('  ${'vcs pull --track production'.green} (Emergency restore from production track)');
 
     print('\n${"Notes".cyan}');
-    print('  - Portable VCS is a local offline complement to Git, not a replacement.');
-    print('  - The tool reads ${'.gitignore'.green} and always ignores internal ${'.vcs/'.green} metadata.');
-    print('  - Snapshots are encrypted and require the correct password to inspect or restore.\n');
+    print('  - Commands like ${'push'.yellow} and ${'pull'.yellow} support ${'--track'.yellow} for cross-track ops.');
+    print('  - Inspection commands (${'status'.yellow}, ${'diff'.yellow}, ${'tree'.yellow}) target the ${'active track'.yellow}.');
+    print('  - The tool reads ${'.gitignore'.green} and ignores internal ${'.vcs/'.green} metadata.');
+    print('  - All snapshots are ${'AES-256 encrypted'.green} and require the vault password.\n');
   }
 
   Future<void> setupDrive() async {
@@ -474,84 +464,133 @@ class PortableVcs {
     if (context == null) return;
 
     final finalPassword = password ?? askPassword();
-    if (finalPassword == null) return;
+    if (finalPassword == null || finalPassword.isEmpty) {
+      print('❌ Password required for decryption.');
+      return;
+    }
 
     late final Map<String, Uint8List> leftFiles;
     late final Map<String, Uint8List> rightFiles;
     late final String leftLabel;
     late final String rightLabel;
 
-    if (args.isEmpty) {
-      if (context.remoteMeta.logs.isEmpty) {
-        print('ℹ️ No snapshots available.'.yellow);
+    String? resolveId(String input) {
+      if (context.remoteMeta.tracks.containsKey(input)) {
+        final trackLogs = context.remoteMeta.tracks[input]!.logs;
+        if (trackLogs.isEmpty) {
+          print('ℹ️ Track "$input" has no snapshots.'.yellow);
+          return null;
+        }
+        return trackLogs.first.id;
+      }
+      return input;
+    }
+
+    try {
+      if (args.isEmpty) {
+        if (context.remoteMeta.logs.isEmpty) {
+          print('ℹ️ No snapshots available in active track.'.yellow);
+          return;
+        }
+        final latestId = context.remoteMeta.logs.first.id;
+        final snapshot = await readSnapshot(context, latestId, password: finalPassword);
+        if (snapshot == null) return;
+
+        leftFiles = await _decodeSnapshotFiles(snapshot);
+        rightFiles = await _readCurrentProjectFiles();
+        leftLabel = 'snapshot:$latestId (latest)';
+        rightLabel = 'working-tree';
+      } 
+      else if (args.length == 1) {
+        final id = resolveId(args[0]);
+        if (id == null) return;
+
+        final snapshot = await readSnapshot(context, id, password: finalPassword);
+        if (snapshot == null) return;
+
+        leftFiles = await _decodeSnapshotFiles(snapshot);
+        rightFiles = await _readCurrentProjectFiles();
+        leftLabel = 'snapshot:$id';
+        rightLabel = 'working-tree';
+      } 
+      else if (args.length == 2) {
+        final idLeft = resolveId(args[0]);
+        final idRight = resolveId(args[1]);
+        if (idLeft == null || idRight == null) return;
+
+        final leftSnapshot = await readSnapshot(context, idLeft, password: finalPassword);
+        if (leftSnapshot == null) return;
+
+        final rightSnapshot = await readSnapshot(context, idRight, password: finalPassword);
+        if (rightSnapshot == null) return;
+
+        leftFiles = await _decodeSnapshotFiles(leftSnapshot);
+        rightFiles = await _decodeSnapshotFiles(rightSnapshot);
+        leftLabel = 'snapshot:$idLeft';
+        rightLabel = 'snapshot:$idRight';
+      } 
+      else {
+        print('❌ Usage: vcs diff [track_or_id_1] [track_or_id_2]'.red);
         return;
       }
 
-      final latest = context.remoteMeta.logs.first;
-      final snapshot = await readSnapshot(context, latest.id, password: finalPassword);
-      if (snapshot == null) return;
-
-      leftFiles = await _decodeSnapshotFiles(snapshot);
-      rightFiles = await _readCurrentProjectFiles();
-      leftLabel = 'snapshot:${latest.id}';
-      rightLabel = 'working-tree';
-    } else if (args.length == 1) {
-      final snapshot = await readSnapshot(context, args[0], password: finalPassword);
-      if (snapshot == null) return;
-
-      leftFiles = await _decodeSnapshotFiles(snapshot);
-      rightFiles = await _readCurrentProjectFiles();
-      leftLabel = 'snapshot:${args[0]}';
-      rightLabel = 'working-tree';
-    } else if (args.length == 2) {
-      final leftSnapshot = await readSnapshot(context, args[0], password: finalPassword);
-      if (leftSnapshot == null) return;
-
-      final rightSnapshot = await readSnapshot(context, args[1], password: finalPassword);
-      if (rightSnapshot == null) return;
-
-      leftFiles = await _decodeSnapshotFiles(leftSnapshot);
-      rightFiles = await _decodeSnapshotFiles(rightSnapshot);
-      leftLabel = 'snapshot:${args[0]}';
-      rightLabel = 'snapshot:${args[1]}';
-    } else {
-      print('❌ Usage: vcs diff [snapshot_id_1] [snapshot_id_2]'.red);
-      return;
+      await _printDiffBetweenFileMaps(
+        leftFiles,
+        rightFiles,
+        leftLabel: leftLabel,
+        rightLabel: rightLabel,
+      );
+    } catch (e) {
+      print('❌ Error during diff: $e');
     }
-
-    await _printDiffBetweenFileMaps(
-      leftFiles,
-      rightFiles,
-      leftLabel: leftLabel,
-      rightLabel: rightLabel,
-    );
   }
 
-  Future<void> push(String message, {String? author, String? password}) async {
+  Future<void> push(String message, {String? author, String? track, String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    if (trackData == null) {
+      print('❌ Track "$targetTrackName" does not exist.');
+      return;
+    }
+
     final finalPassword = password ?? askPassword();
-    if (finalPassword == null) return;
+    if (finalPassword == null || finalPassword.isEmpty) {
+      print('❌ Password required for encryption.');
+      return;
+    }
 
     await _withLock(context.remoteRepoDir, () async {
       final currentFingerprint = await buildFingerprint(_cwd);
 
       Map<String, String> lastFingerprint = {};
-      if (context.remoteMeta.logs.isNotEmpty) {
-        final lastEntry = context.remoteMeta.logs.first;
-        final lastSnapshot = await readSnapshot(
-          context,
-          lastEntry.id,
-          password: finalPassword,
-        );
-        if (lastSnapshot == null) return;
-        lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
+      if (trackData.logs.isNotEmpty) {
+        final lastEntry = trackData.logs.first;
+        
+        try {
+          final lastSnapshot = await readSnapshot(
+            context,
+            lastEntry.id,
+            password: finalPassword,
+          );
+          
+          if (lastSnapshot != null) {
+            lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
+          } else {
+            print('⚠️ Warning: Could not read previous snapshot ${lastEntry.id}. Comparing against empty state.');
+          }
+        } catch (e) {
+          print('⚠️ Warning: Error reading previous snapshot: $e. Comparing against empty state.');
+        }
       }
 
       final changes = diffFingerprints(lastFingerprint, currentFingerprint);
-      if (changes.isEmpty && context.remoteMeta.logs.isNotEmpty) {
-        print('ℹ️ No changes to save.');
+
+      if (changes.isEmpty && trackData.logs.isNotEmpty) {
+        print('ℹ️ No changes to save in track "$targetTrackName" compared to its last snapshot.');
         return;
       }
 
@@ -566,7 +605,7 @@ class PortableVcs {
 
       final snapshotId = DateTime.now().millisecondsSinceEpoch.toString();
       final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
-      await snapshotsDir.create(recursive: true);
+      if (!snapshotsDir.existsSync()) await snapshotsDir.create(recursive: true);
 
       final snapshotFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
       await snapshotFile.writeAsBytes(encrypted, flush: true);
@@ -580,12 +619,9 @@ class PortableVcs {
         changeSummary: changes.map((e) => e.toTag()).toList(),
       );
 
-      final updatedTracks = Map<String, TrackState>.from(
-        context.remoteMeta.tracks,
-      );
-
-      updatedTracks[context.remoteMeta.activeTrack] = TrackState(
-        logs: [entry, ...context.remoteMeta.logs],
+      final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+      updatedTracks[targetTrackName] = TrackState(
+        logs: [entry, ...trackData.logs],
       );
 
       final updatedMeta = context.remoteMeta.copyWith(
@@ -598,23 +634,31 @@ class PortableVcs {
         const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
       );
 
-      print('✅ Snapshot saved successfully. ID=$snapshotId');
+      print('✅ Snapshot saved successfully in track ${targetTrackName.cyan}. ID=$snapshotId');
     });
   }
 
-  Future<void> log({LogViewMode mode = LogViewMode.summary}) async {
+  Future<void> log({LogViewMode mode = LogViewMode.summary, String? track}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    if (context.remoteMeta.logs.isEmpty) {
-      print('ℹ️ ${"No snapshots yet.".yellow}');
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    if (trackData == null) {
+      print('❌ Track "$targetTrackName" not found.');
       return;
     }
 
-    print('\n📜 ${"Snapshot history".cyan}');
+    if (trackData.logs.isEmpty) {
+      print('ℹ️ ${"No snapshots in track $targetTrackName.".yellow}');
+      return;
+    }
+
+    print('\n📜 ${"Snapshot history".cyan} [Track: ${targetTrackName.cyan}]');
     print('═' * 60);
 
-    final logs = context.remoteMeta.logs.reversed.toList();
+    final logs = trackData.logs.reversed.toList();
 
     for (var i = 0; i < logs.length; i++) {
       final entry = logs[i];
@@ -1269,19 +1313,32 @@ class PortableVcs {
     });
   }
 
-  Future<void> pull({String? password}) async {
+  Future<void> pull({String? track, String? snapshotId, String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
-
-    if (context.remoteMeta.logs.isEmpty) {
-      print('ℹ️ No snapshots available.');
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+    if (trackData == null) {
+      print('❌ Track "$targetTrackName" not found.');
       return;
     }
-
+    if (trackData.logs.isEmpty) {
+      print('ℹ️ No snapshots available in track "$targetTrackName".');
+      return;
+    }
+    final finalSnapshotId = snapshotId ?? trackData.logs.first.id;
+    final exists = trackData.logs.any((e) => e.id == finalSnapshotId);
+    if (!exists && snapshotId != null) {
+      print('❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".');
+      return;
+    }
     final finalPassword = password ?? askPassword();
-    if (finalPassword == null) return;
-
-    await revertWithPassword(context.remoteMeta.logs.first.id, finalPassword);
+    if (finalPassword == null || finalPassword.isEmpty) {
+      print('❌ Password required for decryption.');
+      return;
+    }
+    print('📥 Pulling snapshot ${finalSnapshotId.green} from track ${targetTrackName.cyan}...');
+    await revertWithPassword(finalSnapshotId, finalPassword);
   }
 
   Future<void> revert(String snapshotId, {String? password}) async {
@@ -2168,23 +2225,28 @@ class PortableVcs {
     required RepoMeta remoteMeta,
     required String snapshotId,
     required String password,
+    bool silent = false,
   }) async {
     SnapshotLogEntry? entry;
-    for (final item in remoteMeta.logs) {
-      if (item.id == snapshotId) {
-        entry = item;
-        break;
+
+    for (final track in remoteMeta.tracks.values) {
+      for (final item in track.logs) {
+        if (item.id == snapshotId) {
+          entry = item;
+          break;
+        }
       }
+      if (entry != null) break;
     }
 
     if (entry == null) {
-      print('❌ Snapshot ID not found: $snapshotId');
+      if (!silent) print('❌ Snapshot ID not found: $snapshotId');
       return null;
     }
 
     final file = File(p.join(remoteRepoDir.path, 'snapshots', entry.fileName));
     if (!file.existsSync()) {
-      print('❌ Snapshot file is missing: ${entry.fileName}');
+      if (!silent) print('❌ Snapshot file is missing: ${entry.fileName}');
       return null;
     }
 
@@ -2230,10 +2292,10 @@ class PortableVcs {
         createdAt: payload['created_at']?.toString(),
       );
     } on crypto_alg.SecretBoxAuthenticationError {
-      print('❌ Wrong password or tampered snapshot.');
+      if (!silent) print('❌ Wrong password or tampered snapshot.');
       return null;
     } catch (e) {
-      print('❌ Could not read snapshot: $e');
+      if (!silent) print('❌ Could not read snapshot: $e');
       return null;
     }
   }
@@ -3168,19 +3230,19 @@ class PortableVcs {
     print('✅ ${"Track deleted:".green} $trackName');
   }
 
-  Future<void> trackSwitch(String name) async {
+  Future<void> trackSwitch(String name, {String? password, bool? webRestore}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
     final trackName = name.trim();
 
     if (!context.remoteMeta.tracks.containsKey(trackName)) {
-      print('❌ ${"Track not found:".red} $trackName');
+      print('❌ Track not found: $trackName');
       return;
     }
 
     if (trackName == context.remoteMeta.activeTrack) {
-      print('ℹ️ ${"Already on track:".yellow} $trackName');
+      print('ℹ️ Already on track: $trackName');
       return;
     }
 
@@ -3194,14 +3256,36 @@ class PortableVcs {
     await _saveRemoteMeta(context, updatedMeta);
 
     if (targetTrack.logs.isEmpty) {
-      print('✅ ${"Switched to track:".green} $trackName');
-      print('ℹ️ ${'Track "$trackName" is empty. The next push will start its history.'.yellow}');
+      print('✅ Switched to track: $trackName');
+      print('ℹ️ Track is empty. Next push will start its history.');
+      return;
+    }
+
+    bool proceedWithRestore = false;
+
+    if (webRestore != null) {
+      proceedWithRestore = webRestore;
+    } else {
+      proceedWithRestore = confirmAction(
+        'Track "$trackName" has snapshots. Restore its latest snapshot into the working tree now?'
+      );
+    }
+
+    if (!proceedWithRestore) {
+      print('✅ Switched to track: $trackName');
+      print('ℹ️ Working tree was NOT restored.');
+      return;
+    }
+
+    final String? finalPassword = password ?? askPassword();
+    
+    if (finalPassword == null || finalPassword.isEmpty) {
+      print('✅ Switched to track: $trackName');
+      print('⚠️ Working tree not updated (Password required for decryption).');
       return;
     }
 
     final latest = targetTrack.logs.first;
-    final password = askPassword();
-    if (password == null) return;
 
     final refreshedContext = await loadRepoContext();
     if (refreshedContext == null) return;
@@ -3209,20 +3293,18 @@ class PortableVcs {
     final snapshot = await readSnapshot(
       refreshedContext,
       latest.id,
-      password: password,
+      password: finalPassword,
     );
-    if (snapshot == null) return;
 
-    if (!confirmAction('Track "$trackName" has snapshots. Restore its latest snapshot into the working tree now?')) {
-      print('ℹ️ ${'Switched to track:'.yellow} $trackName');
-      print('ℹ️ ${'Working tree was not restored.'.yellow}');
+    if (snapshot == null) {
+      print('ℹ️ Switched to track: $trackName (Tree restore failed: Wrong password)');
       return;
     }
 
     await _restoreSnapshotIntoWorkingTree(refreshedContext, snapshot);
 
-    print('✅ ${"Switched to track:".green} $trackName');
-    print('✅ ${"Restored latest snapshot:".green} ${latest.id}');
+    print('✅ Switched to track: $trackName');
+    print('✅ Restored latest snapshot: ${latest.id}');
   }
 
   Future<void> launchUI({int port = 8080}) async {
@@ -3321,19 +3403,80 @@ class PortableVcs {
             request.response..statusCode = 500..write(jsonEncode({'success': false, 'error': e.toString()}))..close();
           }
         }
+
+        else if (path == '/api/switch-track') {
+          final targetTrack = params['name'];
+          final webPass = params['password'];
+          final shouldRestore = params['restore'] == 'true'; 
+
+          if (targetTrack != null) {
+            await runZoned(() async {
+              await trackSwitch(
+                targetTrack, 
+                password: webPass, 
+                webRestore: shouldRestore
+              ); 
+            }, zoneSpecification: ZoneSpecification(
+              print: (self, parent, zone, line) => stdout.writeln(line),
+            ));
+            
+            request.response
+              ..headers.contentType = ContentType.json
+              ..write(jsonEncode({'success': true}))
+              ..close();
+          }
+        }
         
         else if (path == '/api/content') {
           final id = params['id'];
           final pass = params['password'];
           final fileName = params['file'];
+          
           try {
-            final snapshot = await readSnapshot(context!, id!, password: pass!);
-            final archive = ZipDecoder().decodeBytes(snapshot!.zipBytes);
-            final file = archive.findFile(fileName!);
-            request.response..headers.contentType = ContentType.text
-              ..write(file != null ? utf8.decode(file.content) : 'File not found')..close();
+            final currentSnapshot = await readSnapshot(context!, id!, password: pass!);
+            if (currentSnapshot == null) throw 'Snapshot not found';
+            
+            final currentArchive = ZipDecoder().decodeBytes(currentSnapshot.zipBytes);
+            final currentFile = currentArchive.findFile(fileName!);
+            final String currentText = currentFile != null ? utf8.decode(currentFile.content) : '';
+
+            final logs = context.remoteMeta.logs;
+            final currentIndex = logs.indexWhere((l) => l.id == id);
+            
+            Map<String, String> diffResult;
+
+            if (currentIndex != -1 && currentIndex < logs.length - 1) {
+              final prevLog = logs[currentIndex + 1];
+              final prevSnapshot = await readSnapshot(context, prevLog.id, password: pass);
+              
+              if (prevSnapshot != null) {
+                final prevArchive = ZipDecoder().decodeBytes(prevSnapshot.zipBytes);
+                final prevFile = prevArchive.findFile(fileName);
+                
+                if (prevFile != null) {
+                  final String prevText = utf8.decode(prevFile.content);
+                  diffResult = _generateSplitDiff(prevText, currentText);
+                } else {
+                  diffResult = _generateSplitDiff('', currentText);
+                }
+              } else {
+                diffResult = _generateSplitDiff('', currentText);
+              }
+            } else {
+              diffResult = _generateSplitDiff('', currentText);
+            }
+
+            request.response
+              ..headers.contentType = ContentType.json
+              ..write(jsonEncode(diffResult))
+              ..close();
+
           } catch (e) {
-            request.response..statusCode = 500..write('Error')..close();
+            request.response
+              ..statusCode = 500
+              ..headers.contentType = ContentType.json
+              ..write(jsonEncode({'error': e.toString()}))
+              ..close();
           }
         }
         else { request.response..statusCode = 404..close(); }
@@ -3343,6 +3486,72 @@ class PortableVcs {
     }
   }
 
+  Map<String, String> _generateSplitDiff(String oldText, String newText) {
+    List<String> oldLines = oldText.split('\n');
+    List<String> newLines = newText.split('\n');
+    
+    StringBuffer leftHtml = StringBuffer();
+    StringBuffer rightHtml = StringBuffer();
+
+    int i = 0;
+    int j = 0;
+
+    String escape(String text) => text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+
+    while (i < oldLines.length || j < newLines.length) {
+      String? lineOld = i < oldLines.length ? oldLines[i] : null;
+      String? lineNew = j < newLines.length ? newLines[j] : null;
+
+      if (lineOld != null && lineNew != null && lineOld == lineNew) {
+        leftHtml.writeln('<div class="diff-line">${escape(lineOld)}</div>');
+        rightHtml.writeln('<div class="diff-line">${escape(lineNew)}</div>');
+        i++; j++;
+      } else {
+        int lookAhead = 10;
+        int matchIndex = -1;
+        
+        if (lineOld != null) {
+          for (int k = j + 1; k < newLines.length && k < j + lookAhead; k++) {
+            if (newLines[k] == lineOld) {
+              matchIndex = k;
+              break;
+            }
+          }
+        }
+
+        if (matchIndex != -1) {
+          while (j < matchIndex) {
+            leftHtml.writeln('<div class="diff-line empty"> </div>');
+            rightHtml.writeln('<div class="diff-line add">+ ${escape(newLines[j])}</div>');
+            j++;
+          }
+        } else {
+          if (i < oldLines.length) {
+            leftHtml.writeln('<div class="diff-line del">- ${escape(oldLines[i])}</div>');
+            i++;
+          } else {
+            leftHtml.writeln('<div class="diff-line empty"> </div>');
+          }
+
+          if (j < newLines.length) {
+            rightHtml.writeln('<div class="diff-line add">+ ${escape(newLines[j])}</div>');
+            j++;
+          } else {
+            rightHtml.writeln('<div class="diff-line empty"> </div>');
+          }
+        }
+      }
+    }
+
+    return {
+      "left": leftHtml.toString(),
+      "right": rightHtml.toString()
+    };
+  }
+
   List<String> _parseRawCommand(String input) {
     final shellRegex = RegExp(r'([^\s"理論]+)|"([^"]*)"');
     return shellRegex.allMatches(input)
@@ -3350,8 +3559,8 @@ class PortableVcs {
         .toList();
   }
 
-  String _ansiToHtml(String text) {
-    return text
+  String _ansiToHtml(String text, {bool isNewFile = false}) {
+    String cleanText = text
         .replaceAll('[0m', '</span>')
         .replaceAll('[32m', '<span style="color:var(--added)">')
         .replaceAll('[31m', '<span style="color:var(--error)">')
@@ -3359,298 +3568,383 @@ class PortableVcs {
         .replaceAll('[36m', '<span style="color:var(--accent)">')
         .replaceAll('[1m', '<span style="font-weight:bold">')
         .replaceAll(RegExp(r'\[[0-9;]*m'), '');
+
+    if (isNewFile) {
+      final escaped = cleanText
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+
+      return escaped.split('\n').map((line) {
+        if (line.trim().isEmpty) return '<div class="diff-line"> </div>';
+        return '<div class="diff-line add">+ $line</div>';
+      }).join('\n');
+    }
+
+    return cleanText.replaceAll('\n', '<br>');
   }
 
   String _generateDashboardHtml(RepoMeta meta) {
     final String css = r"""
-      :root { 
-        --bg: #0d1117; --card: #161b22; --accent: #58a6ff; 
-        --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
-        --success: #238636; --error: #f85149; --warning: #d29922;
-        --added: #3fb950; --modified: #d29922; --deleted: #f85149;
-        --term-bg: #010409;
-      }
-      * { box-sizing: border-box; }
-      body { 
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; 
-        background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden;
-      }
-      
-      /* Sidebar */
-      .sidebar { 
-        width: 300px; border-right: 1px solid var(--border); padding: 25px; 
-        display: flex; flex-direction: column; background: #010409;
-      }
-      .stats-card { background: var(--card); border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin-bottom: 10px; }
-      .stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 1px; }
-      .stat-value { font-size: 14px; font-weight: bold; color: var(--accent); display: block; margin-top: 2px; }
+            :root { 
+              --bg: #0d1117; --card: #161b22; --accent: #58a6ff; 
+              --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
+              --success: #238636; --error: #f85149; --warning: #d29922;
+              --added: #3fb950; --modified: #d29922; --deleted: #f85149;
+              --term-bg: #010409;
+            }
+            * { box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; 
+              background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden;
+            }
+            
+            .sidebar { 
+              width: 300px; border-right: 1px solid var(--border); padding: 25px; 
+              display: flex; flex-direction: column; background: #010409;
+            }
+            .stats-card { background: var(--card); border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin-bottom: 10px; }
+            .stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 1px; }
+            .stat-value { font-size: 14px; font-weight: bold; color: var(--accent); display: block; margin-top: 2px; }
 
-      /* Buttons */
-      .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; }
-      .btn-action { 
-        background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 12px;
-        border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: 0.2s;
-        display: flex; flex-direction: column; align-items: center; gap: 4px;
-      }
-      .btn-action:hover { border-color: var(--accent); background: #1c2128; transform: translateY(-2px); }
+            .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; }
+            .btn-action { 
+              background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 12px;
+              border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: 0.2s;
+              display: flex; flex-direction: column; align-items: center; gap: 4px;
+            }
+            .btn-action:hover { border-color: var(--accent); background: #1c2128; transform: translateY(-2px); }
 
-      /* Main Area with Terminal */
-      .workspace { flex: 1; display: flex; flex-direction: column; height: 100vh; }
-      .main-content { flex: 1; overflow-y: auto; padding: 40px; }
-      
-      /* Terminal UI */
-      .terminal-container {
-        height: 250px; background: var(--term-bg); border-top: 1px solid var(--border);
-        display: flex; flex-direction: column; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-      }
-      .terminal-output { flex: 1; overflow-y: auto; padding: 15px; font-size: 13px; line-height: 1.5; color: #d1d5da; }
-      .terminal-output div {
-        white-space: pre-wrap; /* Mantiene la alineación de las tablas y el diff */
-        word-break: break-all;
-      }
-      .terminal-input-area { 
-        display: flex; align-items: center; padding: 10px 15px; background: #090c10; border-top: 1px solid #21262d;
-      }
-      .prompt { color: var(--added); margin-right: 10px; font-weight: bold; }
-      .cmd-input { 
-        flex: 1; background: transparent; border: none; color: white; font-family: inherit; font-size: 14px; outline: none;
-      }
+            .workspace { flex: 1; display: flex; flex-direction: column; height: 100vh; }
+            .main-content { flex: 1; overflow-y: auto; padding: 40px; }
+            
+            .terminal-container {
+              height: 250px; background: var(--term-bg); border-top: 1px solid var(--border);
+              display: flex; flex-direction: column; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            }
+            .terminal-output { flex: 1; overflow-y: auto; padding: 15px; font-size: 13px; line-height: 1.5; color: #d1d5da; }
+            .terminal-output div { white-space: pre-wrap; word-break: break-all; }
+            .terminal-input-area { 
+              display: flex; align-items: center; padding: 10px 15px; background: #090c10; border-top: 1px solid #21262d;
+            }
+            .prompt { color: var(--added); margin-right: 10px; font-weight: bold; }
+            .cmd-input { 
+              flex: 1; background: transparent; border: none; color: white; font-family: inherit; font-size: 14px; outline: none;
+            }
 
-      /* Snapshots */
-      .snapshot-card { 
-        background: var(--card); border: 1px solid var(--border); padding: 15px; 
-        margin-bottom: 10px; border-radius: 8px; cursor: pointer; 
-        display: flex; justify-content: space-between; align-items: center; transition: 0.1s;
-      }
-      .snapshot-card:hover { border-color: var(--accent); background: #1c2128; }
-      
-      /* Modals & Viewers */
-      #codeViewer { 
-        display: none; position: fixed; inset: 20px; background: var(--term-bg); border: 1px solid var(--border);
-        border-radius: 12px; z-index: 1000; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,0.7);
-      }
-      #passwordModal { 
-        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); 
-        backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 2000;
-      }
-      .modal-content { background: var(--card); padding: 30px; border-radius: 12px; border: 1px solid var(--border); width: 350px; text-align: center;}
-      .modal-content input { 
-        width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); 
-        color: white; border-radius: 6px; margin: 15px 0; outline: none;
-      }
-      .badge-status { padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid; }
-      .added { color: var(--added); border-color: var(--added); }
-      .modified { color: var(--modified); border-color: var(--modified); }
-      .deleted { color: var(--deleted); border-color: var(--deleted); }
-    """;
+            .snapshot-card { 
+              background: var(--card); border: 1px solid var(--border); padding: 15px; 
+              margin-bottom: 10px; border-radius: 8px; cursor: pointer; 
+              display: flex; justify-content: space-between; align-items: center; transition: 0.1s;
+            }
+            .snapshot-card:hover { border-color: var(--accent); background: #1c2128; }
+            
+            #codeViewer { 
+              display: none; position: fixed; inset: 20px; background: var(--term-bg); border: 1px solid var(--border);
+              border-radius: 12px; z-index: 1000; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,0.7);
+            }
+
+            /* Estilos para Vista Partida */
+            .diff-container {
+              display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+              background: var(--border); flex: 1; overflow: hidden;
+            }
+            .diff-pane { 
+              background: var(--term-bg); overflow: auto; padding: 20px 0;
+              display: flex; flex-direction: column;
+            }
+            .diff-line { 
+              white-space: pre; 
+              font-family: 'SFMono-Regular', Consolas, monospace; 
+              padding: 1px 15px; /* Reducido un poco el padding vertical */
+              font-size: 12px; 
+              height: 1.5em; /* Altura fija para forzar alineación */
+              line-height: 1.5;
+              display: block;
+            }
+            .diff-line.add { background-color: rgba(46, 160, 67, 0.15); color: #7ee787; border-left: 4px solid #3fb950; }
+            .diff-line.del { background-color: rgba(248, 81, 73, 0.15); color: #ff7b72; border-left: 4px solid #f85149; }
+            .diff-line.empty { background-color: rgba(0, 0, 0, 0.1); opacity: 0.5; }
+
+            #passwordModal { 
+              display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); 
+              backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 2000;
+            }
+            .modal-content { background: var(--card); padding: 30px; border-radius: 12px; border: 1px solid var(--border); width: 350px; text-align: center;}
+            .modal-content input { 
+              width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); 
+              color: white; border-radius: 6px; margin: 15px 0; outline: none;
+            }
+            .badge-status { padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid; }
+            .added { color: var(--added); border-color: var(--added); }
+            .modified { color: var(--modified); border-color: var(--modified); }
+            .deleted { color: var(--deleted); border-color: var(--deleted); }
+
+            .track-select {
+              width: 100%; background: transparent; border: none; color: var(--added); 
+              font-size: 14px; font-weight: bold; outline: none; cursor: pointer;
+              padding: 0; margin-top: 2px; appearance: none;
+            }
+            .track-select option { background: var(--card); color: var(--text); }
+        """;
 
     final snapshotsHtml = meta.logs.map((log) {
       return """
-        <div class="snapshot-card" onclick="openInspector('${log.id}', '${log.message}')">
-          <div>
-            <div style="font-weight:600; color:#f0f6fc;">${log.message}</div>
-            <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">
-              <strong>${log.author ?? "Anonymous"}</strong> • ${log.createdAt}
-            </div>
-          </div>
-          <div style="font-family:monospace; font-size:11px; background:#30363d; padding:4px 8px; border-radius:4px;">${log.id}</div>
-        </div>
-      """;
+              <div class="snapshot-card" onclick="openInspector('${log.id}', '${log.message}')">
+                <div>
+                  <div style="font-weight:600; color:#f0f6fc;">${log.message}</div>
+                  <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">
+                    <strong>${log.author ?? "Anonymous"}</strong> • ${log.createdAt}
+                  </div>
+                </div>
+                <div style="font-family:monospace; font-size:11px; background:#30363d; padding:4px 8px; border-radius:4px;">${log.id}</div>
+              </div>
+            """;
     }).join('');
 
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>VCS Terminal Dashboard</title>
-      <style>$css</style>
-    </head>
-    <body>
-      <div class="sidebar">
-        <h2 style="font-size: 18px; margin-bottom: 20px;">📁 Repository</h2>
-        <div class="stats-card">
-          <span class="stat-label">Project</span>
-          <span class="stat-value">${meta.projectName}</span>
-        </div>
-        <div class="stats-card">
-          <span class="stat-label">Track</span>
-          <span class="stat-value" style="color:var(--added)">${meta.activeTrack}</span>
-        </div>
+    final trackOptions = meta.tracks.keys
+        .map((t) => '<option value="$t" ${t == meta.activeTrack ? 'selected' : ''}>$t</option>')
+        .join('');
 
-        <div class="actions-grid">
-          <button class="btn-action" onclick="setCmd('status')">🔍 Status</button>
-          <button class="btn-action" onclick="setCmd('diff')">🌓 Diff</button>
-          <button class="btn-action" onclick="setCmd('push \\"\\" -a ')">📤 Push</button>
-          <button class="btn-action" onclick="setCmd('pull')">📥 Pull</button>
-          <button class="btn-action" onclick="setCmd('publish --branch main')">🚀 Publish</button>
-          <button class="btn-action" onclick="setCmd('doctor')">🩺 Doctor</button>
-          <button class="btn-action" onclick="executeRaw('help')" style="grid-column: span 2; border-color: var(--warning);">❓ Help Guide</button>
-        </div>
-      </div>
+    return r"""
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>VCS Terminal Dashboard</title>
+            <style>""" + css + r"""</style>
+          </head>
+          <body>
+            <div class="sidebar">
+              <h2 style="font-size: 18px; margin-bottom: 20px;">📁 Repository</h2>
+              <div class="stats-card">
+                <span class="stat-label">Project</span>
+                <span class="stat-value">""" + meta.projectName + r"""</span>
+              </div>
+              
+              <div class="stats-card">
+                <span class="stat-label">Active Track</span>
+                <select class="track-select" onchange="switchTrack(this.value)">
+                  """ + trackOptions + r"""
+                </select>
+              </div>
 
-      <div class="workspace">
-        <div class="main-content">
-          <div id="viewList">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-              <h1 style="font-size:24px;">History</h1>
-              <input type="text" placeholder="Filter..." oninput="filterLogs(this.value)" style="background:var(--card); border:1px solid var(--border); color:white; padding:8px; border-radius:6px; outline:none;">
+              <div class="actions-grid">
+                <button class="btn-action" onclick="setCmd('status')">🔍 Status</button>
+                <button class="btn-action" onclick="setCmd('diff')">🌓 Diff</button>
+                <button class="btn-action" onclick="setCmd('push \"\" -a ')">📤 Push</button>
+                <button class="btn-action" onclick="setCmd('pull')">📥 Pull</button>
+                <button class="btn-action" onclick="setCmd('publish --branch main')">🚀 Publish</button>
+                <button class="btn-action" onclick="setCmd('doctor')">🩺 Doctor</button>
+                <button class="btn-action" onclick="executeRaw('help')" style="grid-column: span 2; border-color: var(--warning);">❓ Help Guide</button>
+              </div>
             </div>
-            <div id="snapshotList">$snapshotsHtml</div>
-          </div>
 
-          <div id="fileInspector" style="display:none">
-            <button onclick="closeInspector()" style="background:transparent; color:var(--accent); border:none; cursor:pointer; padding:0; margin-bottom:10px;">← Back to snapshots</button>
-            <h1 id="inspectTitle" style="margin:0 0 20px 0; font-size:24px;">Files</h1>
-            <div id="fileList" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:12px;"></div>
-          </div>
-        </div>
+            <div class="workspace">
+              <div class="main-content">
+                <div id="viewList">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <h1 style="font-size:24px;">History</h1>
+                    <input type="text" placeholder="Filter..." oninput="filterLogs(this.value)" style="background:var(--card); border:1px solid var(--border); color:white; padding:8px; border-radius:6px; outline:none;">
+                  </div>
+                  <div id="snapshotList">""" + snapshotsHtml + r"""</div>
+                </div>
 
-        <div class="terminal-container">
-          <div class="terminal-output" id="termOut">Welcome to Portable VCS Web Terminal. Type your command below...</div>
-          <div class="terminal-input-area">
-            <span class="prompt">vcs ></span>
-            <input type="text" class="cmd-input" id="cmdIn" placeholder="Enter command..." autofocus onkeypress="handleTermKey(event)">
-          </div>
-        </div>
-      </div>
+                <div id="fileInspector" style="display:none">
+                  <button onclick="closeInspector()" style="background:transparent; color:var(--accent); border:none; cursor:pointer; padding:0; margin-bottom:10px;">&larr; Back to snapshots</button>
+                  <h1 id="inspectTitle" style="margin:0 0 20px 0; font-size:24px;">Files</h1>
+                  <div id="fileList" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:12px;"></div>
+                </div>
+              </div>
 
-      <div id="passwordModal">
-        <div class="modal-content">
-          <h3 id="modalTitle">🔒 Unlock Snapshot</h3>
-          <input type="password" id="passInput" placeholder="Password...">
-          <div style="display:flex; gap:10px;">
-            <button onclick="submitPassword()" style="flex:1; padding:10px; background:var(--success); color:white; border:none; border-radius:6px; cursor:pointer;">Confirm</button>
-            <button onclick="closeModal()" style="flex:1; background:transparent; color:var(--text-dim); border:none; cursor:pointer;">Cancel</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="codeViewer">
-        <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:#161b22;">
-          <strong id="fileNameDisplay"></strong>
-          <button onclick="closeCode()" style="background:var(--error); color:white; border:none; padding:5px 15px; border-radius:4px; cursor:pointer;">Close</button>
-        </div>
-        <pre id="codeContent" style="margin:0; padding:20px; overflow:auto; flex:1; font-size:13px;"></pre>
-      </div>
-
-      <script>
-        let currentId = null, currentPass = null;
-        let pendingCommand = null;
-
-        function setCmd(c) {
-          const input = document.getElementById('cmdIn');
-          input.value = c;
-          input.focus();
-          if(c.includes('""')) {
-            const pos = c.indexOf('"') + 1;
-            input.setSelectionRange(pos, pos);
-          }
-        }
-
-        function handleTermKey(e) {
-          if(e.key === 'Enter') {
-            const raw = e.target.value.trim();
-            const needsAuth = raw.startsWith('push') || 
-                              raw.startsWith('pull') || 
-                              raw.startsWith('status') || 
-                              raw.startsWith('diff');
-
-            if (needsAuth) {
-              pendingCommand = raw;
-              document.getElementById('modalTitle').innerText = "🔑 Authentication Required";
-              document.getElementById('passwordModal').style.display = 'flex';
-              document.getElementById('passInput').focus();
-            } else {
-              executeRaw(raw);
-            }
-          }
-        }
-
-        async function executeRaw(raw, pass = '') {
-          if(!raw.trim()) return;
-          const out = document.getElementById('termOut');
-          const input = document.getElementById('cmdIn');
-          
-          out.innerHTML += `<div style="color:var(--accent); margin-top:10px;">\$ vcs \${raw}</div>`;
-          input.value = '';
-
-          try {
-            const resp = await fetch(`/api/command?raw=\${encodeURIComponent(raw)}&password=\${encodeURIComponent(pass)}`);
-            const data = await resp.json();
-            out.innerHTML += `<div>\${data.output.replace(/\\n/g, '<br>')}</div>`;
-            out.scrollTop = out.scrollHeight;
-            if(data.refresh) setTimeout(() => location.reload(), 1500);
-          } catch(e) {
-            out.innerHTML += `<div style="color:var(--error)">Network error.</div>`;
-          }
-        }
-
-        function openInspector(id, msg) {
-          currentId = id;
-          pendingCommand = null;
-          document.getElementById('modalTitle').innerText = "🔒 Unlock Snapshot";
-          document.getElementById('passwordModal').style.display = 'flex';
-          document.getElementById('passInput').focus();
-        }
-
-        function closeModal() { 
-          document.getElementById('passwordModal').style.display = 'none';
-          document.getElementById('passInput').value = '';
-        }
-
-        function closeInspector() { 
-          document.getElementById('fileInspector').style.display = 'none';
-          document.getElementById('viewList').style.display = 'block';
-        }
-
-        async function submitPassword() {
-          const pass = document.getElementById('passInput').value;
-          if (pendingCommand) {
-            closeModal();
-            executeRaw(pendingCommand, pass);
-            pendingCommand = null;
-          } else {
-            currentPass = pass;
-            const resp = await fetch(`/api/inspect?id=\${currentId}&password=\${currentPass}`);
-            const data = await resp.json();
-            if (data.success) {
-              closeModal();
-              renderFiles(data.files);
-            } else { alert("Wrong password"); }
-          }
-        }
-
-        function renderFiles(files) {
-          document.getElementById('viewList').style.display = 'none';
-          document.getElementById('fileInspector').style.display = 'block';
-          document.getElementById('fileList').innerHTML = files.map(f => `
-            <div class="snapshot-card" onclick="viewCode('\${f.name}')">
-              <span>📄 \${f.name}</span>
-              <span class="badge-status \${f.status}">\${f.status}</span>
+              <div class="terminal-container">
+                <div class="terminal-output" id="termOut">Welcome to Portable VCS Web Terminal.</div>
+                <div class="terminal-input-area">
+                  <span class="prompt">vcs &gt;</span>
+                  <input type="text" class="cmd-input" id="cmdIn" placeholder="Enter command..." autofocus onkeypress="handleTermKey(event)">
+                </div>
+              </div>
             </div>
-          `).join('');
-        }
 
-        async function viewCode(file) {
-          const resp = await fetch(`/api/content?id=\${currentId}&password=\${currentPass}&file=\${file}`);
-          document.getElementById('codeContent').innerText = await resp.text();
-          document.getElementById('fileNameDisplay').innerText = file;
-          document.getElementById('codeViewer').style.display = 'flex';
-        }
-        
-        function closeCode() { document.getElementById('codeViewer').style.display = 'none'; }
-        
-        function filterLogs(q) {
-          const query = q.toLowerCase();
-          document.querySelectorAll('.snapshot-card').forEach(c => {
-            c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
-          });
-        }
-      </script>
-    </body>
-    </html>
-    """;
+            <div id="passwordModal">
+              <div class="modal-content">
+                <h3 id="modalTitle">🔒 Unlock Snapshot</h3>
+                <input type="password" id="passInput" placeholder="Password...">
+                <div style="display:flex; gap:10px;">
+                  <button onclick="submitPassword()" style="flex:1; padding:10px; background:var(--success); color:white; border:none; border-radius:6px; cursor:pointer;">Confirm</button>
+                  <button onclick="closeModal()" style="flex:1; background:transparent; color:var(--text-dim); border:none; cursor:pointer;">Cancel</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="codeViewer">
+              <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:#161b22;">
+                <strong id="fileNameDisplay"></strong>
+                <button onclick="closeCode()" style="background:var(--error); color:white; border:none; padding:5px 15px; border-radius:4px; cursor:pointer;">Close</button>
+              </div>
+              <div class="diff-container">
+                  <div class="diff-pane" id="leftPane"></div>
+                  <div class="diff-pane" id="rightPane"></div>
+              </div>
+            </div>
+
+            <script>
+              let currentId = null, currentPass = null;
+              let pendingCommand = null;
+              let pendingTrackName = null;
+              let restoreDecision = false;
+
+              function setCmd(c) {
+                const input = document.getElementById('cmdIn');
+                input.value = c;
+                input.focus();
+                if(c.includes('""')) {
+                  const pos = c.indexOf('"') + 1;
+                  input.setSelectionRange(pos, pos);
+                }
+              }
+
+              async function switchTrack(trackName) {
+                currentId = null; 
+                pendingTrackName = trackName;
+                restoreDecision = confirm(`Switched to track "${trackName}".\n\nDo you want to restore the latest snapshot?`);
+                if (restoreDecision) {
+                  document.getElementById('modalTitle').innerText = "🔑 Password to Restore Tree";
+                  document.getElementById('passwordModal').style.display = 'flex';
+                  document.getElementById('passInput').focus();
+                } else {
+                  executeSwitch(trackName, '', false);
+                }
+              }
+
+              async function executeSwitch(name, pass, restore) {
+                const out = document.getElementById('termOut');
+                out.innerHTML += `<div style="color:var(--warning); margin-top:10px;">🔄 Switching to track: ${name}...</div>`;
+                try {
+                  const resp = await fetch(`/api/switch-track?name=${encodeURIComponent(name)}&password=${encodeURIComponent(pass)}&restore=${restore}`);
+                  const data = await resp.json();
+                  if (data.success) {
+                    out.innerHTML += `<div style="color:var(--added)">✅ Track changed successfully.</div>`;
+                    setTimeout(() => location.reload(), 600);
+                  } else { alert("Error: " + data.error); }
+                } catch(e) { alert("Network error"); }
+              }
+
+              function handleTermKey(e) {
+                if(e.key === 'Enter') {
+                  const raw = e.target.value.trim();
+                  const needsAuth = ['push', 'pull', 'status', 'diff'].some(cmd => raw.startsWith(cmd));
+                  if (needsAuth) {
+                    pendingCommand = raw;
+                    document.getElementById('modalTitle').innerText = "🔑 Authentication Required";
+                    document.getElementById('passwordModal').style.display = 'flex';
+                    document.getElementById('passInput').focus();
+                  } else { executeRaw(raw); }
+                }
+              }
+
+              async function executeRaw(raw, pass = '') {
+                if(!raw.trim()) return;
+                const out = document.getElementById('termOut');
+                document.getElementById('cmdIn').value = '';
+                out.innerHTML += `<div style="color:var(--accent); margin-top:10px;">$ vcs ${raw}</div>`;
+                try {
+                  const resp = await fetch(`/api/command?raw=${encodeURIComponent(raw)}&password=${encodeURIComponent(pass)}`);
+                  const data = await resp.json();
+                  out.innerHTML += `<div>${data.output.replace(/\n/g, '<br>')}</div>`;
+                  out.scrollTop = out.scrollHeight;
+                  if(data.refresh) setTimeout(() => location.reload(), 1500);
+                } catch(e) { out.innerHTML += `<div style="color:var(--error)">Network error.</div>`; }
+              }
+
+              function openInspector(id, msg) {
+                currentId = id;
+                pendingCommand = null;
+                pendingTrackName = null;
+                document.getElementById('modalTitle').innerText = "🔒 Unlock Snapshot";
+                document.getElementById('passwordModal').style.display = 'flex';
+                document.getElementById('passInput').focus();
+              }
+
+              function closeModal() { 
+                document.getElementById('passwordModal').style.display = 'none';
+                document.getElementById('passInput').value = '';
+              }
+
+              function closeInspector() { 
+                document.getElementById('fileInspector').style.display = 'none';
+                document.getElementById('viewList').style.display = 'block';
+              }
+
+              async function submitPassword() {
+                const pass = document.getElementById('passInput').value;
+                if (pendingTrackName) {
+                  const name = pendingTrackName;
+                  closeModal();
+                  await executeSwitch(name, pass, restoreDecision);
+                  return;
+                }
+                if (pendingCommand) {
+                  const cmd = pendingCommand;
+                  pendingCommand = null;
+                  closeModal();
+                  executeRaw(cmd, pass);
+                  return;
+                }
+                if (currentId) {
+                  currentPass = pass;
+                  try {
+                    const resp = await fetch(`/api/inspect?id=${currentId}&password=${encodeURIComponent(pass)}`);
+                    const data = await resp.json();
+                    if (data.success) {
+                      closeModal();
+                      renderFiles(data.files);
+                    } else { alert("Wrong password"); }
+                  } catch(e) { alert("Error"); }
+                }
+              }
+
+              function renderFiles(files) {
+                document.getElementById('viewList').style.display = 'none';
+                document.getElementById('fileInspector').style.display = 'block';
+                document.getElementById('fileList').innerHTML = files.map(f => `
+                  <div class="snapshot-card" onclick="viewCode('${f.name}')">
+                    <span>📄 ${f.name}</span>
+                    <span class="badge-status ${f.status}">${f.status}</span>
+                  </div>
+                `).join('');
+              }
+
+              async function viewCode(file) {
+                try {
+                  const resp = await fetch(`/api/content?id=${currentId}&password=${encodeURIComponent(currentPass)}&file=${encodeURIComponent(file)}`);
+                  const data = await resp.json();
+                  
+                  document.getElementById('leftPane').innerHTML = data.left || '<div class="diff-line empty"> (New File) </div>';
+                  document.getElementById('rightPane').innerHTML = data.right;
+                  document.getElementById('fileNameDisplay').innerText = file;
+                  document.getElementById('codeViewer').style.display = 'flex';
+
+                  const left = document.getElementById('leftPane');
+                  const right = document.getElementById('rightPane');
+                  left.onscroll = () => { right.scrollTop = left.scrollTop; };
+                  right.onscroll = () => { left.scrollTop = right.scrollTop; };
+
+                } catch(e) { alert("Error loading diff"); }
+              }
+              
+              function closeCode() { document.getElementById('codeViewer').style.display = 'none'; }
+              
+              function filterLogs(q) {
+                const query = q.toLowerCase();
+                document.querySelectorAll('#snapshotList .snapshot-card').forEach(c => {
+                  c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
+                });
+              }
+            </script>
+          </body>
+          </html>
+          """;
   }
 
   Future<void> _openBrowser(String url) async {
@@ -3690,10 +3984,16 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ArgParser()
         ..addFlag('full', negatable: false)
         ..addFlag('summary', negatable: false)
-        ..addFlag('standard', negatable: false),
+        ..addFlag('standard', negatable: false)
+        ..addOption('track', abbr: 't', help: 'Show logs from a specific track instead of the active one',),
     )
     ..addCommand('show')
-    ..addCommand('pull')
+    ..addCommand(
+      'pull',
+      ArgParser()
+        ..addOption('track', abbr: 't', help: 'Pull from a specific track')
+        ..addOption('id', help: 'Pull a specific snapshot ID'),
+    )
     ..addCommand('list')
     ..addCommand('doctor')
     ..addCommand('stats')
@@ -3710,11 +4010,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         ),
     )
     ..addCommand('bind')
-    ..addCommand('diff')
+    ..addCommand('diff', ArgParser())
     ..addCommand('tree')
     ..addCommand(
       'push',
-      ArgParser()..addOption('author', abbr: 'a'),
+      ArgParser()..addOption('author', abbr: 'a')
+      ..addOption('track', abbr: 't', help: 'Push to a specific track instead of the active one'),
     )
     ..addCommand('revert')
     ..addCommand(
@@ -3796,16 +4097,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'log':
         final cmd = result.command!;
         LogViewMode mode = LogViewMode.summary;
-
-        if (cmd['full'] == true) {
-          mode = LogViewMode.full;
-        } else if (cmd['standard'] == true) {
-          mode = LogViewMode.standard;
-        } else if (cmd['summary'] == true) {
-          mode = LogViewMode.summary;
-        }
-
-        await app.log(mode: mode);
+        if (cmd['full'] == true) mode = LogViewMode.full;
+        else if (cmd['standard'] == true) mode = LogViewMode.standard;
+        
+        await app.log(
+          mode: mode, 
+          track: cmd['track']?.toString()
+        );
         break;
       case 'show':
         final rest = result.command?.rest ?? [];
@@ -3822,7 +4120,11 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         await app.stats();
         break;
       case 'pull':
-        await app.pull();
+        final pullCmd = result.command!;
+        await app.pull(
+          track: pullCmd['track']?.toString(),
+          snapshotId: pullCmd['id']?.toString(),
+        );
         break;
       case 'clear-history':
         await app.clearHistory();
@@ -3871,6 +4173,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         await app.push(
           pushCmd.rest.join(' '),
           author: pushCmd['author']?.toString(),
+          track: pushCmd['track']?.toString(),
         );
         break;
       case 'clone':
