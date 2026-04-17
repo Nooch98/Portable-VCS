@@ -217,7 +217,7 @@ By default, the dashboard will be accessible at `http://localhost:8080`.
 * Visual Snapshot Timeline: Browse through your history with a clean UI showing authors, timestamps, and full 13-digit Snapshot IDs.
 * Secure Snapshot Inspection: Preview the file tree and content of past snapshots. Data is decrypted on-the-fly in memory using your session password
 * Live Repository Context: The dashboard tracks your active branch (track), project metadata, and storage status in real-time.
-* New: Smart Split-View Diff: Visualize changes in a side-by-side window.
+* New: Smart Split-View Diff: Visualize changes in a side-by-side window. **(It is not very precise and often makes mistakes it shouldn't.)**
     * Left Pane: Previous state (Red).
     * Right Pane: Current state (Green).
  
