@@ -217,6 +217,14 @@ By default, the dashboard will be accessible at `http://localhost:8080`.
 * Visual Snapshot Timeline: Browse through your history with a clean UI showing authors, timestamps, and full 13-digit Snapshot IDs.
 * Secure Snapshot Inspection: Preview the file tree and content of past snapshots. Data is decrypted on-the-fly in memory using your session password
 * Live Repository Context: The dashboard tracks your active branch (track), project metadata, and storage status in real-time.
+* New: Smart Split-View Diff: Visualize changes in a side-by-side window.
+    * Left Pane: Previous state (Red).
+    * Right Pane: Current state (Green).
+ 
+#### Dashboard Preview (Split-View Diff)
+The new comparison system automatically aligns code lines to make reviewing complex changes effortless.
+
+<img width="1865" height="999" alt="Captura de pantalla 2026-04-17 175526" src="https://github.com/user-attachments/assets/cb1526a8-8595-499e-bad0-a4b10ff5e197" />
 
 ### Manual Confirmation Policy
 For security and data integrity, destructive or high-risk operations require manual confirmation. If you trigger these commands from the Web UI, the process will pause and wait for you to confirm the action in your physical system terminal:
@@ -373,37 +381,44 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 # Main Commands
 ### 🛠️ Command Reference
 
+### 🛠️ Command Reference
+
+### 🛠️ Command Reference
+
 | Category | Command | Description |
 | :--- | :--- | :--- |
 | **Setup** | `vcs setup` | Prepare a USB drive or external storage for Vault use. |
-| | `vcs init` | Initialize a new project and link it to the Vault. |
-| | `vcs list` | List all available repositories in the connected Vault. |
-| | `vcs clone <id>` | Clone a repository from the Vault into a new local folder. |
-| | `vcs bind <id>` | Bind current folder to an existing Vault repository. |
-| **Workflow** | `vcs status` | Compare working tree against the latest snapshot. |
-| | `vcs push "msg" [-a name]` | Create an encrypted snapshot (optional author signature). |
-| | `vcs pull` | Restore the latest snapshot from the active track. |
-| | `vcs revert <id>` | Roll back the current folder to a specific snapshot. |
-| | `vcs restore <id> --to <dir>` | Export a specific snapshot to an external directory. |
-| **Inspection**| `vcs log [--full]` | Show snapshot history (use `--full` for deep details). |
-| | `vcs show <id>` | Display detailed metadata of a specific snapshot. |
-| | `vcs diff [id1] [id2]` | Compare differences between snapshots or working tree. |
-| | `vcs tree [id]` | Visualize the file structure inside a snapshot. |
-| **Tracks** | `vcs track list` | Show all available history tracks. |
-| | `vcs track create <name>` | Start a new independent development lane. |
-| | `vcs track switch <name>` | Switch the active track (context switch). |
-| | `vcs track delete <name>` | Remove a track and its associated history. |
-| **Git Bridge** | `vcs git-diff` | Preview changes between VCS snapshot and Git branch. |
-| | `vcs git-prepare` | Restore snapshot into Git tree and stage files. |
-| | `vcs publish [--dry-run]` | **Atomic move:** Restore, commit, and push to Git. |
-| **Maintenance**| `vcs verify [--all]` | Run SHA-256 integrity checks on snapshots. |
+| | `vcs init` | Initialize the current project and link it to remote storage. |
+| | `vcs list` | List repositories available on the connected USB/storage. |
+| | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder. |
+| | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
+| **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
+| | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
+| | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
+| | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
+| **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
+| | `vcs status` | Compare tree against latest of the **active track**. |
+| | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
+| | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
+| | `vcs log [--track name]` | Show history (Standard/Full options available). |
+| | `vcs show <id>` | Show detailed information about a snapshot in **active track**. |
+| | `vcs tree [id]` | Show file tree structure of a snapshot in **active track**. |
+| **Tracks** | `vcs track list` | List all available history tracks. |
+| | `vcs track current` | Show the name of the currently active track. |
+| | `vcs track create <name>` | Create a new independent development lane. |
+| | `vcs track switch <name>` | Switch the active track (with optional tree restore). |
+| | `vcs track delete <name>` | Remove an existing non-active track and its history. |
+| **Git Bridge** | `vcs git-diff [id] --branch b` | Preview changes between snapshot and Git branch. |
+| | `vcs git-prepare [id] --branch b` | Restore snapshot into Git tree and stage files. |
+| | `vcs publish [id] --branch b` | **Atomic move:** Restore, commit, and push to Git safely. |
+| **Maintenance**| `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
 | | `vcs doctor` | Run repository diagnostics and health checks. |
-| | `vcs stats` | Show Vault size, snapshot counts, and storage info. |
-| | `vcs prune` | Clean up old snapshots to save space. |
-| | `vcs clear-history` | Wipe all snapshots but keep project structure. |
+| | `vcs stats` | Show size, snapshot count, and storage statistics. |
+| | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
+| | `vcs clear-history` | Wipe all snapshots for the **active track**. |
 | | `vcs purge` | Permanently delete the project from the Vault. |
 | **General** | `vcs version` | Show current Portable VCS version. |
-| | `vcs help` | Show help message. |
+| | `vcs help` | Show this help message. |
 
 # Encryption
 Snapshots are encrypted locally before storage.
