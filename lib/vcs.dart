@@ -51,7 +51,7 @@ class PortableVcs {
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
 
   void showHelp() {
-    print('\n🚀 ${'PORTABLE SNAPSHOT VAULT'.cyan}');
+    print('\n🚀 ${'PORTABLE SNAPSHOT VAULT'.black.onCyan}');
     print('${'Offline encrypted snapshot tool for Git-compatible local workflows.'.yellow}\n');
 
     print('${"Usage".cyan}');
@@ -71,31 +71,33 @@ class PortableVcs {
     print('  ${'track switch <name>'.green.padRight(28)} Switch to another track (Optional tree restore).');
     print('  ${'track delete <name>'.green.padRight(28)} Delete an existing non-active track.');
 
-    print('\n${"Snapshot workflow (Multi-track support)".cyan}');
-    print('  ${'push "msg" [-a aut] [--track t]'.green.padRight(28)} Create a snapshot (defaults to active track).');
-    print('  ${'pull [--track name]'.green.padRight(28)} Restore latest snapshot from a specific track.');
-    print('  ${'revert <snapshot_id>'.green.padRight(28)} Restore a specific snapshot from the active track.');
+    print('\n${"Snapshot workflow (Interoperable)".cyan}');
+    print('  ${'push "msg" [-a aut] [-t t]'.green.padRight(28)} Create a snapshot (with preview & confirmation).');
+    print('  ${'pull [-t name] [id]'.green.padRight(28)} Restore latest or specific snapshot (with preview).');
+    print('  ${'revert <id>'.green.padRight(28)} Quick restore of a specific ID from active track.');
     print('  ${'restore <id> --to dir'.green.padRight(28)} Restore a specific snapshot into another folder.');
 
     print('\n${"Inspection & Web Interface".cyan}');
-    print('  ${'ui'.green.padRight(28)} Launch the local web dashboard for visual history.');
+    print('  ${'ui'.green.padRight(28)} Launch the Web Dashboard (Split-view diff support).');
     print('  ${'status'.green.padRight(28)} Compare tree against latest of the active track.');
-    print('  ${'diff [id]'.green.padRight(28)} Compare working tree vs latest or specific ID in active track.');
-    print('  ${'diff <id1> <id2>'.green.padRight(28)} Compare two specific snapshots.');
-    print('  ${'log [--track name]'.green.padRight(28)} Show history (Standard/Full options available).');
-    print('  ${'show <id>'.green.padRight(28)} Show detailed information about a snapshot in active track.');
+    print('  ${'summary'.green.padRight(28)} Show a summary of all messages to help create a Git/GitHub commit.');
+    print('  ${'diff [id1] [id2]'.green.padRight(28)} Compare working tree vs latest or two specific IDs.');
+    print('  ${'diff -t <track-name1> <track-name2>'.green.padRight(28)} Compare the working tree in the last snapshot of both tracks.');
+    print('  ${'log [-t name] | <--full>'.green.padRight(28)} Show history of the active or specific track you can use full parameter to see more details on log.');
+    print('  ${'show <id> [-t name]'.green.padRight(28)} Show details of a snapshot (cross-track support).');
+    print('  ${'tree [id] [-t name]'.green.padRight(28)} Show visual file tree (cross-track support).');
     print('  ${'verify <id|--all>'.green.padRight(28)} Verify integrity of one or all snapshots.');
-    print('  ${'tree [id]'.green.padRight(28)} Show file tree of a specific snapshot in active track.');
 
     print('\n${"Git integration".cyan}');
     print('  ${'git-prepare [id] --branch b'.green.padRight(28)} Prepare current Git repo from a snapshot.');
-    print('  ${'publish [id] --branch b'.green.padRight(28)} Commit and push snapshot to Git safely.');
+    print('  ${'publish [id] --branch b --verify'.green.padRight(28)} Commit and push snapshot to Git safely with a security check using regex to prevent leak of APIs, passwords etc etc.');
     print('  ${'git-diff [id] --branch b'.green.padRight(28)} Compare snapshot against current Git HEAD.');
 
     print('\n${"Maintenance".cyan}');
     print('  ${'doctor'.green.padRight(28)} Run repository diagnostics and health checks.');
-    print('  ${'stats'.green.padRight(28)} Show size, snapshot count, and storage statistics.');
+    print('  ${'stats'.green.padRight(28)} Show global repo metrics and track breakdown.');
     print('  ${'prune --keep N'.green.padRight(28)} Keep only the newest N snapshots in the active track.');
+    print('  ${'prune --older-than N'.green.padRight(28)} Delete all snapshot older than N.');
     print('  ${'clear-history'.green.padRight(28)} Delete all snapshots for the active track.');
     print('  ${'purge'.green.padRight(28)} Completely delete this repository from USB/storage.');
 
@@ -104,124 +106,222 @@ class PortableVcs {
     print('  ${'version'.green.padRight(28)} Show tool version.');
 
     print('\n${"Examples".cyan}');
-    print('  ${'vcs ui'.green} (Launch web dashboard)');
-    print('  ${'vcs push "feat: login" --track main'.green} (Push to main without switching)');
-    print('  ${'vcs log --track Experimental'.green} (View history of another track)');
-    print('  ${'vcs pull --track production'.green} (Emergency restore from production track)');
+    print('  ${'vcs tree -t Experimental'.green} (View tree of another track)');
+    print('  ${'vcs pull -t main'.green} (Preview and pull from main track)');
+    print('  ${'vcs show 1713421 -t prod'.green} (Inspect snapshot from production)');
 
     print('\n${"Notes".cyan}');
-    print('  - Commands like ${'push'.yellow} and ${'pull'.yellow} support ${'--track'.yellow} for cross-track ops.');
-    print('  - Inspection commands (${'status'.yellow}, ${'diff'.yellow}, ${'tree'.yellow}) target the ${'active track'.yellow}.');
-    print('  - The tool reads ${'.gitignore'.green} and ignores internal ${'.vcs/'.green} metadata.');
+    print('  - Commands like ${'push'.yellow}, ${'pull'.yellow}, ${'show'.yellow}, and ${'tree'.yellow} support ${'--track/-t'.yellow}.');
+    print('  - ${'push'.green} and ${'pull'.green} now include an automatic ${'safety preview'.yellow} of changes.');
+    print('  - Maintenance commands currently target the ${'active track'.yellow} for safety.');
     print('  - All snapshots are ${'AES-256 encrypted'.green} and require the vault password.\n');
   }
 
   Future<void> setupDrive() async {
+    print('\n🔍 ${"SCANNING FOR EXTERNAL DRIVES".black.onCyan}');
+    
     final candidates = await _listCandidateDrives();
     if (candidates.isEmpty) {
-      print('❌ No candidate drives found.');
+      print('❌ ${"No candidate drives found.".red}');
+      print('   ${"Make sure your USB drive is mounted and has write permissions.".grey}');
       return;
     }
 
-    print('Detected drives:');
-    for (var i = 0; i < candidates.length; i++) {
-      print('[$i] ${candidates[i].path}');
-    }
+    print('\n${"Select a drive to provision:".bold}');
+    print('═' * 60);
 
-    stdout.write('Select index to provision: ');
+    for (var i = 0; i < candidates.length; i++) {
+      final drive = candidates[i];
+      String sizeInfo = '';
+      try {
+        final stat = drive.statSync();
+        sizeInfo = drive is Directory ? ' (Directory ready)' : '';
+      } catch (_) {}
+
+      print('  ${"[$i]".green.bold} ${drive.path.white} $sizeInfo');
+    }
+    print('═' * 60);
+
+    stdout.write('\n👉 Select index to provision: ');
     final raw = stdin.readLineSync()?.trim() ?? '';
     final index = int.tryParse(raw);
+    
     if (index == null || index < 0 || index >= candidates.length) {
-      print('❌ Invalid index.');
+      print('❌ ${"Invalid selection.".red}');
       return;
     }
 
     final selected = candidates[index];
-    await File(p.join(selected.path, driveMarkerFile)).writeAsString(
-      'portable-vcs\n',
-      flush: true,
-    );
-    await Directory(p.join(selected.path, remoteReposDir)).create(recursive: true);
 
-    print('✅ Drive prepared at ${selected.path}');
+    print('\n${"⚠️  WARNING:".black.onYellow} You are about to provision ${selected.path.bold}');
+    print('This will create a hidden marker and the ${remoteReposDir.cyan} directory.');
+    stdout.write('Do you want to continue? (y/N): ');
+    
+    final confirm = stdin.readLineSync()?.trim().toLowerCase();
+    if (confirm != 'y' && confirm != 'yes') {
+      print('🚫 Setup cancelled.');
+      return;
+    }
+
+    print('\n⚙️  ${"Provisioning drive...".grey}');
+
+    try {
+      await File(p.join(selected.path, driveMarkerFile)).writeAsString(
+        'portable-vcs\nversion=1.0\ncreatedAt=${DateTime.now().toIso8601String()}\n',
+        flush: true,
+      );
+
+      final repoDir = Directory(p.join(selected.path, remoteReposDir));
+      if (!repoDir.existsSync()) {
+        await repoDir.create(recursive: true);
+      }
+
+      print('\n✅ ${"Drive prepared successfully!".green.bold}');
+      print('📍 Location: ${selected.path.cyan}');
+      print('📦 Repositories will be stored in: ${p.join(selected.path, remoteReposDir).grey}\n');
+    } catch (e) {
+      print('❌ ${"Failed to provision drive:".red} $e');
+    }
   }
 
   Future<void> init() async {
+    print('\n🏗️  ${"INITIALIZING REPOSITORY".black.onCyan}');
+
     final usb = await findUsbDrive();
     if (usb == null) {
-      print('❌ No prepared USB drive found. Run setup first.');
+      print('❌ ${"No prepared USB drive found.".red}');
+      print('   ${"Please connect your vault drive or run".grey} ${"vcs setup".yellow} ${"first.".grey}');
       return;
     }
 
     if (_localRepoFile.existsSync()) {
-      print('⚠️ This project is already initialized.');
+      print('⚠️  ${"This project is already initialized.".yellow}');
+      print('   ${"Use".grey} ${"vcs status".cyan} ${"to check the current link.".grey}');
       return;
     }
 
-    await _localMetaDir.create(recursive: true);
-
-    final repoId = _randomId(24);
     final projectName = p.basename(_cwd.path);
+    final repoId = _randomId(24);
     final createdAt = DateTime.now().toUtc().toIso8601String();
 
-    final localRepoMeta = {
-      'repo_id': repoId,
-      'project_name': projectName,
-      'created_at': createdAt,
-      'format_version': 1,
-    };
+    print('🔗 ${"Project:".yellow} $projectName');
+    print('💾 ${"Target Drive:".yellow} ${usb.path.cyan}');
 
-    await _atomicWriteString(
-      _localRepoFile,
-      const JsonEncoder.withIndent('  ').convert(localRepoMeta),
-    );
+    try {
+      await _localMetaDir.create(recursive: true);
 
-    final remoteRepoDir = Directory(p.join(usb.path, remoteReposDir, repoId));
-    await remoteRepoDir.create(recursive: true);
-    await Directory(p.join(remoteRepoDir.path, 'snapshots')).create(recursive: true);
+      final localRepoMeta = {
+        'repo_id': repoId,
+        'project_name': projectName,
+        'created_at': createdAt,
+        'format_version': 2,
+      };
 
-    final remoteMeta = {
-      'repo_id': repoId,
-      'project_name': projectName,
-      'created_at': createdAt,
-      'updated_at': createdAt,
-      'format_version': 1,
-      'logs': <Map<String, dynamic>>[],
-    };
+      await _atomicWriteString(
+        _localRepoFile,
+        const JsonEncoder.withIndent('  ').convert(localRepoMeta),
+      );
 
-    await _atomicWriteString(
-      File(p.join(remoteRepoDir.path, remoteMetaFileName)),
-      const JsonEncoder.withIndent('  ').convert(remoteMeta),
-    );
+      final remoteRepoDir = Directory(p.join(usb.path, remoteReposDir, repoId));
+      await remoteRepoDir.create(recursive: true);
+      await Directory(p.join(remoteRepoDir.path, 'snapshots')).create(recursive: true);
 
-    print("✅ Project '$projectName' initialized with repo_id=$repoId");
+      final defaultTrack = 'main'; 
+
+      final remoteMeta = {
+        'repo_id': repoId,
+        'project_name': projectName,
+        'created_at': createdAt,
+        'updated_at': createdAt,
+        'format_version': 2,
+        'active_track': defaultTrack,
+        'tracks': {
+          defaultTrack: {
+            'logs': [],
+          }
+        },
+      };
+
+      await _atomicWriteString(
+        File(p.join(remoteRepoDir.path, remoteMetaFileName)),
+        const JsonEncoder.withIndent('  ').convert(remoteMeta),
+      );
+
+      print('─' * 60);
+      print('✅ ${"Repository initialized successfully!".green.bold}');
+      print('${"ID:".yellow.padRight(12)} $repoId');
+      print('${"Track:".yellow.padRight(12)} $defaultTrack ${"(default)".grey}');
+      print('${"Storage:".yellow.padRight(12)} ${remoteRepoDir.path.grey}');
+      print('─' * 60);
+      print('💡 ${"Next step:".cyan} Run ${"vcs push \"Initial commit\"".green} to save your first snapshot.\n');
+
+    } catch (e) {
+      print('❌ ${"Failed to initialize repository:".red} $e');
+      if (_localMetaDir.existsSync()) await _localMetaDir.delete(recursive: true);
+    }
   }
 
   Future<void> listRepos() async {
     final usb = await findUsbDrive();
     if (usb == null) {
-      print('❌ No prepared USB drive found.'.red);
+      print('\n❌ ${"No prepared USB drive found.".red}');
+      print('   ${"Connect your vault or run".grey} ${"vcs setup".yellow}\n');
       return;
     }
 
     final repos = await _loadRemoteRepos(usb);
     if (repos.isEmpty) {
-      print('ℹ️ No repositories found on USB.'.yellow);
+      print('\nℹ️  ${"No repositories found on USB drive.".yellow}');
+      print('   ${"Location:".grey} ${p.join(usb.path, remoteReposDir)}\n');
       return;
     }
 
-    print('\n📦 ${"Available repositories:".cyan}\n');
+    print('\n📦 ${"REMOTE REPOSITORIES IN VAULT".black.onCyan}');
+    print('═' * 70);
+    
+    print('${"ID".padRight(4)} ${"PROJECT NAME".padRight(25)} ${"TRACKS".padRight(10)} ${"LAST UPDATE".padRight(20)}');
+    print('─' * 70);
 
     for (var i = 0; i < repos.length; i++) {
       final repo = repos[i];
-      final snapshotCount = repo.meta.logs.length;
-      final updatedAt = _formatDateForList(repo.meta.updatedAt);
+      final meta = repo.meta;
 
-      print('[${i.toString().padLeft(2, '0')}] ${repo.meta.projectName.green}');
-      print('     ${"Repo ID:".yellow}   ${repo.meta.repoId}');
-      print('     ${"Snapshots:".yellow} $snapshotCount');
-      print('     ${"Updated:".yellow}   $updatedAt');
-      print('');
+      int totalSnapshots = 0;
+      meta.tracks.forEach((_, state) => totalSnapshots += state.logs.length);
+      
+      final trackCount = meta.tracks.length;
+      final projectName = meta.projectName.length > 23 
+          ? '${meta.projectName.substring(0, 20)}...' 
+          : meta.projectName;
+      
+      final updatedAt = _formatDateForList(meta.updatedAt);
+      final isCurrent = _localRepoFile.existsSync() && 
+                      (await _readLocalRepoId() == meta.repoId);
+
+      final indexStr = i.toString().padLeft(2, '0').green;
+      final rowName = isCurrent ? '$projectName ${"(linked)".magenta}' : projectName.green;
+
+      print('${indexStr.padRight(13)} ${rowName.padRight(34)} ${trackCount.toString().padRight(10)} ${updatedAt.grey}');
+      print('     ${"Repo ID:".grey} ${meta.repoId.grey} | ${"Total Snaps:".grey} ${totalSnapshots.toString().grey}');
+      
+      if (i < repos.length - 1) {
+        print('     ' + '┄' * 60);
+      }
+    }
+
+    print('═' * 70);
+    print('${"Total:".grey} ${repos.length} repositories found.');
+    print('💡 ${"Use".cyan} ${"vcs clone <repo_id>".green} ${"to download a project.".grey}\n');
+  }
+
+  Future<String?> _readLocalRepoId() async {
+    try {
+      if (!_localRepoFile.existsSync()) return null;
+      final content = await _localRepoFile.readAsString();
+      final data = jsonDecode(content);
+      return data['repo_id'];
+    } catch (_) {
+      return null;
     }
   }
 
@@ -407,56 +507,71 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final current = await buildFingerprint(_cwd);
-    final logs = context.remoteMeta.logs;
+    final targetTrackName = context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
 
-    if (logs.isEmpty) {
+    print('\n🔍 ${"WORKING TREE STATUS".black.onCyan}');
+    print('${"On track:".yellow} ${targetTrackName.magenta.bold}');
+
+    final current = await buildFingerprint(_cwd);
+
+    if (trackData == null || trackData.logs.isEmpty) {
       if (current.isEmpty) {
-        print('✨ Empty project.');
+        print('\n✨ ${"Empty project. Nothing to track.".grey}');
         return;
       }
-      print('📝 Files not yet saved:');
+      print('\n${"Untracked files:".bold}');
+      print('  ${"(use \"vcs push <message>\" to create the initial snapshot)".grey}');
       for (final path in current.keys.toList()..sort()) {
-        print('  ${'[NEW]'.green} $path');
+        print('    ${'[NEW]'.green} $path');
       }
       return;
     }
 
+    final lastEntry = trackData.logs.first;
+    
     final finalPassword = password ?? askPassword();
     if (finalPassword == null) return;
 
-    final lastEntry = logs.first;
     final snapshot = await readSnapshot(
       context,
       lastEntry.id,
       password: finalPassword,
     );
     
-    if (snapshot == null) {
-      return;
-    }
+    if (snapshot == null) return;
 
     final lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
     final changes = diffFingerprints(lastFingerprint, current);
 
     if (changes.isEmpty) {
-      print('✨ Clean.');
+      print('\n✨ ${"Working tree clean.".green}');
+      print('${"Your project is up to date with the latest snapshot in".grey} ${targetTrackName.cyan}.');
       return;
     }
 
+    print('\n${"Changes not yet pushed:".bold}');
+    print('  ${"(use \"vcs push <message>\" to save these changes)".grey}\n');
+
+    int added = 0, modified = 0, deleted = 0;
+
     for (final change in changes) {
-      switch (change.kind) {
-        case ChangeKind.added:
-          print('  ${'[NEW]'.green} ${change.path}');
-          break;
-        case ChangeKind.modified:
-          print('  ${'[MOD]'.yellow} ${change.path}');
-          break;
-        case ChangeKind.deleted:
-          print('  ${'[DEL]'.red} ${change.path}');
-          break;
+      final tag = change.toTag();
+      if (tag.startsWith('+')) {
+        print('    ${'[NEW]'.green.padRight(8)} ${change.path}');
+        added++;
+      } else if (tag.startsWith('-')) {
+        print('    ${'[DEL]'.red.padRight(8)} ${change.path}');
+        deleted++;
+      } else {
+        print('    ${'[MOD]'.yellow.padRight(8)} ${change.path}');
+        modified++;
       }
     }
+
+    print('\n' + '─' * 40);
+    print('${"Summary:".cyan} ${added.toString().green} new, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
+    print('─' * 40 + '\n');
   }
 
   Future<void> diff(List<String> args, {String? password}) async {
@@ -579,21 +694,55 @@ class PortableVcs {
           
           if (lastSnapshot != null) {
             lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
-          } else {
-            print('⚠️ Warning: Could not read previous snapshot ${lastEntry.id}. Comparing against empty state.');
           }
         } catch (e) {
-          print('⚠️ Warning: Error reading previous snapshot: $e. Comparing against empty state.');
+          print('⚠️ Warning: Error reading previous snapshot. Comparing against empty state.');
         }
       }
 
       final changes = diffFingerprints(lastFingerprint, currentFingerprint);
 
       if (changes.isEmpty && trackData.logs.isNotEmpty) {
-        print('ℹ️ No changes to save in track "$targetTrackName" compared to its last snapshot.');
+        print('ℹ️ No changes to save in track "$targetTrackName".');
         return;
       }
 
+      print('\n${'--- Snapshot Preview ---'.cyan}');
+      print('${'Track:'.padRight(12)} $targetTrackName');
+      print('${'Message:'.padRight(12)} $message');
+      if (author != null) print('${'Author:'.padRight(12)} $author');
+      print('');
+
+      int added = 0, modified = 0, deleted = 0;
+
+      for (var change in changes) {
+        final tag = change.toTag();
+        String prefix = '';
+        
+        if (tag.startsWith('+')) {
+          prefix = '[+]'.green;
+          added++;
+        } else if (tag.startsWith('-')) {
+          prefix = '[-]'.red;
+          deleted++;
+        } else {
+          prefix = '[~]'.yellow;
+          modified++;
+        }
+        
+        print('  $prefix ${change.path}');
+      }
+
+      print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
+      
+      stdout.write('\nDo you want to proceed with the push? (y/N): ');
+      String? confirm = stdin.readLineSync()?.trim().toLowerCase();
+      if (confirm != 'y' && confirm != 'yes') {
+        print('🚫 Push aborted by user.');
+        return;
+      }
+
+      print('📦 Packing and encrypting...');
       final zipBytes = await _createZipFromCurrentProject();
       final encrypted = await _encryptSnapshot(
         zipBytes: zipBytes,
@@ -771,12 +920,20 @@ class PortableVcs {
     );
   }
 
-  Future<void> showSnapshot(String snapshotId) async {
+  Future<void> showSnapshot(String snapshotId, {String? track}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    if (trackData == null) {
+      print('❌ ${"Track not found:".red} $targetTrackName');
+      return;
+    }
+
     SnapshotLogEntry? entry;
-    for (final item in context.remoteMeta.logs) {
+    for (final item in trackData.logs) {
       if (item.id == snapshotId) {
         entry = item;
         break;
@@ -784,7 +941,7 @@ class PortableVcs {
     }
 
     if (entry == null) {
-      print('❌ ${"Snapshot not found:".red} $snapshotId');
+      print('❌ ${"Snapshot not found in track".red} ${targetTrackName.cyan}: $snapshotId');
       return;
     }
 
@@ -798,6 +955,7 @@ class PortableVcs {
     print('═' * 60);
 
     print('${"ID:".yellow.padRight(12)} ${entry.id.green}');
+    print('${"Track:".yellow.padRight(12)} ${targetTrackName.cyan}');
     print('${"Project:".yellow.padRight(12)} ${context.remoteMeta.projectName.green}');
     print('${"Created:".yellow.padRight(12)} $createdAt');
     print('${"Author:".yellow.padRight(12)} $author');
@@ -1163,61 +1321,87 @@ class PortableVcs {
     if (context == null) return;
 
     final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
-    final logs = context.remoteMeta.logs;
+    
+    // Consolidar todos los logs de todos los tracks para métricas globales
+    final allLogs = <SnapshotLogEntry>[];
+    context.remoteMeta.tracks.forEach((name, state) {
+      allLogs.addAll(state.logs);
+    });
 
     int totalBytes = 0;
     int largestBytes = 0;
     String? largestId;
+    String? largestTrack;
 
     if (snapshotsDir.existsSync()) {
-      for (final entry in logs) {
-        final file = File(p.join(snapshotsDir.path, entry.fileName));
-        if (!file.existsSync()) continue;
+      // Buscamos en los archivos físicos basados en todos los tracks
+      for (var trackEntry in context.remoteMeta.tracks.entries) {
+        for (final entry in trackEntry.value.logs) {
+          final file = File(p.join(snapshotsDir.path, entry.fileName));
+          if (!file.existsSync()) continue;
 
-        final size = file.lengthSync();
-        totalBytes += size;
+          final size = file.lengthSync();
+          totalBytes += size;
 
-        if (size > largestBytes) {
-          largestBytes = size;
-          largestId = entry.id;
+          if (size > largestBytes) {
+            largestBytes = size;
+            largestId = entry.id;
+            largestTrack = trackEntry.key;
+          }
         }
       }
     }
 
-    final createdAt = _formatDateForList(context.remoteMeta.createdAt);
-    final updatedAt = _formatDateForList(context.remoteMeta.updatedAt);
+    print('\n📊 ${"REPOSITORY STATISTICS".black.onCyan}');
+    print('═' * 60);
 
-    print('\n📊 ${"Repository statistics".cyan}');
-    print('─' * 50);
+    // --- Sección 1: Información General ---
+    print('${"GENERAL INFO".bold.cyan}');
+    print('${"Project Name:".yellow.padRight(20)} ${context.remoteMeta.projectName.green}');
+    print('${"Active Track:".yellow.padRight(20)} ${context.remoteMeta.activeTrack.magenta.bold}');
+    print('${"Total Tracks:".yellow.padRight(20)} ${context.remoteMeta.tracks.length.toString().white}');
+    print('${"Format Version:".yellow.padRight(20)} v${context.remoteMeta.formatVersion}');
+    print('${"Vault Location:".yellow.padRight(20)} ${context.remoteRepoDir.path.grey}');
 
-    print('${"Project:".yellow.padRight(18)} ${context.remoteMeta.projectName.green}');
-    print('${"Repo ID:".yellow.padRight(18)} ${context.remoteMeta.repoId}');
-    print('${"Track:".yellow.padRight(18)} ${context.remoteMeta.activeTrack.green}');
-    print('${"Format version:".yellow.padRight(18)} ${context.remoteMeta.formatVersion}');
-    print('${"Created:".yellow.padRight(18)} $createdAt');
-    print('${"Updated:".yellow.padRight(18)} $updatedAt');
-
-    print('');
-    print('${"Snapshots:".yellow.padRight(18)} ${logs.length.toString().green}');
-    print('${"Total size:".yellow.padRight(18)} ${_formatBytes(totalBytes).green}');
-    print(
-      '${"Largest snapshot:".yellow.padRight(18)} '
-      '${largestId != null ? largestId.green : "(none)".red} '
-      '(${_formatBytes(largestBytes)})',
-    );
-
-    if (logs.isNotEmpty) {
-      final newest = logs.first;
-      final oldest = logs.last;
-
-      print('${"Newest snapshot:".yellow.padRight(18)} ${newest.id.green}');
-      print('${"Newest date:".yellow.padRight(18)} ${_formatDateForList(newest.createdAt)}');
-
-      print('${"Oldest snapshot:".yellow.padRight(18)} ${oldest.id.green}');
-      print('${"Oldest date:".yellow.padRight(18)} ${_formatDateForList(oldest.createdAt)}');
+    print('\n${"STORAGE SUMMARY".bold.cyan}');
+    // --- Sección 2: Métricas de Almacenamiento ---
+    print('${"Total Snapshots:".yellow.padRight(20)} ${allLogs.length.toString().green}');
+    print('${"Vault Total Size:".yellow.padRight(20)} ${_formatBytes(totalBytes).green.bold}');
+    
+    if (allLogs.isNotEmpty) {
+      final avgSize = totalBytes ~/ allLogs.length;
+      print('${"Average Size:".yellow.padRight(20)} ${_formatBytes(avgSize).white}');
+      print(
+        '${"Largest Item:".yellow.padRight(20)} '
+        '${largestId?.green ?? "N/A"} '
+        '(${_formatBytes(largestBytes)}) ${'in'.grey} ${largestTrack?.magenta ?? ""}'
+      );
     }
 
-    print('─' * 50);
+    print('\n${"TRACKS BREAKDOWN".bold.cyan}');
+    // --- Sección 3: Desglose por Tracks ---
+    context.remoteMeta.tracks.forEach((name, state) {
+      final isActive = name == context.remoteMeta.activeTrack;
+      final prefix = isActive ? ' → '.cyan.bold : '   ';
+      final count = state.logs.length;
+      print('$prefix${name.padRight(17)} ${count.toString().padLeft(3)} snapshots');
+    });
+
+    print('\n${"TIMELINE".bold.cyan}');
+    // --- Sección 4: Fechas ---
+    if (allLogs.isNotEmpty) {
+      // Ordenamos por fecha para obtener el más nuevo y más viejo real
+      allLogs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final newest = allLogs.first;
+      final oldest = allLogs.last;
+
+      print('${"Newest Snapshot:".yellow.padRight(20)} ${newest.id.green} (${_formatDateForList(newest.createdAt)})');
+      print('${"Oldest Snapshot:".yellow.padRight(20)} ${oldest.id.green} (${_formatDateForList(oldest.createdAt)})');
+    }
+
+    print('═' * 60);
+    print('${"Last sync:".grey} ${_formatDateForList(context.remoteMeta.updatedAt)}');
+    print('');
   }
 
   Future<void> prune({int? keep, int? olderThanDays}) async {
@@ -1316,27 +1500,69 @@ class PortableVcs {
   Future<void> pull({String? track, String? snapshotId, String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
+
     final targetTrackName = track ?? context.remoteMeta.activeTrack;
     final trackData = context.remoteMeta.tracks[targetTrackName];
+
     if (trackData == null) {
       print('❌ Track "$targetTrackName" not found.');
       return;
     }
+
     if (trackData.logs.isEmpty) {
       print('ℹ️ No snapshots available in track "$targetTrackName".');
       return;
     }
+
     final finalSnapshotId = snapshotId ?? trackData.logs.first.id;
-    final exists = trackData.logs.any((e) => e.id == finalSnapshotId);
-    if (!exists && snapshotId != null) {
+    final entry = trackData.logs.firstWhere(
+      (e) => e.id == finalSnapshotId,
+      orElse: () => SnapshotLogEntry(id: '', message: '', createdAt: '', fileName: '', author: '', changeSummary: []),
+    );
+
+    if (entry.id.isEmpty) {
       print('❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".');
       return;
     }
+
+    print('\n${'--- Pull/Restore Preview ---'.cyan}');
+    print('${'Source Track:'.padRight(15)} $targetTrackName');
+    print('${'Snapshot ID:'.padRight(15)} ${entry.id.green}');
+    print('${'Message:'.padRight(15)} ${entry.message.yellow}');
+    print('${'Author:'.padRight(15)} ${entry.author ?? 'Unknown'}');
+    print('');
+
+    if (entry.changeSummary.isEmpty) {
+      print('  ${"(No file changes recorded in this snapshot)".yellow}');
+    } else {
+      for (final c in entry.changeSummary) {
+        if (c.startsWith('[N]')) {
+          print('  ${'[+]'.green} ${c.substring(3).trim()}');
+        } else if (c.startsWith('[M]')) {
+          print('  ${'[~]'.yellow} ${c.substring(3).trim()}');
+        } else if (c.startsWith('[D]')) {
+          print('  ${'[-]'.red} ${c.substring(3).trim()}');
+        } else {
+          print('  $c');
+        }
+      }
+    }
+
+    print('\n${'⚠️ WARNING:'.red} This operation will overwrite your current working directory.');
+    stdout.write('Do you want to proceed with the pull? (y/N): ');
+    String? confirm = stdin.readLineSync()?.trim().toLowerCase();
+    
+    if (confirm != 'y' && confirm != 'yes') {
+      print('🚫 Pull aborted by user.');
+      return;
+    }
+
     final finalPassword = password ?? askPassword();
     if (finalPassword == null || finalPassword.isEmpty) {
       print('❌ Password required for decryption.');
       return;
     }
+
     print('📥 Pulling snapshot ${finalSnapshotId.green} from track ${targetTrackName.cyan}...');
     await revertWithPassword(finalSnapshotId, finalPassword);
   }
@@ -1492,18 +1718,42 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    stdout.write('🚨 This will delete the remote repo from USB. Continue? (y/N): ');
-    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') {
-      print('Cancelled.');
+    print('\n${'🔥 DANGER ZONE: PURGE REPOSITORY'.black.onRed}');
+    print('${'Project:'.yellow} ${context.remoteMeta.projectName}');
+    print('${'Repo ID:'.yellow} ${context.remoteMeta.repoId}');
+    print('\n${'This will permanently delete:'.red}');
+    print('  1. The entire remote vault on the USB drive.');
+    print('  2. The local ${'.vcs/'.cyan} metadata folder in this project.');
+    
+    stdout.write('\n⚠️ Are you absolutely sure? (y/N): ');
+    final confirm = (stdin.readLineSync() ?? '').trim().toLowerCase();
+    
+    if (confirm != 'y' && confirm != 'yes') {
+      print('🚫 Purge cancelled.');
       return;
     }
 
     await _withLock(context.remoteRepoDir, () async {
-      if (context.remoteRepoDir.existsSync()) {
-        context.remoteRepoDir.deleteSync(recursive: true);
+      try {
+        if (context.remoteRepoDir.existsSync()) {
+          context.remoteRepoDir.deleteSync(recursive: true);
+          print('💀 ${'Remote repo deleted from USB.'.green}');
+        }
+      } catch (e) {
+        print('❌ ${'Error deleting remote repo:'.red} $e');
       }
-      print('💀 Remote repo deleted from USB.');
     });
+
+    try {
+      if (_localMetaDir.existsSync()) {
+        _localMetaDir.deleteSync(recursive: true);
+        print('🗑️  ${'Local .vcs folder removed.'.green}');
+      }
+    } catch (e) {
+      print('❌ ${'Error deleting local metadata:'.red} $e');
+    }
+
+    print('\n✨ ${"Purge complete. The project is no longer linked to the vault.".bold}\n');
   }
 
   Future<List<Directory>> _listCandidateDrives() async {
@@ -2617,7 +2867,8 @@ class PortableVcs {
       "Google API Key": RegExp(r"""AIza[0-9A-Za-z-_]{35}"""),
       "OpenAI API Key": RegExp(r"""sk-[a-zA-Z0-9]{48}"""),
       "Generic Secret": RegExp(
-        r"""(?i)(password|secret|passwd|aws_key|access_token|api_key)\s*[:=]\s*['"].{8,}['"]""",
+        r"""(password|secret|passwd|aws_key|access_token|api_key)\s*[:=]\s*['"].{8,}['"]""",
+        caseSensitive: false,
       ),
       "Private Key Header": RegExp(r"""-----BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY-----"""),
       "GitHub Token": RegExp(r"""ghp_[a-zA-Z0-9]{36}"""),
@@ -2852,27 +3103,31 @@ class PortableVcs {
     return (stdin.readLineSync() ?? '').trim().toLowerCase() == 'y';
   }
 
-  Future<void> tree([String? snapshotId]) async {
+  Future<void> tree([String? snapshotId, String? track]) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    if (context.remoteMeta.logs.isEmpty) {
-      print('ℹ️ ${"No snapshots available.".yellow}');
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    if (trackData == null) {
+      print('❌ ${"Track not found:".red} $targetTrackName');
       return;
     }
 
-    final targetId = snapshotId ?? context.remoteMeta.logs.first.id;
-
-    SnapshotLogEntry? entry;
-    for (final item in context.remoteMeta.logs) {
-      if (item.id == targetId) {
-        entry = item;
-        break;
-      }
+    if (trackData.logs.isEmpty) {
+      print('ℹ️ ${"No snapshots available in track".yellow} ${targetTrackName.cyan}.');
+      return;
     }
 
-    if (entry == null) {
-      print('❌ ${"Snapshot not found:".red} $targetId');
+    final targetId = snapshotId ?? trackData.logs.first.id;
+    final entry = trackData.logs.firstWhere(
+      (e) => e.id == targetId,
+      orElse: () => SnapshotLogEntry(id: '', message: '', createdAt: '', fileName: '', author: '', changeSummary: []),
+    );
+
+    if (entry.id.isEmpty) {
+      print('❌ ${"Snapshot not found in track".red} ${targetTrackName.cyan}: $targetId');
       return;
     }
 
@@ -2885,36 +3140,27 @@ class PortableVcs {
     final files = await _decodeSnapshotFiles(snapshot);
     final paths = files.keys.toList()..sort();
 
+    final treeStats = TreeStats();
+
+    print('\n🌳 ${"SNAPSHOT FILE TREE".black.onCyan}');
+    print('═' * 60);
+    print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green} (${entry.message.grey})');
+    print('${"Track:".yellow.padRight(12)} ${targetTrackName.magenta.bold}');
+    print('${"Created:".yellow.padRight(12)} ${_formatDateForList(entry.createdAt)}');
+    print('═' * 60);
+
     if (paths.isEmpty) {
-      print('\n🌳 ${"Snapshot tree".cyan}');
-      print('═' * 60);
-      print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green}');
-      print('${"Project:".yellow.padRight(12)} ${context.remoteMeta.projectName.green}');
-      print('${"Status:".yellow.padRight(12)} ${"(empty snapshot)".yellow}');
-      print('═' * 60);
-      print('');
-      return;
+      print('  ${"(Empty snapshot)".grey}');
+    } else {
+      final root = _buildTree(paths);
+      print('${context.remoteMeta.projectName.blue.bold}/'); 
+
+      _printTreeNode(root, prefix: '', stats: treeStats);
     }
 
-    final root = _buildTree(paths);
-
-    print('\n🌳 ${"Snapshot tree".cyan}');
-    print('═' * 60);
-    print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green}');
-    print('${"Project:".yellow.padRight(12)} ${context.remoteMeta.projectName.green}');
-    print('${"Created:".yellow.padRight(12)} ${_formatDateForList(entry.createdAt)}');
-    print('${"Files:".yellow.padRight(12)} ${paths.length.toString().green}');
     print('─' * 60);
-    print('.');
-
-    final stats = TreeStats();
-    _printTreeNode(root, prefix: '', stats: stats);
-
-    print('─' * 60);
-    print('${"Directories:".yellow.padRight(12)} ${stats.directories.toString().green}');
-    print('${"Files:".yellow.padRight(12)} ${stats.files.toString().green}');
-    print('═' * 60);
-    print('');
+    print('${"Summary:".cyan} ${treeStats.directories.toString().yellow} directories, ${treeStats.files.toString().green} files');
+    print('═' * 60 + '\n');
   }
 
   TreeNode _buildTree(List<String> paths) {
@@ -2956,7 +3202,7 @@ class PortableVcs {
         if (a.isFile != b.isFile) {
           return a.isFile ? 1 : -1;
         }
-        return a.name.compareTo(b.name);
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       });
 
     for (var i = 0; i < entries.length; i++) {
@@ -2966,10 +3212,15 @@ class PortableVcs {
 
       if (child.isFile) {
         stats.files++;
-        print('$prefix$branch${child.name.green}');
+        String icon = '📄';
+        if (child.name.endsWith('.dart')) icon = '🎯';
+        if (child.name.endsWith('.json') || child.name.endsWith('.yaml')) icon = '⚙️';
+        if (child.name.endsWith('.md')) icon = '📝';
+        
+        print('$prefix$branch$icon ${child.name.green}');
       } else {
         stats.directories++;
-        print('$prefix$branch${child.name.cyan}');
+        print('$prefix$branch📁 ${child.name.cyan.bold}/');
         _printTreeNode(
           child,
           prefix: '$prefix${isLast ? '    ' : '│   '}',
@@ -3956,6 +4207,40 @@ class PortableVcs {
       await Process.run('open', [url]);
     }
   }
+
+  Future<void> showCommitHelper({String? track}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    print('\n📝 ${"SNAPSHOTS SUMMARY FOR COMMIT".black.onCyan}');
+    print('${"Source Track:".yellow} ${targetTrackName.magenta.bold}');
+    print('─' * 60);
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('ℹ️ ${"No snapshots found in this track.".grey}');
+      return;
+    }
+
+    print('${"Copy these points into your Git commit:".bold}\n');
+
+    final history = trackData.logs.reversed.toList();
+
+    for (final entry in history) {
+      final date = _formatDateForList(entry.createdAt).grey;
+      print('  ${"•".cyan} ${entry.message} ${"($date)".grey}');
+      
+      for (var fileChange in entry.changeSummary) {
+        print('    ${"└".grey} $fileChange');
+      }
+    }
+
+    print('\n' + '─' * 60);
+    print('💡 ${'Recommended:'.grey} git commit -m "Update from Portable-VCS" -m "\$(vcs summary)"');
+    print('');
+  }
 }
 
 extension ColorConsole on String {
@@ -3963,6 +4248,19 @@ extension ColorConsole on String {
   String get yellow => '\x1B[33m$this\x1B[0m';
   String get red => '\x1B[31m$this\x1B[0m';
   String get cyan => '\x1B[36m$this\x1B[0m';
+  String get blue => '\x1B[34m$this\x1B[0m';
+  String get magenta => '\x1B[35m$this\x1B[0m';
+  String get white => '\x1B[37m$this\x1B[0m';
+  String get grey => '\x1B[90m$this\x1B[0m';
+  String get bold => '\x1B[1m$this\x1B[0m';
+  String get italic => '\x1B[3m$this\x1B[0m';
+  String get underline => '\x1B[4m$this\x1B[0m';
+  String get onCyan => '\x1B[46m$this\x1B[0m';
+  String get onRed => '\x1B[41m$this\x1B[0m';
+  String get onGreen => '\x1B[42m$this\x1B[0m';
+  String get onYellow => '\x1B[43m$this\x1B[0m';
+
+  String get black => '\x1B[30m$this\x1B[0m';
 }
 
 Future<void> main(List<String> args) async {
@@ -3987,7 +4285,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         ..addFlag('standard', negatable: false)
         ..addOption('track', abbr: 't', help: 'Show logs from a specific track instead of the active one',),
     )
-    ..addCommand('show')
+    ..addCommand('show', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Target track to look for the snapshot')
+    )
     ..addCommand(
       'pull',
       ArgParser()
@@ -3997,6 +4297,10 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('list')
     ..addCommand('doctor')
     ..addCommand('stats')
+    ..addCommand('summary', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Get summary from a specific track')
+      ..addFlag('copy', abbr: 'c', negatable: false, help: 'Copy to clipboard (if supported)')
+    )
     ..addCommand('help')
     ..addCommand('clear-history')
     ..addCommand('purge')
@@ -4011,7 +4315,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     )
     ..addCommand('bind')
     ..addCommand('diff', ArgParser())
-    ..addCommand('tree')
+    ..addCommand('tree', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Target track to visualize')
+    )
     ..addCommand(
       'push',
       ArgParser()..addOption('author', abbr: 'a')
@@ -4106,12 +4412,18 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         );
         break;
       case 'show':
-        final rest = result.command?.rest ?? [];
+        final cmd = result.command!;
+        final rest = cmd.rest;
+        
         if (rest.isEmpty) {
           print('❌ You must provide a snapshot ID.');
           return;
         }
-        await app.showSnapshot(rest.first);
+
+        final snapshotId = rest.first;
+        final track = cmd['track'] as String?;
+
+        await app.showSnapshot(snapshotId, track: track);
         break;
       case 'doctor':
         await app.doctor();
@@ -4211,9 +4523,11 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         );
         break;
       case 'tree':
-        final rest = result.command?.rest ?? [];
+        final cmd = result.command!;
+        final rest = cmd.rest;
         final snapshotId = rest.isNotEmpty ? rest.first : null;
-        await app.tree(snapshotId);
+        final track = cmd['track'] as String?;
+        await app.tree(snapshotId, track);
         break;
       case 'git-diff':
         final cmd = result.command!;
@@ -4271,6 +4585,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         break;
       case 'ui':
         await app.launchUI();
+        break;
+      case 'summary':
+        final cmd = result.command!;
+        await app.showCommitHelper(
+          track: cmd['track']?.toString()
+        );
         break;
       default:
         app.showHelp();
