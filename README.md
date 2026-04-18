@@ -401,8 +401,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
 | | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
 | | `vcs log [--track name]` | Show history (Standard/Full options available). |
-| | `vcs show <id>` | Show detailed information about a snapshot in **active track**. |
-| | `vcs tree [id]` | Show file tree structure of a snapshot in **active track**. |
+| | `vcs show --track/-t <id>` | Displays detailed information about a snapshot in the **active track** or in a **specific track**. |
+| | `vcs tree [id]` | Displays the file tree structure of a snapshot in the **active track** or in a **specific track**. |
 | **Tracks** | `vcs track list` | List all available history tracks. |
 | | `vcs track current` | Show the name of the currently active track. |
 | | `vcs track create <name>` | Create a new independent development lane. |
@@ -410,7 +410,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs track delete <name>` | Remove an existing non-active track and its history. |
 | **Git Bridge** | `vcs git-diff [id] --branch b` | Preview changes between snapshot and Git branch. |
 | | `vcs git-prepare [id] --branch b` | Restore snapshot into Git tree and stage files. |
-| | `vcs publish [id] --branch b` | **Atomic move:** Restore, commit, and push to Git safely. |
+| | `vcs publish [id] --branch b --verify` | **Atomic move:** Restore, commit, and push to Git safely. |
 | **Maintenance**| `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
 | | `vcs doctor` | Run repository diagnostics and health checks. |
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
