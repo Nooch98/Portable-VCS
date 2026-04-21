@@ -381,10 +381,6 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 # Main Commands
 ### 🛠️ Command Reference
 
-### 🛠️ Command Reference
-
-### 🛠️ Command Reference
-
 | Category | Command | Description |
 | :--- | :--- | :--- |
 | **Setup** | `vcs setup` | Prepare a USB drive or external storage for Vault use. |
