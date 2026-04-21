@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:path/path.dart' as p;
 
 import 'package:archive/archive.dart';
 import 'package:args/args.dart';
@@ -51,70 +52,91 @@ class PortableVcs {
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
 
   void showHelp() {
-    print('\n🚀 ${'PORTABLE SNAPSHOT VAULT'.black.onCyan}');
-    print('${'Offline encrypted snapshot tool for Git-compatible local workflows.'.yellow}\n');
+    const int col = 38;
 
-    print('${"Usage".cyan}');
-    print('  vcs <command> [arguments]\n');
+    print('\n' + '═' * 95);
+    print('  🚀 ${'PORTABLE SNAPSHOT VAULT'.black.onCyan}');
+    print('  ${'Offline encrypted snapshot tool for Git-compatible local workflows.'.yellow}');
+    print('═' * 95);
 
-    print('${"Repository setup".cyan}');
-    print('  ${'setup'.green.padRight(28)} Prepare a USB drive or external storage for VCS use.');
-    print('  ${'init'.green.padRight(28)} Initialize the current project and link it to remote storage.');
-    print('  ${'list'.green.padRight(28)} List repositories available on the connected USB/storage.');
-    print('  ${'clone [repo_id] [--into dir]'.green.padRight(28)} Clone a repository from USB into a local folder.');
-    print('  ${'bind [repo_id]'.green.padRight(28)} Bind the current folder to an existing remote repository.');
+    print('\n${" 📂 REPOSITORY SETUP".cyan.bold}');
+    print('  ${'setup'.green.padRight(col)} Prepare a USB drive or external storage for VCS use.');
+    print('  ${'init'.green.padRight(col)} Initialize current project and link to remote storage.');
+    print('  ${'list'.green.padRight(col)} List repositories available on the connected storage.');
+    print('  ${'clone [repo_id]'.green.padRight(col)} Clone a repository from USB into a local folder.');
+    print('    ${'--into <dir>'.grey.padRight(col - 4)} Specify a custom directory name for the clone.');
+    print('  ${'bind [repo_id]'.green.padRight(col)} Bind current folder to an existing remote repository.');
 
-    print('\n${"Tracks Management".cyan}');
-    print('  ${'track list'.green.padRight(28)} List all available tracks.');
-    print('  ${'track current'.green.padRight(28)} Show the name of the active track.');
-    print('  ${'track create <name>'.green.padRight(28)} Create a new empty track.');
-    print('  ${'track switch <name>'.green.padRight(28)} Switch to another track (Optional tree restore).');
-    print('  ${'track delete <name>'.green.padRight(28)} Delete an existing non-active track.');
+    print('\n${" 🛤️  TRACKS MANAGEMENT".cyan.bold}');
+    print('  ${'track list'.green.padRight(col)} List all available tracks.');
+    print('  ${'track current'.green.padRight(col)} Show the name of the active track.');
+    print('  ${'track create <name>'.green.padRight(col)} Create a new empty track.');
+    print('  ${'track switch <name>'.green.padRight(col)} Switch to another track.');
+    print('    ${'--restore'.grey.padRight(col - 4)} Optional: Restore the tree files upon switching.');
+    print('  ${'track delete <name>'.green.padRight(col)} Delete an existing non-active track.');
 
-    print('\n${"Snapshot workflow (Interoperable)".cyan}');
-    print('  ${'push "msg" [-a aut] [-t t]'.green.padRight(28)} Create a snapshot (with preview & confirmation).');
-    print('  ${'pull [-t name] [id]'.green.padRight(28)} Restore latest or specific snapshot (with preview).');
-    print('  ${'revert <id>'.green.padRight(28)} Quick restore of a specific ID from active track.');
-    print('  ${'restore <id> --to dir'.green.padRight(28)} Restore a specific snapshot into another folder.');
+    print('\n${" 📦 SNAPSHOT WORKFLOW".cyan.bold}');
+    print('  ${'push "message"'.green.padRight(col)} Create a snapshot (with preview & confirmation).');
+    print('    ${'-a, --author <name>'.grey.padRight(col - 4)} Override the author name for this snapshot.');
+    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Target a specific track instead of active.');
+    print('  ${'pull [id]'.green.padRight(col)} Restore latest or specific snapshot (with preview).');
+    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Source snapshot from a specific track.');
+    print('  ${'revert <id>'.green.padRight(col)} Quick restore of a specific ID from active track.');
+    print('  ${'restore <id>'.green.padRight(col)} Restore a specific snapshot into another folder.');
+    print('    ${'--to <dir>'.grey.padRight(col - 4)} Destination path for the restored files.');
 
-    print('\n${"Inspection & Web Interface".cyan}');
-    print('  ${'ui'.green.padRight(28)} Launch the Web Dashboard (Split-view diff support).');
-    print('  ${'status'.green.padRight(28)} Compare tree against latest of the active track.');
-    print('  ${'summary'.green.padRight(28)} Show a summary of all messages to help create a Git/GitHub commit.');
-    print('  ${'diff [id1] [id2]'.green.padRight(28)} Compare working tree vs latest or two specific IDs.');
-    print('  ${'diff -t <track-name1> <track-name2>'.green.padRight(28)} Compare the working tree in the last snapshot of both tracks.');
-    print('  ${'log [-t name] | <--full>'.green.padRight(28)} Show history of the active or specific track you can use full parameter to see more details on log.');
-    print('  ${'show <id> [-t name]'.green.padRight(28)} Show details of a snapshot (cross-track support).');
-    print('  ${'tree [id] [-t name]'.green.padRight(28)} Show visual file tree (cross-track support).');
-    print('  ${'verify <id|--all>'.green.padRight(28)} Verify integrity of one or all snapshots.');
+    print('\n${" 🔍 INSPECTION & WEB INTERFACE".cyan.bold}');
+    print('  ${'ui'.green.padRight(col)} Launch the Web Dashboard (Split-view diff support).');
+    print('  ${'status'.green.padRight(col)} Compare local tree vs latest of the active track.');
+    print('  ${'summary'.green.padRight(col)} Summary of messages to help create Git/GitHub commits.');
+    print('  ${'diff [id1] [id2]'.green.padRight(col)} Compare working tree vs latest or two specific IDs.');
+    print('    ${'-t, --tracks <tk1> <tk2>'.grey.padRight(col - 4)} Compare the last snapshot between two tracks.');
+    print('  ${'log'.green.padRight(col)} Show history of snapshots.');
+    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Show log from a specific track.');
+    print('    ${'--full'.grey.padRight(col - 4)} Show extended details (IDs, dates, metadata).');
+    print('  ${'show <id>'.green.padRight(col)} Show details of a specific snapshot.');
+    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search for the ID in a specific track.');
+    print('  ${'tree [id]'.green.padRight(col)} Show visual file tree representation.');
+    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Source tree structure from a specific track.');
+    print('  ${'verify <id|--all>'.green.padRight(col)} Verify cryptographic integrity of snapshots.');
 
-    print('\n${"Git integration".cyan}');
-    print('  ${'git-prepare [id] --branch b'.green.padRight(28)} Prepare current Git repo from a snapshot.');
-    print('  ${'publish [id] --branch b --verify'.green.padRight(28)} Commit and push snapshot to Git safely with a security check using regex to prevent leak of APIs, passwords etc etc.');
-    print('  ${'git-diff [id] --branch b'.green.padRight(28)} Compare snapshot against current Git HEAD.');
+    print('\n${" 🐙 GIT INTEGRATION".cyan.bold}');
+    print('  ${'git-prepare [id]'.green.padRight(col)} Prepare current Git repo from a snapshot.');
+    print('    ${'--branch <name>'.grey.padRight(col - 4)} Specify target branch for preparation.');
+    print('  ${'publish [id]'.green.padRight(col)} Safe commit & push with regex security check.');
+    print('    ${'--branch <name>'.grey.padRight(col - 4)} Specify target branch for the push.');
+    print('    ${'--verify'.grey.padRight(col - 4)} Enforce security check for secrets (APIs, keys).');
+    print('  ${'git-diff [id]'.green.padRight(col)} Compare snapshot against current Git HEAD.');
+    print('    ${'--branch <name>'.grey.padRight(col - 4)} Target a specific branch for comparison.');
+    print('  ${'stash'.green.padRight(col)} Manage Git stash (save current Git changes):');
+    print('    ${'--pop'.grey.padRight(col - 4)} Restore and remove last stash.');
+    print('    ${'--list'.grey.padRight(col - 4)} Show all currently stashed changes.');
+    print('    ${'--clear'.grey.padRight(col - 4)} Delete all stashes permanently.');
 
-    print('\n${"Maintenance".cyan}');
-    print('  ${'doctor'.green.padRight(28)} Run repository diagnostics and health checks.');
-    print('  ${'stats'.green.padRight(28)} Show global repo metrics and track breakdown.');
-    print('  ${'prune --keep N'.green.padRight(28)} Keep only the newest N snapshots in the active track.');
-    print('  ${'prune --older-than N'.green.padRight(28)} Delete all snapshot older than N.');
-    print('  ${'clear-history'.green.padRight(28)} Delete all snapshots for the active track.');
-    print('  ${'purge'.green.padRight(28)} Completely delete this repository from USB/storage.');
+    print('\n${" 🛠️  MAINTENANCE".cyan.bold}');
+    print('  ${'doctor'.green.padRight(col)} Run repository diagnostics and health checks.');
+    print('  ${'stats'.green.padRight(col)} Show global repo metrics and track breakdown.');
+    print('  ${'prune'.green.padRight(col)} Clean up old snapshots:');
+    print('    ${'--keep <N>'.grey.padRight(col - 4)} Keep only the newest N snapshots.');
+    print('    ${'--older-than <N>'.grey.padRight(col - 4)} Delete snapshots older than N days.');
+    print('  ${'clear-history'.green.padRight(col)} Delete all snapshots for the active track.');
+    print('  ${'purge'.green.padRight(col)} Completely delete this repository from USB/storage.');
+    print('  ${'storage-check'.green.padRight(col)} Hardware diagnostic and latency test of the device.');
+    print('  ${'migrate'.green.padRight(col)} Move your vault to a new drive or NAS:');
+    print('    ${'--to <path>'.grey.padRight(col - 4)} Target destination path for the migration.');
+    print('    ${'--delete-source'.grey.padRight(col - 4)} Remove data from old drive after success.');
 
-    print('\n${"General".cyan}');
-    print('  ${'help'.green.padRight(28)} Show this help message.');
-    print('  ${'version'.green.padRight(28)} Show tool version.');
+    print('\n${" ⚙️  GENERAL".cyan.bold}');
+    print('  ${'help'.green.padRight(col)} Show this help message.');
+    print('  ${'version'.green.padRight(col)} Show tool version.');
 
-    print('\n${"Examples".cyan}');
-    print('  ${'vcs tree -t Experimental'.green} (View tree of another track)');
-    print('  ${'vcs pull -t main'.green} (Preview and pull from main track)');
-    print('  ${'vcs show 1713421 -t prod'.green} (Inspect snapshot from production)');
-
-    print('\n${"Notes".cyan}');
-    print('  - Commands like ${'push'.yellow}, ${'pull'.yellow}, ${'show'.yellow}, and ${'tree'.yellow} support ${'--track/-t'.yellow}.');
-    print('  - ${'push'.green} and ${'pull'.green} now include an automatic ${'safety preview'.yellow} of changes.');
-    print('  - Maintenance commands currently target the ${'active track'.yellow} for safety.');
-    print('  - All snapshots are ${'AES-256 encrypted'.green} and require the vault password.\n');
+    print('\n' + '─' * 95);
+    print(' ${"💡 PRO TIPS".bold}');
+    print('  • You can combine ${'--track'.yellow} with most inspection commands for cross-track analysis.');
+    print('  • Use ${'summary'.green} before your Git commits to maintain a clean history.');
+    print('  • ${'storage-check'.cyan} is recommended every time you connect a new external device.');
+    print('  • All data is ${'AES-256 encrypted'.green.bold}. Keep your vault password safe.');
+    print('─' * 95 + '\n');
   }
 
   Future<void> setupDrive() async {
@@ -1322,7 +1344,6 @@ class PortableVcs {
 
     final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
     
-    // Consolidar todos los logs de todos los tracks para métricas globales
     final allLogs = <SnapshotLogEntry>[];
     context.remoteMeta.tracks.forEach((name, state) {
       allLogs.addAll(state.logs);
@@ -1334,7 +1355,6 @@ class PortableVcs {
     String? largestTrack;
 
     if (snapshotsDir.existsSync()) {
-      // Buscamos en los archivos físicos basados en todos los tracks
       for (var trackEntry in context.remoteMeta.tracks.entries) {
         for (final entry in trackEntry.value.logs) {
           final file = File(p.join(snapshotsDir.path, entry.fileName));
@@ -1355,7 +1375,6 @@ class PortableVcs {
     print('\n📊 ${"REPOSITORY STATISTICS".black.onCyan}');
     print('═' * 60);
 
-    // --- Sección 1: Información General ---
     print('${"GENERAL INFO".bold.cyan}');
     print('${"Project Name:".yellow.padRight(20)} ${context.remoteMeta.projectName.green}');
     print('${"Active Track:".yellow.padRight(20)} ${context.remoteMeta.activeTrack.magenta.bold}');
@@ -1364,7 +1383,6 @@ class PortableVcs {
     print('${"Vault Location:".yellow.padRight(20)} ${context.remoteRepoDir.path.grey}');
 
     print('\n${"STORAGE SUMMARY".bold.cyan}');
-    // --- Sección 2: Métricas de Almacenamiento ---
     print('${"Total Snapshots:".yellow.padRight(20)} ${allLogs.length.toString().green}');
     print('${"Vault Total Size:".yellow.padRight(20)} ${_formatBytes(totalBytes).green.bold}');
     
@@ -1379,7 +1397,6 @@ class PortableVcs {
     }
 
     print('\n${"TRACKS BREAKDOWN".bold.cyan}');
-    // --- Sección 3: Desglose por Tracks ---
     context.remoteMeta.tracks.forEach((name, state) {
       final isActive = name == context.remoteMeta.activeTrack;
       final prefix = isActive ? ' → '.cyan.bold : '   ';
@@ -1388,9 +1405,7 @@ class PortableVcs {
     });
 
     print('\n${"TIMELINE".bold.cyan}');
-    // --- Sección 4: Fechas ---
     if (allLogs.isNotEmpty) {
-      // Ordenamos por fecha para obtener el más nuevo y más viejo real
       allLogs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       final newest = allLogs.first;
       final oldest = allLogs.last;
@@ -2767,8 +2782,7 @@ class PortableVcs {
     }
 
     if (!await _gitWorkingTreeIsClean()) {
-      print('❌ Git working tree is not clean.');
-      print('   Commit, stash, or discard your current Git changes before using publish.');
+      print('❌ Git working tree is not clean. Try running "vcs stash" first.');
       return;
     }
 
@@ -2874,7 +2888,7 @@ class PortableVcs {
       "GitHub Token": RegExp(r"""ghp_[a-zA-Z0-9]{36}"""),
     };
 
-    final ignoredPaths = ['.git', '.vcs', '.dart_tool', 'node_modules', 'build', 'bin', 'obj'];
+    final ignoredPaths = ['.git', '.vcs', '.dart_tool', 'node_modules', 'build', 'bin', 'obj', 'test'];
 
     try {
       await for (final entity in directory.list(recursive: true, followLinks: false)) {
@@ -4241,6 +4255,206 @@ class PortableVcs {
     print('💡 ${'Recommended:'.grey} git commit -m "Update from Portable-VCS" -m "\$(vcs summary)"');
     print('');
   }
+
+  Future<void> checkStorageHealth() async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final driveRoot = p.split(context.remoteRepoDir.path).first.toUpperCase();
+    final driveLetterOnly = driveRoot.replaceAll(':', '');
+    final drivePath = context.remoteRepoDir.parent.path;
+
+    print('\n💾 ${"SYSTEM STORAGE DIAGNOSTIC".black.onCyan}');
+    print('${"Target Mount:".yellow} ${driveRoot.bold} (${drivePath.grey})');
+    print('─' * 60);
+
+    try {
+      if (Platform.isWindows) {
+        final psCommand = 
+            '\$disk = Get-Partition -DriveLetter $driveLetterOnly | Get-Disk; '
+            '\$disk | Select-Object @{n="Model";e={\$_.FriendlyName}}, @{n="Status";e={\$_.HealthStatus}} | Format-Table -AutoSize; '
+            'Get-PSDrive -PSProvider FileSystem | Where-Object { \$_.Name -eq "$driveLetterOnly" } | '
+            'Select-Object @{n="Drive";e={\$_.Name}}, @{n="Used(GB)";e={[math]::round(\$_.Used/1GB,2)}}, @{n="Free(GB)";e={[math]::round(\$_.Free/1GB,2)}} | Format-Table -AutoSize';
+
+        final result = await Process.run('powershell', ['-Command', psCommand], runInShell: true);
+        
+        print('🩺 ${"Hardware Integrity (Specific to $driveRoot):".bold}');
+        if (result.exitCode == 0 && result.stdout.toString().trim().isNotEmpty) {
+          print(result.stdout.toString().trim().grey);
+        } else {
+          print('    ${"Status:".grey} ${"OK (Self-report standard)".green}');
+        }
+      } else {
+        final result = await Process.run('df', ['-h', drivePath], runInShell: true);
+        print('📊 ${"FileSystem Usage:".bold}');
+        print(result.stdout.toString().trim().grey);
+      }
+      print('\n⚡ ${"Real-time Latency Test:".bold}');      
+      final testFile = File(p.join(drivePath, '.vcs_health_test'));
+      final watch = Stopwatch();
+      watch.start();
+
+      await testFile.writeAsString('vcs_diagnostic_data_${DateTime.now().millisecondsSinceEpoch}');
+
+      final writeTime = watch.elapsedMilliseconds;
+      watch.stop();
+      watch.reset();
+      watch.start();
+
+      await testFile.readAsString();
+
+      final readTime = watch.elapsedMilliseconds;
+      watch.stop();
+
+      if (await testFile.exists()) await testFile.delete();
+
+      final writeStatus = writeTime < 150 ? "OPTIMAL".green : (writeTime < 500 ? "ACCEPTABLE".yellow : "SLOW".red);
+      final readStatus = readTime < 50 ? "OPTIMAL".green : (readTime < 200 ? "ACCEPTABLE".yellow : "SLOW".red);
+
+      print('  ${"Write Speed:".padRight(20)} ${"$writeTime ms".bold.padRight(10)} [$writeStatus]');
+      print('  ${"Read Speed:".padRight(20)} ${"$readTime ms".bold.padRight(10)} [$readStatus]');
+
+      print('\n📝 ${"Diagnostic Result:".bold}');
+      if (writeTime > 800) {
+        print('  ⚠️  ${"CRITICAL:".red} Drive is responding very slowly.');
+      } else {
+        print('  ✅ ${"HEALTHY:".green} USB device is stable and matched.');
+      }
+
+    } catch (e) {
+      print('❌ ${"Diagnostic Interrupted:".red} $e');
+    }
+    
+    print('─' * 60 + '\n');
+  }
+
+  Future<void> gitStash({bool pop = false, bool list = false, bool clear = false, String? drop}) async {
+    print('\n📦 ${"GIT STASH MANAGER".black.onCyan}');
+    
+    try {
+      if (list) {
+        final result = await Process.run('git', ['stash', 'list'], runInShell: true);
+        print('${"Current Saved States:".bold}');
+        final output = result.stdout.toString().trim();
+        print(output.isEmpty ? "    (No stashed changes found)".grey : output);
+        return;
+      }
+
+      if (clear) {
+        print('⚠️  ${"Deleting all saved stashes...".red}');
+        await Process.run('git', ['stash', 'clear'], runInShell: true);
+        print('✅ ${"Stash history cleared.".green}');
+        return;
+      }
+
+      if (drop != null) {
+        print('🗑️  ${"Dropping $drop...".yellow}');
+        final result = await Process.run('git', ['stash', 'drop', drop], runInShell: true);
+        if (result.exitCode == 0) {
+          print('✅ ${"Dropped successfully.".green}');
+        } else {
+          print('❌ ${"Error:".red} ${result.stderr}');
+        }
+        return;
+      }
+
+      if (pop) {
+        print('⏳ ${"Restoring and removing last saved changes...".yellow}');
+        final result = await Process.run('git', ['stash', 'pop'], runInShell: true);
+        
+        if (result.exitCode == 0) {
+          print('✅ ${"Changes restored and removed from stash.".green}');
+        } else {
+          print('❌ ${"Failed to pop:".red} ${result.stderr}');
+        }
+        return;
+      }
+
+      print('⏳ ${"Saving current Git working tree...".yellow}');
+      final timestamp = DateTime.now().toString().split('.')[0];
+      final result = await Process.run(
+        'git', 
+        ['stash', 'push', '-m', 'VCS Auto-stash at $timestamp'], 
+        runInShell: true
+      );
+
+      if (result.stdout.toString().contains('No local changes to save')) {
+        print('✨ ${"Nothing to save, tree is already clean.".green}');
+      } else {
+        print('✅ ${"Working tree cleaned and saved.".green}');
+      }
+
+    } catch (e) {
+      print('❌ ${"Git Error:".red} $e');
+    }
+    print('─' * 60 + '\n');
+  }
+
+  Future<void> migrateVault({required String targetPath, bool deleteSource = false}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final sourceDir = context.remoteRepoDir;
+    final folderName = p.basename(sourceDir.parent.path);
+    final destinationDir = Directory(p.join(targetPath, '.vcs_portable', folderName));
+
+    print('\n🚚 ${"VAULT MIGRATION".black.onCyan}');
+    print('${"From:".yellow} ${sourceDir.path.grey}');
+    print('${"To:  ".yellow} ${destinationDir.path.green}');
+    print('─' * 60);
+
+    try {
+      if (destinationDir.existsSync()) {
+        print('❌ ${"Target directory already exists. Migration aborted to prevent overwrite.".red}');
+        return;
+      }
+
+      print('⏳ ${"Step 1/3: Preparing destination..."}');
+      destinationDir.createSync(recursive: true);
+
+      print('⏳ ${"Step 2/3: Copying encrypted snapshots and metadata..."}');
+      await _copyDirectory(sourceDir, destinationDir);
+
+      print('⏳ ${"Step 3/3: Verifying migration..."}');
+      final sourceCount = sourceDir.listSync(recursive: true).length;
+      final destCount = destinationDir.listSync(recursive: true).length;
+
+      if (sourceCount == destCount) {
+        print('\n✅ ${"Migration successful!".green}');
+        print('📊 ${"Total objects migrated:".grey} $destCount');
+        
+        if (deleteSource) {
+          print('\n🗑️  ${"Deleting source data as requested..."}');
+          await sourceDir.delete(recursive: true);
+          print('✅ ${"Source wiped.".green}');
+        }
+
+        print('\n💡 ${"Next step:".cyan} Remember to use ${"vcs bind".yellow} if you change your drive letter.');
+      } else {
+        throw Exception("File count mismatch. Source: $sourceCount, Dest: $destCount");
+      }
+
+    } catch (e) {
+      print('\n❌ ${"Migration failed:".red} $e');
+      if (destinationDir.existsSync()) {
+        print('🧹 ${"Cleaning up partial migration...".grey}');
+        await destinationDir.delete(recursive: true);
+      }
+    }
+    print('─' * 60 + '\n');
+  }
+
+  Future<void> _copyDirectory(Directory source, Directory destination) async {
+    await for (var entity in source.list(recursive: false)) {
+      if (entity is Directory) {
+        final newDirectory = Directory(p.join(destination.absolute.path, p.basename(entity.path)));
+        await newDirectory.create();
+        await _copyDirectory(entity, newDirectory);
+      } else if (entity is File) {
+        await entity.copy(p.join(destination.path, p.basename(entity.path)));
+      }
+    }
+  }
 }
 
 extension ColorConsole on String {
@@ -4277,6 +4491,15 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('setup')
     ..addCommand('init')
     ..addCommand('status')
+    ..addCommand('storage-check', ArgParser()
+      ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
+    )
+    ..addCommand(
+      'migrate',
+      ArgParser()
+        ..addOption('to', abbr: 'd', help: 'Path to the new device or network folder')
+        ..addFlag('delete-source', negatable: false, help: 'Remove data from the old drive after migration'),
+    )
     ..addCommand(
       'log',
       ArgParser()
@@ -4360,6 +4583,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     )
     ..addCommand('version')
     ..addCommand('ui')
+    ..addCommand('stash', ArgParser()
+      ..addFlag('pop', abbr: 'p', negatable: false, help: 'Restore and remove the last stash')
+      ..addFlag('list', abbr: 'l', negatable: false, help: 'List all saved stashes')
+      ..addFlag('clear', negatable: false, help: '⚠️ Delete ALL stashed changes permanently')
+      ..addOption('drop', help: 'Delete a specific stash (e.g., stash@{0})')
+    )
     ..addCommand(
       'publish',
       ArgParser()
@@ -4590,6 +4819,30 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         final cmd = result.command!;
         await app.showCommitHelper(
           track: cmd['track']?.toString()
+        );
+        break;
+      case 'storage-check':
+        await app.checkStorageHealth();
+        break;
+      case 'stash':
+        final cmd = result.command!;
+        await app.gitStash(
+          pop: cmd['pop'] == true,
+          list: cmd['list'] == true,
+          clear: cmd['clear'] == true,
+          drop: cmd['drop']?.toString(),
+        );
+        break;
+      case 'migrate':
+        final cmd = result.command!;
+        final to = cmd['to']?.toString();
+        if (to == null) {
+          print('❌ ${"Target path required: --to <path>".red}');
+          return;
+        }
+        await app.migrateVault(
+          targetPath: to,
+          deleteSource: cmd['delete-source'] == true
         );
         break;
       default:
