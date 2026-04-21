@@ -397,7 +397,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
 | **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
-| | `vcs status` | Compare tree against latest of the **active track**. |
+| | `vcs status` | Summary of messages to help create Git/GitHub commits. |
+| | `vcs summary` | Compare tree against latest of the **active track**. |
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
 | | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
 | | `vcs log [--track name]` | Show history (Standard/Full options available). |
@@ -411,13 +412,22 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | **Git Bridge** | `vcs git-diff [id] --branch b` | Preview changes between snapshot and Git branch. |
 | | `vcs git-prepare [id] --branch b` | Restore snapshot into Git tree and stage files. |
 | | `vcs publish [id] --branch b --verify` | **Atomic move:** Restore, commit, and push to Git safely. |
+| | `vcs stash` | Manage Git stash (save current Git changes). |
+| | `vcs stash --pop` | Restore and remove last stash. |
+| | `vcs stash --list` | Show all currently stashed changes. |
+| | `vcs stash --clear` | Delete all stashes permanently. |
 | **Maintenance**| `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
 | | `vcs doctor` | Run repository diagnostics and health checks. |
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
 | | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
+| | `vcs prune --oldr-than N` | Delete snapshots older than N days. |
 | | `vcs clear-history` | Wipe all snapshots for the **active track**. |
 | | `vcs purge` | Permanently delete the project from the Vault. |
-| **General** | `vcs version` | Show current Portable VCS version. |
+| | `vcs storage-check` | Hardware diagnostic and latency test of the device. |
+| | `vcs migrate` | Move your vault to a new drive. |
+| | `vcs migrate --to <path>` | Target destination path for the migration. |
+| | `vcs migrate --delete-dource` | Remove data from old drive after success. |
+| **General** | `vcs version` | Show tool version. |
 | | `vcs help` | Show this help message. |
 
 # Encryption
