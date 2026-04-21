@@ -400,6 +400,9 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs log [--track name]` | Show history (Standard/Full options available). |
 | | `vcs show --track/-t <id>` | Displays detailed information about a snapshot in the **active track** or in a **specific track**. |
 | | `vcs tree [id]` | Displays the file tree structure of a snapshot in the **active track** or in a **specific track**. |
+| | `vcs search <query>` | Search text inside encrypted snapshots. |
+| | `vcs search <query> -t/--track <name>` | Search only within a specific track. |
+| | `vcs search <query> -s/--case-sensitive` | Perform a case-sensitive search. |
 | **Tracks** | `vcs track list` | List all available history tracks. |
 | | `vcs track current` | Show the name of the currently active track. |
 | | `vcs track create <name>` | Create a new independent development lane. |
@@ -551,13 +554,13 @@ Currently tested:
 
 Planned improvements:
 
-* - [ ] smarter line-ending normalization in Git diff
-* - [ ] incremental snapshots
-* - [ ] advanced track merging
-* - [ ] track diff comparison
-* - [ ] conflict-aware Git publish
-* - [ ] export/import bundle mode
-* - [ ] snapshot compression optimization
+- [x] conflict-aware Git publish
+- [x] track diff comparison
+- [ ] smarter line-ending normalization (Implicitly handled in memory)
+- [ ] incremental snapshots
+- [ ] advanced track merging
+- [ ] export/import bundle mode
+- [ ] snapshot compression optimization
 
 # Contributing
 
