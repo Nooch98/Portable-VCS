@@ -105,6 +105,9 @@ class PortableVcs {
     print('\n${" 🔍 INSPECTION & WEB INTERFACE".cyan.bold}');
     print('  ${'ui'.green.padRight(col)} Launch the Web Dashboard (Split-view diff support).');
     print('  ${'status'.green.padRight(col)} Compare local tree vs latest of the active track.');
+    print('  ${'search <query>'.green.padRight(col)} Search text inside encrypted snapshots.');
+    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search only within a specific track.');
+    print('    ${'-s, --case-sensitive'.grey.padRight(col - 4)} Perform a case-sensitive search.');
     print('  ${'summary'.green.padRight(col)} Summary of messages to help create Git/GitHub commits.');
     print('  ${'diff'.green} Compare latest snapshot vs current live files');
     print('  ${'diff [id1] [id2|.]'.green.padRight(col)} Compare snapshots or snapshot vs working tree.');
@@ -657,6 +660,117 @@ class PortableVcs {
     print('\n' + '─' * 40);
     print('${"Summary:".cyan} ${added.toString().green} new, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
     print('─' * 40 + '\n');
+  }
+
+  Future<void> search(String query, {String? track, bool caseSensitive = false}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final password = askPassword();
+    if (password == null || password.isEmpty) {
+      print('❌ Password required for searching encrypted snapshots.');
+      return;
+    }
+
+    final targetTrack = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrack];
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('ℹ️ No snapshots found in track "$targetTrack".');
+      return;
+    }
+
+    final logs = trackData.logs;
+
+    print('\n🔍 ${"SEARCH".black.onCyan} Searching for: "${query.white.bold}" in track ${targetTrack.magenta}');
+    print('═' * 60);
+
+    int totalMatches = 0;
+    final String searchQuery = caseSensitive ? query : query.toLowerCase();
+
+    bool isBinaryFile(String fileName, Uint8List bytes) {
+      if (bytes.isEmpty) return false;
+
+      const binaryExtensions = {
+        '.exe', '.dll', '.so', '.dylib', '.bin',
+        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.ico', '.pdf',
+        '.zip', '.7z', '.rar', '.gz', '.tar', '.pkg',
+        '.pyc', '.class', '.o', '.a',
+        '.ttf', '.otf', '.woff', '.woff2',
+        '.mp3', '.mp4', '.wav', '.mov', '.db', '.sqlite',
+      };
+
+      if (fileName.contains('.')) {
+        final ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+        if (binaryExtensions.contains(ext)) return true;
+      }
+
+      final checkLimit = bytes.length < 1024 ? bytes.length : 1024;
+      for (var i = 0; i < checkLimit; i++) {
+        if (bytes[i] == 0) return true;
+      }
+
+      return false;
+    }
+
+    for (final entry in logs) {
+      try {
+        final snapshot = await readSnapshot(context, entry.id, password: password);
+        if (snapshot == null) continue;
+
+        final files = await _decodeSnapshotFiles(snapshot);
+        bool snapshotHasMatch = false;
+
+        for (final fileName in files.keys) {
+          final bytes = files[fileName]!;
+
+          if (isBinaryFile(fileName, bytes)) continue;
+
+          String content;
+          try {
+            content = utf8.decode(bytes, allowMalformed: true);
+          } catch (e) {
+            continue;
+          }
+          
+          final String contentToSearch = caseSensitive ? content : content.toLowerCase();
+
+          if (contentToSearch.contains(searchQuery)) {
+            if (!snapshotHasMatch) {
+              print('\n📦 Snapshot: ${entry.id.green} (${entry.message.italic})');
+              snapshotHasMatch = true;
+            }
+
+            final lines = content.split('\n');
+            for (int i = 0; i < lines.length; i++) {
+              final line = lines[i];
+              final String lineToSearch = caseSensitive ? line : line.toLowerCase();
+
+              if (lineToSearch.contains(searchQuery)) {
+                final displayLine = line.trim();
+                final truncatedLine = displayLine.length > 100 
+                    ? '${displayLine.substring(0, 97)}...' 
+                    : displayLine;
+
+                print('  📄 ${fileName.yellow}:${(i + 1).toString().grey}');
+                print('     ${truncatedLine.italic.grey}');
+                totalMatches++;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        print('⚠️ Error searching in snapshot ${entry.id}: $e'.red);
+        continue;
+      }
+    }
+
+    print('\n' + '═' * 60);
+    if (totalMatches > 0) {
+      print('✅ Search finished. Found ${totalMatches.toString().green.bold} occurrences.');
+    } else {
+      print('status: ${"No matches found.".yellow}');
+    }
   }
 
   Future<void> diff(List<String> args, {String? password}) async {
@@ -1446,7 +1560,6 @@ class PortableVcs {
       
       for (final file in physicalFiles) {
         final name = p.basename(file.path);
-        // Si es un temporal o si no está en ningún track, es basura
         if (name.startsWith('.tmp_') || !referencedFiles.contains(name)) {
           toDeleteFiles.add(file);
         }
@@ -2838,8 +2951,13 @@ class PortableVcs {
     }
 
     if (!await _gitWorkingTreeIsClean()) {
-      print('❌ Git working tree is not clean. Try running "vcs stash" first.');
-      return;
+      print('📦 ${"Working tree not clean. Auto-stashing changes...".yellow}');
+      final timestamp = DateTime.now().toString().split('.')[0];
+      await Process.run(
+        'git', 
+        ['stash', 'push', '--include-untracked', '-m', 'VCS Auto-stash at $timestamp'], 
+        runInShell: true
+      );
     }
 
     if (context.remoteMeta.logs.isEmpty) {
@@ -2884,55 +3002,64 @@ class PortableVcs {
       return;
     }
 
-    await _gitCheckoutBranch(branch);
-    await _restoreSnapshotIntoWorkingTree(context, snapshot);
+    try {
+      await _gitCheckoutBranch(branch);
+      await _restoreSnapshotIntoWorkingTree(context, snapshot);
 
-    if (verify) {
-      print('\n🛡️  ${"Running security hooks...".cyan}');
-      final issues = await _runSecurityScanner();
-      if (issues.isNotEmpty) {
-        print('\n🚨 ${"Critical issues found during pre-publish scan:".red}');
-        for (var issue in issues) {
-          print('   ⚠️ $issue');
+      if (verify) {
+        print('\n🛡️  ${"Running security hooks...".cyan}');
+        final issues = await _runSecurityScanner();
+        if (issues.isNotEmpty) {
+          print('\n🚨 ${"Critical issues found during pre-publish scan:".red}');
+          for (var issue in issues) {
+            print('   ⚠️ $issue');
+          }
+          print('\n${"Publish aborted for safety.".red}');
+          return; 
         }
-        print('\n${"Publish aborted for safety.".red}');
-        print('ℹ️  Fix the issues above or use --no-verify to bypass.');
-        return; 
+        print('✅ ${"Security check passed.".green}\n');
       }
-      print('✅ ${"Security check passed.".green}\n');
-    }
 
-    await _gitAddAll();
+      await _gitAddAll();
 
-    final hasChanges = await _gitHasStagedChanges();
-    if (!hasChanges) {
-      print('ℹ️ No Git changes detected after applying snapshot. Nothing to commit.');
-      return;
-    }
+      final hasChanges = await _gitHasStagedChanges();
+      if (!hasChanges) {
+        print('ℹ️ No Git changes detected after applying snapshot. Nothing to commit.');
+      } else {
+        if (confirmAction('Create Git commit now?')) {
+          await _gitCommit(commitMessage);
 
-    if (!confirmAction('Create Git commit now?')) {
-      print('Cancelled before commit.');
-      return;
-    }
-
-    await _gitCommit(commitMessage);
-
-    if (remoteExists) {
-      if (!confirmAction('Push commit to "$remote/$branch" now?')) {
-        print('ℹ️ Commit created locally. Push skipped by user.');
-        return;
+          if (remoteExists) {
+            if (confirmAction('Push commit to "$remote/$branch" now?')) {
+              try {
+                await _gitPush(remote, branch);
+                print('✅ Snapshot ${entry.id} published and pushed to Git.');
+              } catch (e) {
+                print('\n❌ ${"PUSH FAILED:".red}');
+                print('The commit was created locally, but couldn\'t be pushed.');
+              }
+            }
+          } else {
+            print('✅ Snapshot ${entry.id} published to local Git (no remote configured).');
+          }
+        }
       }
-      
-      try {
-        await _gitPush(remote, branch);
-        print('✅ Snapshot ${entry.id} published and pushed to Git.');
-      } catch (e) {
-        print('\n❌ ${"PUSH FAILED:".red}');
-        print('The commit was created locally, but couldn\'t be pushed.');
-        print('Check for remote changes that might have occurred during the process.');
+    } finally {
+      final stashList = await Process.run('git', ['stash', 'list'], runInShell: true);
+      final output = stashList.stdout.toString();
+
+      if (output.contains('VCS Auto-stash')) {
+        print('\n🔄 ${"Restoring your previous local changes...".grey}');
+        final popResult = await Process.run('git', ['stash', 'pop'], runInShell: true);
+        
+        if (popResult.exitCode == 0) {
+          print('✅ ${"Workspace successfully restored to its previous state.".green}');
+        } else {
+          print('⚠️  ${"Note: Local changes restored with some conflicts o warnings.".yellow}');
+          print('   Check "git status" to resolve any issues.'.grey);
+        }
       }
-    } else {
-      print('✅ Snapshot ${entry.id} published to local Git (no remote configured).');
+      print('─' * 60 + '\n');
     }
   }
 
@@ -3036,7 +3163,6 @@ class PortableVcs {
           final outFile = File(path);
           await outFile.parent.create(recursive: true);
           
-          // Escribimos directamente los bytes decodificados
           final data = file.content as List<int>;
           await outFile.writeAsBytes(data, flush: true);
         } else {
@@ -4684,6 +4810,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('drop', help: 'Delete a specific stash (e.g., stash@{0})')
     )
     ..addCommand(
+      'search',
+      ArgParser()
+        ..addOption('track', abbr: 't', help: 'Search in a specific track')
+        ..addFlag('case-sensitive', abbr: 's', negatable: false, help: 'Perform a case-sensitive search')
+    )
+    ..addCommand(
       'publish',
       ArgParser()
         ..addOption('branch', defaultsTo: 'main', abbr: 'b')
@@ -4944,6 +5076,19 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         await app.migrateVault(
           targetPath: to,
           deleteSource: cmd['delete-source'] == true
+        );
+        break;
+      case 'search':
+        final cmd = result.command!;
+        if (cmd.rest.isEmpty) {
+          print('❌ Usage: vcs search <query> [--track <name>] [-s]');
+          return;
+        }
+        final query = cmd.rest.join(' ');
+        await app.search(
+          query,
+          track: cmd['track'],
+          caseSensitive: cmd['case-sensitive'],
         );
         break;
       default:
