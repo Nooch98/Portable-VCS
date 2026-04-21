@@ -23,8 +23,8 @@ import 'package:vcs/models/snapshot_log_entry.dart';
 import 'package:vcs/models/track_state.dart';
 import 'package:vcs/models/tree_node.dart';
 
-const String version = 'Portable VCS Version 0.2.0-Experimental';
 enum LogViewMode { summary, standard, full}
+enum RemoteStatus { synced, ahead, behind, diverged, unknown }
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -52,7 +52,7 @@ class PortableVcs {
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
 
   String getFullVersion() {
-    const String baseVersion = '0.2.0-Experimental';
+    const String baseVersion = '0.3.0-Experimental';
     String osName = 'Unknown';
     if (Platform.isWindows) osName = 'Windows';
     else if (Platform.isLinux) osName = 'Linux';
@@ -137,6 +137,7 @@ class PortableVcs {
     print('  ${'prune'.green.padRight(col)} Clean up old snapshots:');
     print('    ${'--keep <N>'.grey.padRight(col - 4)} Keep only the newest N snapshots.');
     print('    ${'--older-than <N>'.grey.padRight(col - 4)} Delete snapshots older than N days.');
+    print('    ${'--garbage'.grey.padRight(col - 4)} Delete orphan files and failed temp uploads.');
     print('  ${'clear-history'.green.padRight(col)} Delete all snapshots for the active track.');
     print('  ${'purge'.green.padRight(col)} Completely delete this repository from USB/storage.');
     print('  ${'storage-check'.green.padRight(col)} Hardware diagnostic and latency test of the device.');
@@ -163,64 +164,108 @@ class PortableVcs {
     final candidates = await _listCandidateDrives();
     if (candidates.isEmpty) {
       print('❌ ${"No candidate drives found.".red}');
-      print('   ${"Make sure your USB drive is mounted and has write permissions.".grey}');
       return;
     }
 
-    print('\n${"Select a drive to provision:".bold}');
-    print('═' * 60);
-
+    print('\n${"Select a drive to provision or upgrade:".bold}');
+    print('═' * 70);
     for (var i = 0; i < candidates.length; i++) {
       final drive = candidates[i];
-      String sizeInfo = '';
-      try {
-        final stat = drive.statSync();
-        sizeInfo = drive is Directory ? ' (Directory ready)' : '';
-      } catch (_) {}
-
-      print('  ${"[$i]".green.bold} ${drive.path.white} $sizeInfo');
+      final isWritable = _checkWriteAccess(drive.path);
+      final markerExists = File(p.join(drive.path, driveMarkerFile)).existsSync();
+      
+      final status = isWritable ? 'READY'.green : 'READ-ONLY'.red;
+      final type = markerExists ? ' [VCS DRIVE]'.cyan : ' [NEW]'.grey;
+      
+      print('  ${"[$i]".green.bold} ${drive.path.white.padRight(20)} $status$type');
     }
-    print('═' * 60);
+    print('═' * 70);
 
-    stdout.write('\n👉 Select index to provision: ');
-    final raw = stdin.readLineSync()?.trim() ?? '';
-    final index = int.tryParse(raw);
+    stdout.write('\n👉 Select index or drive letter: ');
+    final rawInput = stdin.readLineSync()?.trim().toUpperCase() ?? '';
     
+    int? index = int.tryParse(rawInput);
+    if (index == null) {
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].path.toUpperCase().startsWith(rawInput)) {
+          index = i;
+          break;
+        }
+      }
+    }
+
     if (index == null || index < 0 || index >= candidates.length) {
       print('❌ ${"Invalid selection.".red}');
       return;
     }
 
     final selected = candidates[index];
+    final markerFile = File(p.join(selected.path, driveMarkerFile));
+    final isUpgrade = markerFile.existsSync();
 
-    print('\n${"⚠️  WARNING:".black.onYellow} You are about to provision ${selected.path.bold}');
-    print('This will create a hidden marker and the ${remoteReposDir.cyan} directory.');
-    stdout.write('Do you want to continue? (y/N): ');
-    
-    final confirm = stdin.readLineSync()?.trim().toLowerCase();
-    if (confirm != 'y' && confirm != 'yes') {
-      print('🚫 Setup cancelled.');
+    print('\n🛠️  ${"PERFORMING PRE-FLIGHT CHECKS...".grey}');
+
+    if (!_checkWriteAccess(selected.path)) {
+      print('❌ ${"Write Test Failed:".red} Cannot write to ${selected.path}.');
       return;
     }
 
-    print('\n⚙️  ${"Provisioning drive...".grey}');
+    if (isUpgrade) {
+      print('\n✨ ${"UPGRADE MODE:".black.onCyan} This drive already has a VCS marker.');
+      print('Metadata will be updated to v0.3 (Host, Date, OS) without touching your repositories.');
+      stdout.write('Proceed with metadata upgrade? (y/N): ');
+    } else {
+      print('\n⚠️  ${"PROVISIONING MODE:".black.onYellow} You are about to prepare a new VCS drive.');
+      print('This will create the marker and the ${remoteReposDir.cyan} directory.');
+      stdout.write('Confirm provisioning? (y/N): ');
+    }
+
+    final confirm = stdin.readLineSync()?.toLowerCase();
+    if (confirm != 'y' && confirm != 'yes') {
+      print('🚫 Operation cancelled.');
+      return;
+    }
+
+    print('\n⚙️  ${isUpgrade ? "Updating metadata..." : "Provisioning drive..."}');
 
     try {
-      await File(p.join(selected.path, driveMarkerFile)).writeAsString(
-        'portable-vcs\nversion=1.0\ncreatedAt=${DateTime.now().toIso8601String()}\n',
-        flush: true,
-      );
+      final hostname = Platform.localHostname;
+      final metadata = [
+        'portable-vcs',
+        'version=0.3',
+        'provisionedAt=${DateTime.now().toIso8601String()}',
+        'provisionedBy=$hostname',
+        'os=${Platform.operatingSystem}',
+      ].join('\n');
+
+      await markerFile.writeAsString(metadata, flush: true);
 
       final repoDir = Directory(p.join(selected.path, remoteReposDir));
       if (!repoDir.existsSync()) {
         await repoDir.create(recursive: true);
       }
 
-      print('\n✅ ${"Drive prepared successfully!".green.bold}');
-      print('📍 Location: ${selected.path.cyan}');
-      print('📦 Repositories will be stored in: ${p.join(selected.path, remoteReposDir).grey}\n');
+      if (isUpgrade) {
+        print('\n✅ ${"Upgrade successful!".green.bold}');
+        print('📌 ${"New Identity:".grey} Linked to ${hostname.cyan}\n');
+      } else {
+        print('\n✅ ${"Vault prepared successfully!".green.bold}');
+        print('📂 ${"Storage:".grey} ${repoDir.path}\n');
+      }
+      
     } catch (e) {
-      print('❌ ${"Failed to provision drive:".red} $e');
+      print('❌ ${"Critical failure:".red} $e');
+    }
+  }
+
+  bool _checkWriteAccess(String path) {
+    try {
+      final testFile = File(p.join(path, '.vcs_test_${DateTime.now().millisecondsSinceEpoch}'));
+      testFile.writeAsStringSync('test');
+      testFile.deleteSync();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -734,14 +779,12 @@ class PortableVcs {
       Map<String, String> lastFingerprint = {};
       if (trackData.logs.isNotEmpty) {
         final lastEntry = trackData.logs.first;
-        
         try {
           final lastSnapshot = await readSnapshot(
             context,
             lastEntry.id,
             password: finalPassword,
           );
-          
           if (lastSnapshot != null) {
             lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
           }
@@ -764,31 +807,18 @@ class PortableVcs {
       print('');
 
       int added = 0, modified = 0, deleted = 0;
-
       for (var change in changes) {
         final tag = change.toTag();
-        String prefix = '';
-        
-        if (tag.startsWith('+')) {
-          prefix = '[+]'.green;
-          added++;
-        } else if (tag.startsWith('-')) {
-          prefix = '[-]'.red;
-          deleted++;
-        } else {
-          prefix = '[~]'.yellow;
-          modified++;
-        }
-        
-        print('  $prefix ${change.path}');
+        if (tag.startsWith('+')) { added++; print('  ${"[+]".green} ${change.path}'); }
+        else if (tag.startsWith('-')) { deleted++; print('  ${"[-]".red} ${change.path}'); }
+        else { modified++; print('  ${"[~]".yellow} ${change.path}'); }
       }
 
       print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
       
       stdout.write('\nDo you want to proceed with the push? (y/N): ');
-      String? confirm = stdin.readLineSync()?.trim().toLowerCase();
-      if (confirm != 'y' && confirm != 'yes') {
-        print('🚫 Push aborted by user.');
+      if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') {
+        print('🚫 Push aborted.');
         return;
       }
 
@@ -806,8 +836,19 @@ class PortableVcs {
       final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
       if (!snapshotsDir.existsSync()) await snapshotsDir.create(recursive: true);
 
-      final snapshotFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
-      await snapshotFile.writeAsBytes(encrypted, flush: true);
+      final tempFile = File(p.join(snapshotsDir.path, '.tmp_$snapshotId.vcs'));
+      final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
+
+      try {
+        print('💾 Writing to drive...');
+        await tempFile.writeAsBytes(encrypted, flush: true);
+
+        await tempFile.rename(finalFile.path);
+      } catch (e) {
+        print('❌ Critical error writing snapshot: $e');
+        if (tempFile.existsSync()) await tempFile.delete();
+        return;
+      }
 
       final entry = SnapshotLogEntry(
         id: snapshotId,
@@ -828,13 +869,21 @@ class PortableVcs {
         tracks: updatedTracks,
       );
 
+      final metaFile = File(p.join(context.remoteRepoDir.path, remoteMetaFileName));
+
       await _atomicWriteString(
-        File(p.join(context.remoteRepoDir.path, remoteMetaFileName)),
+        metaFile,
         const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
       );
 
       print('✅ Snapshot saved successfully in track ${targetTrackName.cyan}. ID=$snapshotId');
     });
+  }
+
+  Future<void> _atomicWriteString(File file, String content) async {
+    final temp = File('${file.path}.tmp');
+    await temp.writeAsString(content, flush: true);
+    await temp.rename(file.path);
   }
 
   Future<void> log({LogViewMode mode = LogViewMode.summary, String? track}) async {
@@ -1168,15 +1217,18 @@ class PortableVcs {
     var okCount = 0;
     var warnCount = 0;
 
-    void check(bool ok, String label, {String? details}) {
+    void check(bool ok, String label, {String? details, bool isInfo = false}) {
       if (ok) {
         okCount++;
         print('  ${"✔".green} ${label.green}');
       } else {
-        warnCount++;
-        print('  ${"⚠".yellow} ${label.yellow}');
+        if (isInfo) {
+          print('  ${"ℹ".blue} ${label.blue}');
+        } else {
+          warnCount++;
+          print('  ${"⚠".yellow} ${label.yellow}');
+        }
       }
-
       if (details != null && details.trim().isNotEmpty) {
         print('      ${details}');
       }
@@ -1186,183 +1238,109 @@ class PortableVcs {
     print('─' * 60);
 
     final localInitialized = _localRepoFile.existsSync();
-    check(
-      localInitialized,
-      'Local repository metadata',
-      details: localInitialized ? _localRepoFile.path : 'File not found: ${_localRepoFile.path}',
-    );
+    check(localInitialized, 'Local repository metadata', 
+      details: localInitialized ? _localRepoFile.path : 'Run "vcs init" to start.');
 
     final gitignoreExists = _gitignoreFile.existsSync();
-    check(
-      gitignoreExists,
-      '.gitignore detected',
-      details: gitignoreExists ? _gitignoreFile.path : 'No .gitignore in current project root',
-    );
+    check(gitignoreExists, '.gitignore detected', 
+      details: gitignoreExists ? null : 'VCS will snapshot EVERYTHING without a .gitignore.');
 
     final usb = await findUsbDrive();
     if (usb == null) {
-      print('\n${"USB / Remote storage".yellow}');
+      print('\n${"USB / Remote storage".red}');
       print('─' * 60);
-      check(false, 'Prepared USB drive available', details: 'No drive marker found.');
-
-      print('\n${"Summary".yellow}');
-      print('─' * 60);
-      print('  ${"OK:".green} $okCount');
-      print('  ${"Warnings:".yellow} $warnCount');
-      print('');
-      return;
-    }
-
-    print('\n${"USB / Remote storage".yellow}');
-    print('─' * 60);
-
-    check(true, 'Prepared USB drive available', details: usb.path);
-
-    final reposDir = Directory(p.join(usb.path, remoteReposDir));
-    check(
-      reposDir.existsSync(),
-      'Repositories directory exists',
-      details: reposDir.path,
-    );
-
-    if (!localInitialized) {
-      print('\n${"Binding / Remote repository".yellow}');
-      print('─' * 60);
-      check(
-        false,
-        'Project is not initialized locally',
-        details: 'Remote binding checks stop here because .vcs/repo.json is missing.',
-      );
-
-      print('\n${"Summary".yellow}');
-      print('─' * 60);
-      print('  ${"OK:".green} $okCount');
-      print('  ${"Warnings:".yellow} $warnCount');
-      print('');
-      return;
-    }
-
-    print('\n${"Binding / Remote repository".yellow}');
-    print('─' * 60);
-
-    final localMeta = jsonDecode(await _localRepoFile.readAsString()) as Map<String, dynamic>;
-    final repoId = localMeta['repo_id']?.toString();
-
-    if (repoId == null || repoId.isEmpty) {
-      check(false, 'Local repo_id is valid', details: 'repo_id is missing or empty.');
-      print('\n${"Summary".yellow}');
-      print('─' * 60);
-      print('  ${"OK:".green} $okCount');
-      print('  ${"Warnings:".yellow} $warnCount');
-      print('');
-      return;
-    }
-
-    check(true, 'Local repo_id is valid', details: repoId);
-
-    final remoteRepoDir = Directory(p.join(usb.path, remoteReposDir, repoId));
-    if (!remoteRepoDir.existsSync()) {
-      check(false, 'Remote repository exists on USB', details: remoteRepoDir.path);
-
-      print('\n${"Summary".yellow}');
-      print('─' * 60);
-      print('  ${"OK:".green} $okCount');
-      print('  ${"Warnings:".yellow} $warnCount');
-      print('');
-      return;
-    }
-
-    check(true, 'Remote repository exists on USB', details: remoteRepoDir.path);
-
-    final metaFile = File(p.join(remoteRepoDir.path, remoteMetaFileName));
-    if (!metaFile.existsSync()) {
-      check(false, 'Remote metadata file exists', details: metaFile.path);
-
-      print('\n${"Summary".yellow}');
-      print('─' * 60);
-      print('  ${"OK:".green} $okCount');
-      print('  ${"Warnings:".yellow} $warnCount');
-      print('');
-      return;
-    }
-
-    check(true, 'Remote metadata file exists', details: metaFile.path);
-
-    RepoMeta meta;
-    try {
-      final jsonMap = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
-      meta = RepoMeta.fromJson(jsonMap);
-      check(true, 'Remote metadata is readable');
-    } catch (e) {
-      check(false, 'Remote metadata is readable', details: e.toString());
-
-      print('\n${"Summary".yellow}');
-      print('─' * 60);
-      print('  ${"OK:".green} $okCount');
-      print('  ${"Warnings:".yellow} $warnCount');
-      print('');
-      return;
-    }
-
-    print('\n${"Snapshots".yellow}');
-    print('─' * 60);
-
-    check(
-      meta.logs.isNotEmpty,
-      'Repository has snapshots',
-      details: 'Count: ${meta.logs.length}',
-    );
-
-    final lockFile = File(p.join(remoteRepoDir.path, lockFileName));
-    if (lockFile.existsSync()) {
-      final age = DateTime.now().difference(lockFile.statSync().modified);
-      check(
-        false,
-        'No active lock file',
-        details: 'Lock present: ${lockFile.path} (age ${age.inMinutes} min)',
-      );
+      check(false, 'Drive availability', details: 'No drive with "$driveMarkerFile" found.');
     } else {
-      check(true, 'No active lock file');
-    }
+      print('\n${"Drive Identity".yellow}');
+      print('─' * 60);
+      
+      final markerFile = File(p.join(usb.path, driveMarkerFile));
+      try {
+        final lines = await markerFile.readAsLines();
 
-    final snapshotsDir = Directory(p.join(remoteRepoDir.path, 'snapshots'));
-    check(
-      snapshotsDir.existsSync(),
-      'Snapshots directory exists',
-      details: snapshotsDir.path,
-    );
-
-    if (meta.logs.isNotEmpty) {
-      final missing = <String>[];
-      for (final entry in meta.logs) {
-        final file = File(p.join(remoteRepoDir.path, 'snapshots', entry.fileName));
-        if (!file.existsSync()) {
-          missing.add(entry.fileName);
+        String? findValue(String key) {
+          try {
+            final line = lines.firstWhere((l) => l.startsWith('$key='), orElse: () => '');
+            return line.contains('=') ? line.split('=')[1] : null;
+          } catch (_) { return null; }
         }
+
+        final provisionedBy = findValue('provisionedBy');
+        final provisionedAt = findValue('provisionedAt');
+
+        if (provisionedBy != null && provisionedAt != null) {
+          check(true, 'VCS Marker valid', 
+            details: 'Linked to host: ${provisionedBy.cyan} (at $provisionedAt)');
+        } else {
+          check(false, 'Legacy Marker detected', isInfo: true,
+            details: 'This drive is v0.1. Run "vcs setup" to upgrade metadata.');
+        }
+      } catch (e) {
+        check(false, 'VCS Marker readable', details: 'Marker file is corrupt or unreadable.');
       }
 
-      if (missing.isEmpty) {
-        check(true, 'All snapshot files referenced in metadata exist');
-      } else {
-        check(
-          false,
-          'All snapshot files referenced in metadata exist',
-          details: 'Missing: ${missing.join(', ')}',
-        );
+      final reposDir = Directory(p.join(usb.path, remoteReposDir));
+      check(reposDir.existsSync(), 'Vault directory structure', details: reposDir.path);
+    }
+
+    if (localInitialized && usb != null) {
+      print('\n${"Remote Repository Integrity".yellow}');
+      print('─' * 60);
+
+      try {
+        final localMeta = jsonDecode(await _localRepoFile.readAsString());
+        final repoId = localMeta['repo_id']?.toString() ?? '';
+        final remoteRepoDir = Directory(p.join(usb.path, remoteReposDir, repoId));
+
+        if (!remoteRepoDir.existsSync()) {
+          check(false, 'Remote repository binding', details: 'Repo ID "$repoId" not found on this drive.');
+        } else {
+          final metaFile = File(p.join(remoteRepoDir.path, remoteMetaFileName));
+          if (!metaFile.existsSync()) {
+            check(false, 'Metadata sync', details: 'Meta file missing in remote.');
+          } else {
+            final meta = RepoMeta.fromJson(jsonDecode(await metaFile.readAsString()));
+            check(true, 'Metadata integrity', details: '${meta.logs.length} snapshots in history.');
+
+            final snapshotsDir = Directory(p.join(remoteRepoDir.path, 'snapshots'));
+            if (snapshotsDir.existsSync()) {
+              final physicalFiles = snapshotsDir.listSync().whereType<File>().map((f) => p.basename(f.path)).toSet();
+              final expectedFiles = meta.logs.map((e) => e.fileName).toSet();
+
+              final tempFiles = physicalFiles.where((f) => f.startsWith('.tmp_')).toList();
+              if (tempFiles.isNotEmpty) {
+                check(false, 'Clean environment', details: 'Found ${tempFiles.length} interrupted temporary files.');
+              } else {
+                check(true, 'No interrupted transactions');
+              }
+
+              final orphans = physicalFiles.where((f) => !expectedFiles.contains(f) && !f.startsWith('.tmp_')).toList();
+              if (orphans.isNotEmpty) {
+                check(false, 'Storage optimization', details: 'Found ${orphans.length} orphan files (garbage).');
+              } else {
+                check(true, 'Storage optimized (no orphans)');
+              }
+            }
+          }
+        }
+      } catch (e) {
+        check(false, 'Metadata parsing', details: e.toString());
       }
     }
 
     print('\n${"Summary".yellow}');
     print('─' * 60);
     print('  ${"OK:".green} $okCount');
-    print('  ${"Warnings:".yellow} $warnCount');
+    print('  ${"Warnings/Errors:".red} $warnCount');
 
     if (warnCount == 0) {
-      print('  ${"Status: healthy".green}');
+      print('\n✨ ${"Everything looks perfect. Your portable vault is healthy.".green.bold}');
     } else {
-      print('  ${"Status: attention needed".yellow}');
+      print('\n⚠️  ${"Diagnostics found issues. Review the warnings above.".yellow.bold}');
+      if (localInitialized && usb != null) {
+        print('   ${"Tip: Run 'vcs prune' to clean orphans or 'vcs setup' to update the drive.".grey}');
+      }
     }
-
     print('');
   }
 
@@ -1447,96 +1425,116 @@ class PortableVcs {
     print('');
   }
 
-  Future<void> prune({int? keep, int? olderThanDays}) async {
+  Future<void> prune({int? keep, int? olderThanDays, bool garbage = false}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    if (context.remoteMeta.logs.isEmpty) {
-      print('ℹ️ No snapshots to prune.');
-      return;
+    final referencedFiles = <String>{};
+    for (final track in context.remoteMeta.tracks.values) {
+      for (final entry in track.logs) {
+        referencedFiles.add(entry.fileName);
+      }
     }
 
-    if (keep == null && olderThanDays == null) {
-      print('❌ Use --keep <n> and/or --older-than <days>.');
-      return;
-    }
+    final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
+    final toDeleteFiles = <File>[];
+    final logs = List<SnapshotLogEntry>.from(context.remoteMeta.tracks[context.remoteMeta.activeTrack]?.logs ?? []);
 
-    final now = DateTime.now().toUtc();
-    final logs = List<SnapshotLogEntry>.from(context.remoteMeta.logs);
-    final toDeleteIds = <String>{};
-
-    if (olderThanDays != null) {
-      for (final entry in logs) {
-        final created = DateTime.tryParse(entry.createdAt)?.toUtc();
-        if (created == null) continue;
-
-        final age = now.difference(created).inDays;
-        if (age > olderThanDays) {
-          toDeleteIds.add(entry.id);
+    if (garbage && snapshotsDir.existsSync()) {
+      print('🔍 ${"Scanning for garbage files...".grey}');
+      final physicalFiles = snapshotsDir.listSync().whereType<File>();
+      
+      for (final file in physicalFiles) {
+        final name = p.basename(file.path);
+        // Si es un temporal o si no está en ningún track, es basura
+        if (name.startsWith('.tmp_') || !referencedFiles.contains(name)) {
+          toDeleteFiles.add(file);
         }
       }
     }
 
-    if (keep != null && keep >= 0 && logs.length > keep) {
-      for (var i = keep; i < logs.length; i++) {
-        toDeleteIds.add(logs[i].id);
+    final toDeleteFromLogs = <SnapshotLogEntry>[];
+    if (keep != null || olderThanDays != null) {
+      if (logs.isEmpty) {
+        print('ℹ️ No snapshots in active track to prune by history.');
+      } else {
+        final now = DateTime.now().toUtc();
+        final toDeleteIds = <String>{};
+
+        if (olderThanDays != null) {
+          for (final entry in logs) {
+            final created = DateTime.tryParse(entry.createdAt)?.toUtc();
+            if (created != null && now.difference(created).inDays > olderThanDays) {
+              toDeleteIds.add(entry.id);
+            }
+          }
+        }
+
+        if (keep != null && keep >= 0 && logs.length > keep) {
+          for (var i = keep; i < logs.length; i++) {
+            toDeleteIds.add(logs[i].id);
+          }
+        }
+
+        if (toDeleteIds.length >= logs.length && logs.isNotEmpty) {
+          toDeleteIds.remove(logs.first.id);
+        }
+
+        for (var entry in logs) {
+          if (toDeleteIds.contains(entry.id)) {
+            toDeleteFromLogs.add(entry);
+            final f = File(p.join(snapshotsDir.path, entry.fileName));
+            if (f.existsSync()) toDeleteFiles.add(f);
+          }
+        }
       }
     }
 
-    if (toDeleteIds.length >= logs.length && logs.isNotEmpty) {
-      toDeleteIds.remove(logs.first.id);
-    }
-
-    if (toDeleteIds.isEmpty) {
-      print('ℹ️ Nothing to prune.');
+    if (toDeleteFiles.isEmpty && toDeleteFromLogs.isEmpty) {
+      print('✨ ${"Everything is clean. Nothing to prune.".green}');
       return;
     }
 
-    final toDelete = logs.where((e) => toDeleteIds.contains(e.id)).toList();
-
-    print('Snapshots selected for deletion:');
-    for (final entry in toDelete) {
-      print('  ${entry.id} | ${entry.createdAt} | ${entry.message}');
+    print('\n${"PREPARING CLEANUP:".bold}');
+    if (toDeleteFromLogs.isNotEmpty) {
+      print('📦 Snapshots to remove from history: ${toDeleteFromLogs.length}');
+    }
+    if (toDeleteFiles.isNotEmpty) {
+      print('🗑️  Physical files to delete: ${toDeleteFiles.length}');
     }
 
-    stdout.write('Delete ${toDelete.length} snapshots? (y/N): ');
-    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') {
-      print('Cancelled.');
-      return;
-    }
+    stdout.write('\nProceed with deletion? (y/N): ');
+    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') return;
 
     await _withLock(context.remoteRepoDir, () async {
-      for (final entry in toDelete) {
-        final file = File(
-          p.join(context.remoteRepoDir.path, 'snapshots', entry.fileName),
-        );
-        if (file.existsSync()) {
-          file.deleteSync();
+      for (final file in toDeleteFiles) {
+        try {
+          await file.delete();
+        } catch (e) {
+          print('⚠️ Could not delete ${file.path}: $e');
         }
       }
 
-      final remaining = logs.where((e) => !toDeleteIds.contains(e.id)).toList();
+      if (toDeleteFromLogs.isNotEmpty) {
+        final toDeleteIds = toDeleteFromLogs.map((e) => e.id).toSet();
+        final remaining = logs.where((e) => !toDeleteIds.contains(e.id)).toList();
 
-      final updatedTracks = Map<String, TrackState>.from(
-        context.remoteMeta.tracks,
-      );
+        final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+        updatedTracks[context.remoteMeta.activeTrack] = TrackState(logs: remaining);
 
-      updatedTracks[context.remoteMeta.activeTrack] = TrackState(
-        logs: remaining,
-      );
+        final updatedMeta = context.remoteMeta.copyWith(
+          updatedAt: DateTime.now().toUtc().toIso8601String(),
+          tracks: updatedTracks,
+        );
 
-      final updatedMeta = context.remoteMeta.copyWith(
-        updatedAt: DateTime.now().toUtc().toIso8601String(),
-        tracks: updatedTracks,
-      );
+        await _atomicWriteString(
+          File(p.join(context.remoteRepoDir.path, remoteMetaFileName)),
+          const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
+        );
+      }
 
-      await _atomicWriteString(
-        File(p.join(context.remoteRepoDir.path, remoteMetaFileName)),
-        const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
-      );
-
-      print('✅ Pruned ${toDelete.length} snapshots.');
-      print('ℹ️ Remaining snapshots in track "${context.remoteMeta.activeTrack}": ${remaining.length}');
+      print('\n✅ ${"Cleanup complete!".green.bold}');
+      if (toDeleteFiles.isNotEmpty) print('🗑️  Freed storage for ${toDeleteFiles.length} files.');
     });
   }
 
@@ -2105,6 +2103,11 @@ class PortableVcs {
   }) async {
     final allPaths = <String>{...left.keys, ...right.keys}.toList()..sort();
 
+    bool _isBinary(Uint8List bytes) {
+      if (bytes.isEmpty) return false;
+      return bytes.take(1024).contains(0);
+    }
+
     if (allPaths.isEmpty) {
       print('ℹ️ ${"No files to compare.".yellow}');
       return;
@@ -2113,6 +2116,7 @@ class PortableVcs {
     final newFiles = <String>[];
     final deletedFiles = <String>[];
     final modifiedFiles = <String>[];
+    final binaryModified = <String>{};
 
     for (final path in allPaths) {
       final a = left[path];
@@ -2126,6 +2130,13 @@ class PortableVcs {
       if (a != null && b == null) {
         deletedFiles.add(path);
         continue;
+      }
+
+      if (a != null && b != null && _filesDiffer(a, b)) {
+        modifiedFiles.add(path);
+        if (_isBinary(a) || _isBinary(b)) {
+          binaryModified.add(path);
+        }
       }
 
       if (a == null || b == null) {
@@ -2179,6 +2190,13 @@ class PortableVcs {
         final b = right[path]!;
 
         print('${'[MOD]'.yellow} ${path.cyan}');
+
+        if (binaryModified.contains(path)) {
+          print('  ${"Binary file changes detected. Content diff skipped.".grey}');
+          print('─' * 60);
+          continue;
+        }
+
         print('─' * 60);
 
         final aText = _normalizeUtf8BytesForComparison(a);
@@ -2670,17 +2688,6 @@ class PortableVcs {
     }
   }
 
-  Future<void> _atomicWriteString(File file, String content) async {
-    final temp = File('${file.path}.tmp');
-    await temp.parent.create(recursive: true);
-    await temp.writeAsString(content, flush: true);
-
-    if (file.existsSync()) {
-      file.deleteSync();
-    }
-    temp.renameSync(file.path);
-  }
-
   String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(2)} KB';
@@ -2805,7 +2812,28 @@ class PortableVcs {
     }
 
     final remoteExists = await _gitRemoteExists(remote);
-    if (!remoteExists) {
+    if (remoteExists) {
+      print('📡 ${"Fetching remote status...".grey}');
+      await _gitFetch(remote);
+      
+      final status = await _checkRemoteStatus(remote, branch);
+      
+      if (status == RemoteStatus.ahead) {
+        print('\n⚠️  ${"CONFLICT WARNING:".black.onYellow}');
+        print('The remote branch "$remote/$branch" has changes that you don\'t have locally.');
+        print('If you publish now, the Git push will fail.');
+        print('👉 ${"Recommendation:".bold} Run "git pull $remote $branch" before publishing.');
+        
+        stdout.write('\nDo you want to ignore this and try anyway? (y/N): ');
+        if ((stdin.readLineSync() ?? '').toLowerCase() != 'y') return;
+        
+      } else if (status == RemoteStatus.diverged) {
+        print('\n🚨 ${"CRITICAL: BRANCHES HAVE DIVERGED".white.onRed}');
+        print('Both your local and remote branches have different new commits.');
+        print('Publishing is highly discouraged until you merge.');
+        return;
+      }
+    } else {
       print('ℹ️ ${'Notice:'.yellow} Remote "$remote" not found. The snapshot will be committed locally but not pushed.');
     }
 
@@ -2894,11 +2922,39 @@ class PortableVcs {
         print('ℹ️ Commit created locally. Push skipped by user.');
         return;
       }
-      await _gitPush(remote, branch);
-      print('✅ Snapshot ${entry.id} published and pushed to Git.');
+      
+      try {
+        await _gitPush(remote, branch);
+        print('✅ Snapshot ${entry.id} published and pushed to Git.');
+      } catch (e) {
+        print('\n❌ ${"PUSH FAILED:".red}');
+        print('The commit was created locally, but couldn\'t be pushed.');
+        print('Check for remote changes that might have occurred during the process.');
+      }
     } else {
       print('✅ Snapshot ${entry.id} published to local Git (no remote configured).');
     }
+  }
+
+  Future<RemoteStatus> _checkRemoteStatus(String remote, String branch) async {
+    try {
+      final local = (await Process.run('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
+      final remoteRef = (await Process.run('git', ['rev-parse', '$remote/$branch'])).stdout.toString().trim();
+      
+      if (local == remoteRef) return RemoteStatus.synced;
+      
+      final base = (await Process.run('git', ['merge-base', 'HEAD', '$remote/$branch'])).stdout.toString().trim();
+      
+      if (base == local) return RemoteStatus.ahead;
+      if (base == remoteRef) return RemoteStatus.behind;
+      return RemoteStatus.diverged;
+    } catch (_) {
+      return RemoteStatus.unknown;
+    }
+  }
+
+  Future<void> _gitFetch(String remote) async {
+    await Process.run('git', ['fetch', remote]);
   }
 
   Future<List<String>> _runSecurityScanner() async {
@@ -2953,56 +3009,60 @@ class PortableVcs {
     RepoContext context,
     DecryptedSnapshot snapshot,
   ) async {
-    final tempRestoreDir = await Directory(
-      p.join(_localMetaDir.path, 'tmp_restore_${DateTime.now().millisecondsSinceEpoch}'),
-    ).create(recursive: true);
-
+    print('📥 ${"Restoring snapshot directly from memory...".grey}');
     final backupDir = Directory(
-      p.join(_localMetaDir.path, 'backup_before_git_publish_${DateTime.now().millisecondsSinceEpoch}'),
+      p.join(_localMetaDir.path, 'backup_before_publish_${DateTime.now().millisecondsSinceEpoch}'),
     );
 
     try {
-      await _extractZipToDirectory(snapshot.zipBytes, tempRestoreDir);
-
       await _createTrackedBackup(backupDir);
-
       final currentTracked = await _listTrackedFiles(_cwd);
+      final archive = ZipDecoder().decodeBytes(snapshot.zipBytes);
+
       for (final rel in currentTracked) {
         final file = File(p.join(_cwd.path, rel));
         if (file.existsSync()) {
-          file.deleteSync();
-        }
-      }
-
-      await _copyTrackedFiles(tempRestoreDir, _cwd);
-    } catch (e) {
-      print('❌ Restore into working tree failed: $e');
-      print('⚠️ Attempting recovery from local backup...');
-
-      try {
-        final currentTracked = await _listTrackedFiles(_cwd);
-        for (final rel in currentTracked) {
-          final file = File(p.join(_cwd.path, rel));
-          if (file.existsSync()) {
-            file.deleteSync();
+          try {
+            await file.delete();
+          } catch (e) {
+            print('⚠️  Note: Could not delete $rel, will attempt overwrite.');
           }
         }
+      }
 
+      for (final file in archive) {
+        final path = p.join(_cwd.path, file.name);
+        if (file.isFile) {
+          final outFile = File(path);
+          await outFile.parent.create(recursive: true);
+          
+          // Escribimos directamente los bytes decodificados
+          final data = file.content as List<int>;
+          await outFile.writeAsBytes(data, flush: true);
+        } else {
+          await Directory(path).create(recursive: true);
+        }
+      }
+
+      print('✅ ${"Working tree updated successfully.".green}');
+
+      if (backupDir.existsSync()) {
+        await backupDir.delete(recursive: true).catchError((_) => null);
+      }
+
+    } catch (e) {
+      print('❌ Restore failed: $e');
+      print('⚠️  Attempting recovery from safety backup...');
+
+      try {
         if (backupDir.existsSync()) {
           await _copyTrackedFiles(backupDir, _cwd);
-          print('✅ Previous working tree recovered from backup.');
-        } else {
-          print('❌ Recovery backup not found.');
+          print('✅ Recovery successful.');
         }
       } catch (recoveryError) {
-        print('❌ Recovery failed: $recoveryError');
+        print('❌ Critical: Recovery failed. Check $backupDir');
       }
-
       rethrow;
-    } finally {
-      if (tempRestoreDir.existsSync()) {
-        tempRestoreDir.deleteSync(recursive: true);
-      }
     }
   }
 
@@ -4393,23 +4453,28 @@ class PortableVcs {
         if (result.exitCode == 0) {
           print('✅ ${"Changes restored and removed from stash.".green}');
         } else {
-          print('❌ ${"Failed to pop:".red} ${result.stderr}');
+          print('❌ ${"Conflict detected or Pop failed:".red}');
+          print('${result.stderr.toString().grey}');
+          print('\n💡 ${"Tip: Resolve conflicts manually or check 'git status'".grey}');
         }
         return;
       }
 
-      print('⏳ ${"Saving current Git working tree...".yellow}');
+      print('⏳ ${"Saving current Git working tree (including new files)...".yellow}');
       final timestamp = DateTime.now().toString().split('.')[0];
+
       final result = await Process.run(
         'git', 
-        ['stash', 'push', '-m', 'VCS Auto-stash at $timestamp'], 
+        ['stash', 'push', '--include-untracked', '-m', 'VCS Auto-stash at $timestamp'], 
         runInShell: true
       );
 
-      if (result.stdout.toString().contains('No local changes to save')) {
+      final out = result.stdout.toString();
+      if (out.contains('No local changes to save')) {
         print('✨ ${"Nothing to save, tree is already clean.".green}');
       } else {
-        print('✅ ${"Working tree cleaned and saved.".green}');
+        print('✅ ${"Working tree DEEP CLEANED and saved.".green}');
+        print('   ${"New files (untracked) were also stashed.".grey}');
       }
 
     } catch (e) {
@@ -4586,8 +4651,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand(
       'prune',
       ArgParser()
-        ..addOption('keep')
-        ..addOption('older-than'),
+        ..addOption('keep', abbr: 'k')
+        ..addOption('older-than', abbr: 'd')
+        ..addFlag('garbage', abbr: 'g', negatable: false, help: 'Remove orphan and temp files.'),
     )
     ..addCommand(
       'git-prepare',
@@ -4757,7 +4823,14 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         final olderThan = pruneCmd['older-than'] != null
             ? int.tryParse(pruneCmd['older-than'].toString())
             : null;
-        await app.prune(keep: keep, olderThanDays: olderThan);
+
+        final garbage = pruneCmd['garbage'] as bool? ?? false;
+
+        await app.prune(
+          keep: keep, 
+          olderThanDays: olderThan, 
+          garbage: garbage
+        );
         break;
       case 'git-prepare':
         final cmd = result.command!;
