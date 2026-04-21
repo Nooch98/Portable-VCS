@@ -51,6 +51,23 @@ class PortableVcs {
   File get _localRepoFile => File(p.join(_localMetaDir.path, localRepoFileName));
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
 
+  String getFullVersion() {
+    const String baseVersion = '0.2.0-Experimental';
+    String osName = 'Unknown';
+    if (Platform.isWindows) osName = 'Windows';
+    else if (Platform.isLinux) osName = 'Linux';
+    else if (Platform.isMacOS) osName = 'macOS';
+    return '🚀 Portable VCS Version $baseVersion ($osName)';
+  }
+
+  void showVersion() {
+    final String v = getFullVersion();
+    print('\n' + '─' * 45);
+    print('  ${v.cyan.bold}');
+    print('  ${'Built with Dart ${Platform.version.split(" ").first}'.grey}');
+    print('─' * 45 + '\n');
+  }
+
   void showHelp() {
     const int col = 38;
 
@@ -89,7 +106,8 @@ class PortableVcs {
     print('  ${'ui'.green.padRight(col)} Launch the Web Dashboard (Split-view diff support).');
     print('  ${'status'.green.padRight(col)} Compare local tree vs latest of the active track.');
     print('  ${'summary'.green.padRight(col)} Summary of messages to help create Git/GitHub commits.');
-    print('  ${'diff [id1] [id2]'.green.padRight(col)} Compare working tree vs latest or two specific IDs.');
+    print('  ${'diff'.green} Compare latest snapshot vs current live files');
+    print('  ${'diff [id1] [id2|.]'.green.padRight(col)} Compare snapshots or snapshot vs working tree.');
     print('    ${'-t, --tracks <tk1> <tk2>'.grey.padRight(col - 4)} Compare the last snapshot between two tracks.');
     print('  ${'log'.green.padRight(col)} Show history of snapshots.');
     print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Show log from a specific track.');
@@ -636,8 +654,9 @@ class PortableVcs {
         leftFiles = await _decodeSnapshotFiles(snapshot);
         rightFiles = await _readCurrentProjectFiles();
         leftLabel = 'snapshot:$latestId (latest)';
-        rightLabel = 'working-tree';
+        rightLabel = 'working-tree (live)';
       } 
+
       else if (args.length == 1) {
         final id = resolveId(args[0]);
         if (id == null) return;
@@ -648,26 +667,34 @@ class PortableVcs {
         leftFiles = await _decodeSnapshotFiles(snapshot);
         rightFiles = await _readCurrentProjectFiles();
         leftLabel = 'snapshot:$id';
-        rightLabel = 'working-tree';
+        rightLabel = 'working-tree (live)';
       } 
-      else if (args.length == 2) {
-        final idLeft = resolveId(args[0]);
-        final idRight = resolveId(args[1]);
-        if (idLeft == null || idRight == null) return;
 
+      else if (args.length == 2) {
+        final String argLeft = args[0];
+        final String argRight = args[1];
+
+        final idLeft = resolveId(argLeft);
+        if (idLeft == null) return;
         final leftSnapshot = await readSnapshot(context, idLeft, password: finalPassword);
         if (leftSnapshot == null) return;
-
-        final rightSnapshot = await readSnapshot(context, idRight, password: finalPassword);
-        if (rightSnapshot == null) return;
-
         leftFiles = await _decodeSnapshotFiles(leftSnapshot);
-        rightFiles = await _decodeSnapshotFiles(rightSnapshot);
         leftLabel = 'snapshot:$idLeft';
-        rightLabel = 'snapshot:$idRight';
+
+        if (argRight == '.') {
+          rightFiles = await _readCurrentProjectFiles();
+          rightLabel = 'working-tree (live)';
+        } else {
+          final idRight = resolveId(argRight);
+          if (idRight == null) return;
+          final rightSnapshot = await readSnapshot(context, idRight, password: finalPassword);
+          if (rightSnapshot == null) return;
+          rightFiles = await _decodeSnapshotFiles(rightSnapshot);
+          rightLabel = 'snapshot:$idRight';
+        }
       } 
       else {
-        print('❌ Usage: vcs diff [track_or_id_1] [track_or_id_2]'.red);
+        print('❌ Usage: vcs diff [id_or_track_1] [id_or_track_2 | .]'.red);
         return;
       }
 
@@ -677,6 +704,7 @@ class PortableVcs {
         leftLabel: leftLabel,
         rightLabel: rightLabel,
       );
+      
     } catch (e) {
       print('❌ Error during diff: $e');
     }
@@ -4607,7 +4635,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     final result = parser.parse(args);
     switch (result.command?.name) {
       case 'version':
-        print(version.cyan);
+        app.showVersion();
         break;
       case 'setup':
         await app.setupDrive();
