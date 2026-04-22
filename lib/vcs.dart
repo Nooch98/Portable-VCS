@@ -10,6 +10,7 @@ import 'package:args/args.dart';
 import 'package:crypto/crypto.dart' as hash;
 import 'package:cryptography/cryptography.dart' as crypto_alg;
 import 'package:path/path.dart' as p;
+import 'package:http/http.dart' as http;
 import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
 import 'package:vcs/models/diff_line.dart';
@@ -52,12 +53,107 @@ class PortableVcs {
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
 
   String getFullVersion() {
-    const String baseVersion = '0.3.0-Experimental';
+    const String baseVersion = '0.3.1-Experimental';
     String osName = 'Unknown';
     if (Platform.isWindows) osName = 'Windows';
     else if (Platform.isLinux) osName = 'Linux';
     else if (Platform.isMacOS) osName = 'macOS';
     return '🚀 Portable VCS Version $baseVersion ($osName)';
+  }
+
+  Future<void> update() async {
+    const String owner = 'Nooch98';
+    const String repo = 'Portable-VCS';
+    const String branch = 'main';
+    const String zipUrl = 'https://github.com/$owner/$repo/archive/refs/heads/$branch.zip';
+    const String rawVersionUrl = 'https://raw.githubusercontent.com/$owner/$repo/$branch/lib/vcs.dart';
+
+    print('\n✨ ${"VCS REMOTE UPDATE & COMPILE".black.onCyan}');
+
+    try {
+      print('🔍 Checking for updates on GitHub ($branch)...');
+      final versionResponse = await http.get(Uri.parse(rawVersionUrl));
+      
+      if (versionResponse.statusCode == 200) {
+        final remoteContent = versionResponse.body;
+        final versionRegex = RegExp(r"const String baseVersion = '([^']+)'");
+        final remoteMatch = versionRegex.firstMatch(remoteContent);
+        
+        if (remoteMatch != null) {
+          final remoteV = remoteMatch.group(1);
+          final localV = getFullVersion().split(' ').lastWhere((e) => e.contains('.'));
+          
+          if (remoteV == localV) {
+            print('✅ ${"You are already on the latest version ($localV).".green}');
+            stdout.write('Force re-download and re-compile? (y/n): ');
+            final force = stdin.readLineSync();
+            if (force?.toLowerCase() != 'y') return;
+          } else {
+            print('🚀 New version detected: ${localV.grey} -> ${remoteV!.green.bold}');
+          }
+        }
+      }
+
+      final tempDir = Directory(p.join(Directory.systemTemp.path, 'vcs_upgrade'));
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      await tempDir.create();
+
+      print('📥 Downloading latest source code...');
+      final zipResponse = await http.get(Uri.parse(zipUrl));
+      if (zipResponse.statusCode != 200) throw 'Failed to download ZIP from GitHub.';
+      
+      final zipFile = File(p.join(tempDir.path, 'source.zip'));
+      await zipFile.writeAsBytes(zipResponse.bodyBytes);
+
+      print('📦 Extracting...');
+      if (Platform.isWindows) {
+        await Process.run('powershell', [
+          '-Command', 
+          'Expand-Archive -Path "${zipFile.path}" -DestinationPath "${tempDir.path}" -Force'
+        ]);
+      } else {
+        await Process.run('unzip', ['-o', zipFile.path, '-d', tempDir.path]);
+      }
+
+      final extractedDirs = tempDir.listSync().whereType<Directory>().toList();
+      if (extractedDirs.isEmpty) throw 'Extraction failed.';
+      final sourcePath = extractedDirs.first.path;
+
+      print('🛠️  Compiling new binary...');
+      final String currentExePath = Platform.resolvedExecutable;
+      final String newExeName = Platform.isWindows ? 'vcs_next.exe' : 'vcs_next';
+      final newExePath = p.join(tempDir.path, newExeName);
+
+      final compileResult = await Process.run('dart', [
+        'compile', 'exe', 
+        p.join(sourcePath, 'bin', 'vcs.dart'), 
+        '-o', newExePath
+      ], workingDirectory: sourcePath);
+
+      if (compileResult.exitCode != 0) {
+        print(compileResult.stderr);
+        throw 'Compilation failed.';
+      }
+
+      print('📦 Replacing binary at: ${currentExePath.grey}');
+      
+      if (Platform.isWindows) {
+        final oldExe = File(currentExePath);
+        await oldExe.rename('${currentExePath}.old');
+        await File(newExePath).copy(currentExePath);
+      } else {
+        await File(newExePath).copy(currentExePath);
+        await Process.run('chmod', ['+x', currentExePath]);
+      }
+
+      try { await tempDir.delete(recursive: true); } catch (_) {}
+
+      print('\n🎉 ${"Update successful!".green.bold}');
+      print('The new binary is ready. You can now delete the .old file if you wish.\n');
+
+    } catch (e) {
+      print('❌ ${"Update failed:".red} $e');
+    }
   }
 
   void showVersion() {
@@ -70,13 +166,15 @@ class PortableVcs {
 
   void showHelp() {
     const int col = 38;
+    const String line = '━';
 
-    print('\n' + '═' * 95);
-    print('  🚀 ${'PORTABLE SNAPSHOT VAULT'.black.onCyan}');
-    print('  ${'Offline encrypted snapshot tool for Git-compatible local workflows.'.yellow}');
-    print('═' * 95);
+    print('\n  ' + line * 91);
+    print('    🚀 ${'PORTABLE SNAPSHOT VAULT'.black.onCyan}');
+    print('    ${'Offline encrypted snapshot tool for Git-compatible local workflows.'.yellow}');
+    print('  ' + line * 91);
 
-    print('\n${" 📂 REPOSITORY SETUP".cyan.bold}');
+    print('\n  ${"📂 REPOSITORY SETUP".cyan.bold}');
+    print('  ' + '─' * 40);
     print('  ${'setup'.green.padRight(col)} Prepare a USB drive or external storage for VCS use.');
     print('  ${'init'.green.padRight(col)} Initialize current project and link to remote storage.');
     print('  ${'list'.green.padRight(col)} List repositories available on the connected storage.');
@@ -84,7 +182,8 @@ class PortableVcs {
     print('    ${'--into <dir>'.grey.padRight(col - 4)} Specify a custom directory name for the clone.');
     print('  ${'bind [repo_id]'.green.padRight(col)} Bind current folder to an existing remote repository.');
 
-    print('\n${" 🛤️  TRACKS MANAGEMENT".cyan.bold}');
+    print('\n  ${"🛤️  TRACKS MANAGEMENT".cyan.bold}');
+    print('  ' + '─' * 40);
     print('  ${'track list'.green.padRight(col)} List all available tracks.');
     print('  ${'track current'.green.padRight(col)} Show the name of the active track.');
     print('  ${'track create <name>'.green.padRight(col)} Create a new empty track.');
@@ -92,7 +191,8 @@ class PortableVcs {
     print('    ${'--restore'.grey.padRight(col - 4)} Optional: Restore the tree files upon switching.');
     print('  ${'track delete <name>'.green.padRight(col)} Delete an existing non-active track.');
 
-    print('\n${" 📦 SNAPSHOT WORKFLOW".cyan.bold}');
+    print('\n  ${"📦 SNAPSHOT WORKFLOW".cyan.bold}');
+    print('  ' + '─' * 40);
     print('  ${'push "message"'.green.padRight(col)} Create a snapshot (with preview & confirmation).');
     print('    ${'-a, --author <name>'.grey.padRight(col - 4)} Override the author name for this snapshot.');
     print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Target a specific track instead of active.');
@@ -102,63 +202,56 @@ class PortableVcs {
     print('  ${'restore <id>'.green.padRight(col)} Restore a specific snapshot into another folder.');
     print('    ${'--to <dir>'.grey.padRight(col - 4)} Destination path for the restored files.');
 
-    print('\n${" 🔍 INSPECTION & WEB INTERFACE".cyan.bold}');
+    print('\n  ${"🔍 INSPECTION & WEB INTERFACE".cyan.bold}');
+    print('  ' + '─' * 40);
     print('  ${'ui'.green.padRight(col)} Launch the Web Dashboard (Split-view diff support).');
     print('  ${'status'.green.padRight(col)} Compare local tree vs latest of the active track.');
     print('  ${'search <query>'.green.padRight(col)} Search text inside encrypted snapshots.');
     print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search only within a specific track.');
     print('    ${'-s, --case-sensitive'.grey.padRight(col - 4)} Perform a case-sensitive search.');
     print('  ${'summary'.green.padRight(col)} Summary of messages to help create Git/GitHub commits.');
-    print('  ${'diff'.green} Compare latest snapshot vs current live files');
+    print('  ${'diff'.green.padRight(col)} Compare latest snapshot vs current live files.');
     print('  ${'diff [id1] [id2|.]'.green.padRight(col)} Compare snapshots or snapshot vs working tree.');
     print('    ${'-t, --tracks <tk1> <tk2>'.grey.padRight(col - 4)} Compare the last snapshot between two tracks.');
     print('  ${'log'.green.padRight(col)} Show history of snapshots.');
-    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Show log from a specific track.');
     print('    ${'--full'.grey.padRight(col - 4)} Show extended details (IDs, dates, metadata).');
     print('  ${'show <id>'.green.padRight(col)} Show details of a specific snapshot.');
-    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search for the ID in a specific track.');
     print('  ${'tree [id]'.green.padRight(col)} Show visual file tree representation.');
-    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Source tree structure from a specific track.');
     print('  ${'verify <id|--all>'.green.padRight(col)} Verify cryptographic integrity of snapshots.');
 
-    print('\n${" 🐙 GIT INTEGRATION".cyan.bold}');
+    print('\n  ${"🐙 GIT INTEGRATION".cyan.bold}');
+    print('  ' + '─' * 40);
     print('  ${'git-prepare [id]'.green.padRight(col)} Prepare current Git repo from a snapshot.');
-    print('    ${'--branch <name>'.grey.padRight(col - 4)} Specify target branch for preparation.');
-    print('  ${'publish [id]'.green.padRight(col)} Safe commit & push with regex security check.');
+    print('  ${'publish [id]'.green.padRight(col)} Safe commit & push with remote conflict check.');
     print('    ${'--branch <name>'.grey.padRight(col - 4)} Specify target branch for the push.');
-    print('    ${'--verify'.grey.padRight(col - 4)} Enforce security check for secrets (APIs, keys).');
+    print('    ${'--verify'.grey.padRight(col - 4)} Enforce security check for secrets.');
     print('  ${'git-diff [id]'.green.padRight(col)} Compare snapshot against current Git HEAD.');
-    print('    ${'--branch <name>'.grey.padRight(col - 4)} Target a specific branch for comparison.');
     print('  ${'stash'.green.padRight(col)} Manage Git stash (save current Git changes):');
     print('    ${'--pop'.grey.padRight(col - 4)} Restore and remove last stash.');
     print('    ${'--list'.grey.padRight(col - 4)} Show all currently stashed changes.');
-    print('    ${'--clear'.grey.padRight(col - 4)} Delete all stashes permanently.');
 
-    print('\n${" 🛠️  MAINTENANCE".cyan.bold}');
+    print('\n  ${"🛠️  MAINTENANCE".cyan.bold}');
+    print('  ' + '─' * 40);
+    print('  ${'info'.green.padRight(col)} Project overview, storage impact and activity charts.');
+    print('    ${'--charts'.grey.padRight(col - 4)} Display 7-day activity histogram.');
     print('  ${'doctor'.green.padRight(col)} Run repository diagnostics and health checks.');
     print('  ${'stats'.green.padRight(col)} Show global repo metrics and track breakdown.');
-    print('  ${'prune'.green.padRight(col)} Clean up old snapshots:');
-    print('    ${'--keep <N>'.grey.padRight(col - 4)} Keep only the newest N snapshots.');
-    print('    ${'--older-than <N>'.grey.padRight(col - 4)} Delete snapshots older than N days.');
-    print('    ${'--garbage'.grey.padRight(col - 4)} Delete orphan files and failed temp uploads.');
-    print('  ${'clear-history'.green.padRight(col)} Delete all snapshots for the active track.');
-    print('  ${'purge'.green.padRight(col)} Completely delete this repository from USB/storage.');
+    print('  ${'prune'.green.padRight(col)} Clean up old snapshots (--keep, --older-than).');
     print('  ${'storage-check'.green.padRight(col)} Hardware diagnostic and latency test of the device.');
-    print('  ${'migrate'.green.padRight(col)} Move your vault to a new drive or NAS:');
-    print('    ${'--to <path>'.grey.padRight(col - 4)} Target destination path for the migration.');
-    print('    ${'--delete-source'.grey.padRight(col - 4)} Remove data from old drive after success.');
+    print('  ${'migrate'.green.padRight(col)} Move your vault to a new drive or NAS.');
 
-    print('\n${" ⚙️  GENERAL".cyan.bold}');
+    print('\n  ${"⚙️  GENERAL".cyan.bold}');
+    print('  ' + '─' * 40);
+    print('  ${'update'.green.padRight(col)} Download latest source from GitHub and recompile.');
     print('  ${'help'.green.padRight(col)} Show this help message.');
     print('  ${'version'.green.padRight(col)} Show tool version.');
 
-    print('\n' + '─' * 95);
-    print(' ${"💡 PRO TIPS".bold}');
-    print('  • You can combine ${'--track'.yellow} with most inspection commands for cross-track analysis.');
-    print('  • Use ${'summary'.green} before your Git commits to maintain a clean history.');
-    print('  • ${'storage-check'.cyan} is recommended every time you connect a new external device.');
-    print('  • All data is ${'AES-256 encrypted'.green.bold}. Keep your vault password safe.');
-    print('─' * 95 + '\n');
+    print('\n  ' + line * 91);
+    print('  ${"💡 PRO TIPS".bold.yellow}');
+    print('    • Combine ${'--track'.white} with inspection commands for cross-track analysis.');
+    print('    • Use ${'summary'.green} before Git commits to maintain a clean history.');
+    print('    • All data is ${'AES-256 encrypted'.green.bold}. Keep your vault password safe.');
+    print('  ' + line * 91 + '\n');
   }
 
   Future<void> setupDrive() async {
@@ -4542,6 +4635,109 @@ class PortableVcs {
     print('─' * 60 + '\n');
   }
 
+  Future<void> info({bool showCharts = false}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final meta = context.remoteMeta;
+
+    print('\nℹ️  ${"PROJECT ARCHIVE INFORMATION".black.onCyan}');
+    print('${"Project Name:".yellow} ${meta.projectName.bold}');
+    print('${"Repo ID:".yellow}      ${meta.repoId.grey}');
+    print('${"Active Track:".yellow} ${meta.activeTrack.magenta.bold}');
+    print('─' * 60);
+
+    int totalSnapshots = 0;
+    String largestTrack = 'none';
+    int maxSnapshots = 0;
+
+    meta.tracks.forEach((name, state) {
+      final count = state.logs.length;
+      totalSnapshots += count;
+      if (count > maxSnapshots) {
+        maxSnapshots = count;
+        largestTrack = name;
+      }
+    });
+
+    final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
+    double totalSizeMb = 0;
+    if (await snapshotsDir.exists()) {
+      final files = snapshotsDir.listSync();
+      final totalBytes = files.fold<int>(0, (sum, file) => sum + (file is File ? file.lengthSync() : 0));
+      totalSizeMb = totalBytes / (1024 * 1024);
+    }
+
+    if (showCharts) {
+      print('📅 ${"Activity (Last 7 Days):".bold}');
+      
+      final now = DateTime.now();
+      final Map<String, int> dailyCounts = {};
+
+      for (int i = 6; i >= 0; i--) {
+        final date = now.subtract(Duration(days: i));
+        final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+        dailyCounts[dateStr] = 0;
+      }
+
+      for (final track in meta.tracks.values) {
+        for (final entry in track.logs) {
+          try {
+            final date = DateTime.parse(entry.createdAt);
+            final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+            if (dailyCounts.containsKey(dateStr)) {
+              dailyCounts[dateStr] = dailyCounts[dateStr]! + 1;
+            }
+          } catch (_) {}
+        }
+      }
+
+      final maxDayCount = dailyCounts.values.isEmpty ? 0 : dailyCounts.values.reduce((a, b) => a > b ? a : b);
+      
+      dailyCounts.forEach((date, count) {
+        final barWidth = maxDayCount == 0 ? 0 : (count / maxDayCount * 20).round();
+        final bar = '█' * barWidth;
+        final colorBar = count > 0 ? bar.green : ''.grey;
+        
+        print('  $date | $colorBar ${count > 0 ? count.toString().bold : '0'.grey}');
+      });
+      print('               └' + '─' * 22);
+      print('');
+    }
+
+    String remoteUrl = 'Not linked';
+    try {
+      final gitResult = await Process.run('git', ['remote', 'get-url', 'origin']);
+      if (gitResult.exitCode == 0) {
+        remoteUrl = gitResult.stdout.toString().trim();
+      }
+    } catch (_) {}
+
+    final lastPush = totalSnapshots > 0 
+        ? _formatDateForList(meta.activeTrackState.logs.first.createdAt)
+        : 'Never';
+
+    print('📈 ${"Activity Summary:".bold}');
+    print('  ${"Total Snapshots:".padRight(20)} ${totalSnapshots.toString().green.bold}');
+    print('  ${"Total Tracks:".padRight(20)} ${meta.tracks.length.toString().green}');
+    print('  ${"Largest Track:".padRight(20)} ${largestTrack.cyan} ($maxSnapshots snapshots)');
+    print('  ${"Last Snapshot:".padRight(20)} $lastPush');
+
+    print('\n📦 ${"Storage Impact:".bold}');
+    print('  ${"Repository Size:".padRight(20)} ${"${totalSizeMb.toStringAsFixed(2)} MB".yellow.bold}');
+    print('  ${"Avg Snapshot Size:".padRight(20)} ${totalSnapshots > 0 ? "${(totalSizeMb / totalSnapshots).toStringAsFixed(2)} MB".grey : "0 MB"}');
+
+    print('\n🔒 ${"Metadata & Security:".bold}');
+    print('  ${"Format Version:".padRight(20)} ${meta.formatVersion.toString().yellow}');
+    print('  ${"Created At:".padRight(20)} ${meta.createdAt.grey}');
+    print('  ${"Encryption:".padRight(20)} ${"AES-256-GCM".green}');
+
+    print('\n🔗 ${"Git Integration:".bold}');
+    print('  ${"Origin URL:".padRight(20)} ${remoteUrl.blue}');
+
+    print('─' * 60 + '\n');
+  }
+
   Future<void> gitStash({bool pop = false, bool list = false, bool clear = false, String? drop}) async {
     print('\n📦 ${"GIT STASH MANAGER".black.onCyan}');
     
@@ -4710,6 +4906,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('setup')
     ..addCommand('init')
     ..addCommand('status')
+    ..addCommand('update')
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
     )
@@ -4757,6 +4954,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     )
     ..addCommand('bind')
     ..addCommand('diff', ArgParser())
+    ..addCommand('info', ArgParser()
+      ..addFlag('charts', negatable: false, help: 'Show activity histogram for the last 7 days')
+    )
     ..addCommand('tree', ArgParser()
       ..addOption('track', abbr: 't', help: 'Target track to visualize')
     )
@@ -4834,6 +5034,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     switch (result.command?.name) {
       case 'version':
         app.showVersion();
+        break;
+      case 'update':
+        app.update();
+        break;
+      case 'info':
+        final cmd = result.command!;
+        await app.info(showCharts: cmd['charts']);
         break;
       case 'setup':
         await app.setupDrive();
