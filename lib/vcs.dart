@@ -256,6 +256,8 @@ class PortableVcs {
     print('  ${'search <query>'.green.padRight(col)} Search text inside encrypted snapshots.');
     print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search only within a specific track.');
     print('    ${'-s, --case-sensitive'.grey.padRight(col - 4)} Perform a case-sensitive search.');
+    print('  ${'info'.green.padRight(col)} Project overview, storage impact and activity charts.');
+    print('    ${'--charts'.grey.padRight(col - 4)} Display 7-day activity histogram.');
     print('  ${'summary'.green.padRight(col)} Summary of messages to help create Git/GitHub commits.');
     print('  ${'diff'.green.padRight(col)} Compare latest snapshot vs current live files.');
     print('  ${'diff [id1] [id2|.]'.green.padRight(col)} Compare snapshots or snapshot vs working tree.');
@@ -279,17 +281,21 @@ class PortableVcs {
 
     print('\n  ${"🛠️  MAINTENANCE".cyan.bold}');
     print('  ' + '─' * 40);
-    print('  ${'info'.green.padRight(col)} Project overview, storage impact and activity charts.');
-    print('    ${'--charts'.grey.padRight(col - 4)} Display 7-day activity histogram.');
+    print('  ${'update'.green.padRight(col)} Download latest source from GitHub and recompile.');
     print('  ${'doctor'.green.padRight(col)} Run repository diagnostics and health checks.');
     print('  ${'stats'.green.padRight(col)} Show global repo metrics and track breakdown.');
-    print('  ${'prune'.green.padRight(col)} Clean up old snapshots (--keep, --older-than).');
+    print('  ${'prune'.green.padRight(col)} Clean up old snapshots:');
+    print('    ${'--keep N'.grey.padRight(col - 4)} Keep only the newest N snapshots.');
+    print('    ${'--older-than N'.grey.padRight(col - 4)} Delete snapshots older than N days.');
+    print('    ${'--garbage'.grey.padRight(col - 4)} Deep clean: Remove orphaned data blobs.');
     print('  ${'storage-check'.green.padRight(col)} Hardware diagnostic and latency test of the device.');
-    print('  ${'migrate'.green.padRight(col)} Move your vault to a new drive or NAS.');
+    print('  ${'migrate'.green.padRight(col)} Move your vault to a new drive or NAS:');
+    print('    ${'--to <path>'.grey.padRight(col - 4)} Target destination path for migration.');
+    print('    ${'--delete-source'.grey.padRight(col - 4)} Remove data from old drive after success.');
+
 
     print('\n  ${"⚙️  GENERAL".cyan.bold}');
     print('  ' + '─' * 40);
-    print('  ${'update'.green.padRight(col)} Download latest source from GitHub and recompile.');
     print('  ${'help'.green.padRight(col)} Show this help message.');
     print('  ${'version'.green.padRight(col)} Show tool version.');
 
