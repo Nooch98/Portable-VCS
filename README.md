@@ -422,6 +422,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
 | | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
 | | `vcs prune --oldr-than N` | Delete snapshots older than N days. |
+|| `vcs prune --garbage` | Deep clean: Remove orphaned data blobs. |
 | | `vcs clear-history` | Wipe all snapshots for the **active track**. |
 | | `vcs purge` | Permanently delete the project from the Vault. |
 | | `vcs storage-check` | Hardware diagnostic and latency test of the device. |
