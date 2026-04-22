@@ -189,7 +189,14 @@ class PortableVcs {
       try { await tempDir.delete(recursive: true); } catch (_) {}
 
       print('\n🎉 ${"Update successful!".green.bold}');
-      print('The new binary is ready. Restart VCS to apply changes.\n');
+      if (Platform.isWindows) {
+        print('The new binary is ready.');
+        print('💡 ${"Note:".yellow} A ${".old".cyan} file was created to allow the update.');
+        print('You can now delete ${p.basename(currentExePath)}.old and restart VCS.\n');
+      } else {
+        print('The binary has been updated successfully.');
+        print('Just restart VCS to apply changes. No manual cleanup needed.\n');
+      }
 
     } catch (e) {
       print('❌ ${"Update failed:".red} $e');
