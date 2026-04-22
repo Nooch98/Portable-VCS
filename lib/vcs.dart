@@ -26,6 +26,7 @@ import 'package:vcs/models/tree_node.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
+const String vcsBaseVersion = '0.3.2-Experimental';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -53,12 +54,12 @@ class PortableVcs {
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
 
   String getFullVersion() {
-    const String baseVersion = '0.3.1-Experimental';
     String osName = 'Unknown';
     if (Platform.isWindows) osName = 'Windows';
     else if (Platform.isLinux) osName = 'Linux';
     else if (Platform.isMacOS) osName = 'macOS';
-    return '🚀 Portable VCS Version $baseVersion ($osName)';
+    
+    return '🚀 Portable VCS Version $vcsBaseVersion ($osName)';
   }
 
   Future<void> update() async {
@@ -203,12 +204,50 @@ class PortableVcs {
     }
   }
 
-  void showVersion() {
-    final String v = getFullVersion();
-    print('\n' + '─' * 45);
-    print('  ${v.cyan.bold}');
-    print('  ${'Built with Dart ${Platform.version.split(" ").first}'.grey}');
-    print('─' * 45 + '\n');
+  Future<String?> _getLatestGitHubVersion() async {
+    try {
+      final url = Uri.parse('https://raw.githubusercontent.com/Nooch98/Portable-VCS/main/lib/vcs.dart');      
+      final response = await http.get(url).timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200) {
+        final regExp = RegExp(r"Version\s*=\s*'([^']+)'");
+        final match = regExp.firstMatch(response.body);
+        
+        if (match != null) {
+          return match.group(1);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> showVersion() async {
+    final String currentFull = getFullVersion();
+    final String dartVer = Platform.version.split(" ").first;
+    final String os = Platform.operatingSystem;
+
+    stdout.write('🔍 Checking for updates...');
+    final String? latestV = await _getLatestGitHubVersion();
+    stdout.write('\r' + ' ' * 30 + '\r'); 
+
+    final bool hasUpdate = latestV != null && latestV != vcsBaseVersion;
+
+    print('═' * 45);
+    print('  ${'VCS'.cyan.bold} ${'·'.grey} ${'The Secure Vault System'.white}');
+    print('  ${'Local:'.grey}  ${currentFull.cyan}');
+    
+    if (hasUpdate) {
+      print('  ' + '─' * 41);
+      print('  ${'🚀 NEW VERSION READY:'.black.onYellow.bold} ${latestV.green.bold}');
+      print('  ${'Action:'.grey} Run ${'vcs update'.white.bold} to upgrade');
+    } else if (latestV != null) {
+      print('  ${'Status:'.grey} ${'Up to date'.green} (GitHub: $latestV)');
+    }
+
+    print('  ' + '─' * 41);
+    print('  ${'Runtime:'.yellow} ${'Dart $dartVer'.white}');
+    print('  ${'Platform:'.yellow} ${os.toUpperCase().white}');
+    print('  ${'Source:'.yellow} ${'https://github.com/Nooch98/vcs'.blue}');
+    print('═' * 45 + '\n');
   }
 
   void showHelp() {
@@ -255,6 +294,8 @@ class PortableVcs {
     print('  ${'status'.green.padRight(col)} Compare local tree vs latest of the active track.');
     print('  ${'search <query>'.green.padRight(col)} Search text inside encrypted snapshots.');
     print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search only within a specific track.');
+    print('    ${'--id <snapshot_id>'.grey.padRight(col - 4)} Search only in a specific snapshot.');
+    print('    ${'-m, --max <n>'.grey.padRight(col - 4)} Search only in the last N snapshots.');
     print('    ${'-s, --case-sensitive'.grey.padRight(col - 4)} Perform a case-sensitive search.');
     print('  ${'info'.green.padRight(col)} Project overview, storage impact and activity charts.');
     print('    ${'--charts'.grey.padRight(col - 4)} Display 7-day activity histogram.');
@@ -263,7 +304,10 @@ class PortableVcs {
     print('  ${'diff [id1] [id2|.]'.green.padRight(col)} Compare snapshots or snapshot vs working tree.');
     print('    ${'-t, --tracks <tk1> <tk2>'.grey.padRight(col - 4)} Compare the last snapshot between two tracks.');
     print('  ${'log'.green.padRight(col)} Show history of snapshots.');
+    print('    ${'--graph, -g'.grey.padRight(col - 4)} Visual representation of the snapshot timeline.');
     print('    ${'--full'.grey.padRight(col - 4)} Show extended details (IDs, dates, metadata).');
+    print('    ${'--standard'.grey.padRight(col - 4)} Show summary with 5-file change preview.');
+    print('    ${'--summary'.grey.padRight(col - 4)} (Default) Show only statistics and message.');
     print('  ${'show <id>'.green.padRight(col)} Show details of a specific snapshot.');
     print('  ${'tree [id]'.green.padRight(col)} Show visual file tree representation.');
     print('  ${'verify <id|--all>'.green.padRight(col)} Verify cryptographic integrity of snapshots.');
@@ -285,6 +329,7 @@ class PortableVcs {
     print('  ${'doctor'.green.padRight(col)} Run repository diagnostics and health checks.');
     print('  ${'stats'.green.padRight(col)} Show global repo metrics and track breakdown.');
     print('  ${'prune'.green.padRight(col)} Clean up old snapshots:');
+    print('    ${'--id <id>'.grey.padRight(col - 4)} Delete a specific snapshot by its ID.');
     print('    ${'--keep N'.grey.padRight(col - 4)} Keep only the newest N snapshots.');
     print('    ${'--older-than N'.grey.padRight(col - 4)} Delete snapshots older than N days.');
     print('    ${'--garbage'.grey.padRight(col - 4)} Deep clean: Remove orphaned data blobs.');
@@ -510,11 +555,10 @@ class PortableVcs {
       return;
     }
 
-    print('\n📦 ${"REMOTE REPOSITORIES IN VAULT".black.onCyan}');
+    print('\n📦 ${" VAULT STORAGE ".black.onCyan} ${p.join(usb.path, remoteReposDir).grey}');
     print('═' * 70);
-    
-    print('${"ID".padRight(4)} ${"PROJECT NAME".padRight(25)} ${"TRACKS".padRight(10)} ${"LAST UPDATE".padRight(20)}');
-    print('─' * 70);
+
+    final localId = await _readLocalRepoId();
 
     for (var i = 0; i < repos.length; i++) {
       final repo = repos[i];
@@ -524,28 +568,33 @@ class PortableVcs {
       meta.tracks.forEach((_, state) => totalSnapshots += state.logs.length);
       
       final trackCount = meta.tracks.length;
-      final projectName = meta.projectName.length > 23 
-          ? '${meta.projectName.substring(0, 20)}...' 
-          : meta.projectName;
-      
       final updatedAt = _formatDateForList(meta.updatedAt);
-      final isCurrent = _localRepoFile.existsSync() && 
-                      (await _readLocalRepoId() == meta.repoId);
+      final isLinked = localId == meta.repoId;
 
-      final indexStr = i.toString().padLeft(2, '0').green;
-      final rowName = isCurrent ? '$projectName ${"(linked)".magenta}' : projectName.green;
+      final indexStr = '[${i.toString().padLeft(2, '0')}]'.green;
+      final String statusIcon = isLinked ? '●'.magenta : '○'.grey;
+      final String nameDisplay = isLinked 
+          ? meta.projectName.bold.white 
+          : meta.projectName.cyan;
 
-      print('${indexStr.padRight(13)} ${rowName.padRight(34)} ${trackCount.toString().padRight(10)} ${updatedAt.grey}');
-      print('     ${"Repo ID:".grey} ${meta.repoId.grey} | ${"Total Snaps:".grey} ${totalSnapshots.toString().grey}');
+      print('$indexStr $statusIcon $nameDisplay ${isLinked ? "(linked)".magenta.italic : ""}');      
+      print('     ${"ID:".grey} ${meta.repoId.white} ${"|".grey} ${"Updated:".grey} $updatedAt');
+      
+      final stats = [
+        '${trackCount.toString().yellow} tracks',
+        '${totalSnapshots.toString().yellow} snapshots',
+      ].join(' ${"•".grey} ');
+      
+      print('     ${"Stats:".grey} $stats');
       
       if (i < repos.length - 1) {
-        print('     ' + '┄' * 60);
+        print('     ' + '─' * 50);
       }
     }
 
     print('═' * 70);
-    print('${"Total:".grey} ${repos.length} repositories found.');
-    print('💡 ${"Use".cyan} ${"vcs clone <repo_id>".green} ${"to download a project.".grey}\n');
+    print('💡 ${"Total:".cyan} ${repos.length} repos ${"|".grey} ${"To download:".grey} ${"vcs clone <id>".green}');
+    print('');
   }
 
   Future<String?> _readLocalRepoId() async {
@@ -577,21 +626,24 @@ class PortableVcs {
   Future<void> cloneRepo({String? repoId, String? into}) async {
     final usb = await findUsbDrive();
     if (usb == null) {
-      print('❌ No prepared USB drive found.');
+      print('\n❌ ${"No prepared USB drive found.".red}');
       return;
     }
 
     final repos = await _loadRemoteRepos(usb);
     if (repos.isEmpty) {
-      print('ℹ️ No repositories found on USB.');
+      print('\nℹ️  ${"No repositories found in vault.".yellow}');
       return;
     }
 
     RemoteRepoInfo? selected = _selectRemoteRepo(repos, repoId);
     if (selected == null) return;
 
-    if (selected.meta.logs.isEmpty) {
-      print('❌ Repository has no snapshots. Nothing to clone.');
+    final activeTrack = selected.meta.activeTrack;
+    final trackData = selected.meta.tracks[activeTrack];
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('\n❌ ${"The repository has no snapshots in track: $activeTrack".red}');
       return;
     }
 
@@ -601,34 +653,39 @@ class PortableVcs {
 
     final targetDir = Directory(targetPath);
 
-    if (targetDir.existsSync()) {
-      final children = targetDir.listSync();
-      if (children.isNotEmpty) {
-        print('❌ Target folder already exists and is not empty: $targetPath');
-        return;
-      }
-    } else {
-      await targetDir.create(recursive: true);
-    }
-
-    final localRepoFile = File(p.join(targetDir.path, localMetaDirName, localRepoFileName));
-    if (localRepoFile.existsSync()) {
-      print('❌ Target folder already contains a local VCS repo.');
+    if (targetDir.existsSync() && targetDir.listSync().isNotEmpty) {
+      print('\n❌ ${"Target folder is not empty:".red} $targetPath');
       return;
     }
+
+    print('\n🚀 ${"CLONING PROJECT".black.onCyan}');
+    print('${"Project:".grey} ${selected.meta.projectName.white.bold}');
+    print('${"Track:".grey}   ${activeTrack.yellow}');
+    print('${"Into:".grey}    ${targetPath.white}');
+    print('─' * 50);
 
     final password = askPassword();
     if (password == null) return;
 
+    stdout.write('📦 ${"Extracting latest snapshot...".grey}');
+    
+    final latestLog = trackData.logs.first;
+
     final snapshot = await readSnapshotByMeta(
       remoteRepoDir: selected.repoDir,
       remoteMeta: selected.meta,
-      snapshotId: selected.meta.logs.first.id,
+      snapshotId: latestLog.id,
       password: password,
     );
-    if (snapshot == null) return;
+
+    if (snapshot == null) {
+      print('\r❌ ${"Failed to read snapshot. Check your password.".red}');
+      return;
+    }
 
     try {
+      if (!targetDir.existsSync()) await targetDir.create(recursive: true);
+
       await _extractZipToDirectory(snapshot.zipBytes, targetDir);
 
       final localMetaDir = Directory(p.join(targetDir.path, localMetaDirName));
@@ -646,10 +703,15 @@ class PortableVcs {
         const JsonEncoder.withIndent('  ').convert(localRepoMeta),
       );
 
-      print('✅ Repository cloned into: ${targetDir.path}');
-      print('✅ Linked to repo_id=${selected.meta.repoId}');
+      stdout.write('\r' + ' ' * 40 + '\r');
+      print('✅ ${"Project successfully cloned!".green.bold}');
+      print('─' * 50);
+      print('${"Location:".grey}  ${targetDir.path.white}');
+      print('${"Snapshot:".grey}  ${latestLog.id.yellow} (${_formatDateForList(latestLog.createdAt)})');
+      print('\n💡 ${"Run".cyan} ${"vcs log".green} ${"in the folder to see the history.".grey}\n');
+
     } catch (e) {
-      print('❌ Clone failed: $e');
+      print('\r❌ ${"Clone failed: $e".red}');
     }
   }
 
@@ -808,13 +870,19 @@ class PortableVcs {
     print('─' * 40 + '\n');
   }
 
-  Future<void> search(String query, {String? track, bool caseSensitive = false}) async {
+  Future<void> search(
+    String query, {
+    String? track, 
+    bool caseSensitive = false,
+    String? snapshotId,
+    int? limit,
+  }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
     final password = askPassword();
     if (password == null || password.isEmpty) {
-      print('❌ Password required for searching encrypted snapshots.');
+      print('❌ ${"Password required for searching encrypted snapshots.".red}');
       return;
     }
 
@@ -822,44 +890,43 @@ class PortableVcs {
     final trackData = context.remoteMeta.tracks[targetTrack];
 
     if (trackData == null || trackData.logs.isEmpty) {
-      print('ℹ️ No snapshots found in track "$targetTrack".');
+      print('ℹ️  ${"No snapshots found in track".yellow} "$targetTrack".');
       return;
     }
 
-    final logs = trackData.logs;
+    List<dynamic> logsToSearch = trackData.logs;
 
-    print('\n🔍 ${"SEARCH".black.onCyan} Searching for: "${query.white.bold}" in track ${targetTrack.magenta}');
+    if (snapshotId != null) {
+      logsToSearch = logsToSearch.where((l) => l.id == snapshotId).toList();
+      if (logsToSearch.isEmpty) {
+        print('❌ ${"Snapshot ID not found in track:".red} $snapshotId');
+        return;
+      }
+    } else if (limit != null && limit > 0) {
+      logsToSearch = logsToSearch.take(limit).toList();
+    }
+
+    print('\n🔍 ${"SEARCH".black.onCyan} Searching for: "${query.white.bold}"');
+    print('${"Target:".grey} ${snapshotId ?? "Last ${logsToSearch.length} snapshots"} in ${targetTrack.magenta}');
     print('═' * 60);
 
     int totalMatches = 0;
+    int snapshotsWithMatches = 0;
     final String searchQuery = caseSensitive ? query : query.toLowerCase();
 
     bool isBinaryFile(String fileName, Uint8List bytes) {
       if (bytes.isEmpty) return false;
-
-      const binaryExtensions = {
-        '.exe', '.dll', '.so', '.dylib', '.bin',
-        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.ico', '.pdf',
-        '.zip', '.7z', '.rar', '.gz', '.tar', '.pkg',
-        '.pyc', '.class', '.o', '.a',
-        '.ttf', '.otf', '.woff', '.woff2',
-        '.mp3', '.mp4', '.wav', '.mov', '.db', '.sqlite',
-      };
-
+      const binaryExtensions = {'.exe', '.dll', '.bin', '.jpg', '.png', '.zip', '.pdf'};
       if (fileName.contains('.')) {
         final ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
         if (binaryExtensions.contains(ext)) return true;
       }
-
       final checkLimit = bytes.length < 1024 ? bytes.length : 1024;
-      for (var i = 0; i < checkLimit; i++) {
-        if (bytes[i] == 0) return true;
-      }
-
+      for (var i = 0; i < checkLimit; i++) { if (bytes[i] == 0) return true; }
       return false;
     }
 
-    for (final entry in logs) {
+    for (final entry in logsToSearch) {
       try {
         final snapshot = await readSnapshot(context, entry.id, password: password);
         if (snapshot == null) continue;
@@ -869,55 +936,91 @@ class PortableVcs {
 
         for (final fileName in files.keys) {
           final bytes = files[fileName]!;
-
           if (isBinaryFile(fileName, bytes)) continue;
 
           String content;
           try {
             content = utf8.decode(bytes, allowMalformed: true);
-          } catch (e) {
-            continue;
-          }
-          
+          } catch (e) { continue; }
+
           final String contentToSearch = caseSensitive ? content : content.toLowerCase();
 
           if (contentToSearch.contains(searchQuery)) {
-            if (!snapshotHasMatch) {
-              print('\n📦 Snapshot: ${entry.id.green} (${entry.message.italic})');
-              snapshotHasMatch = true;
-            }
-
             final lines = content.split('\n');
             for (int i = 0; i < lines.length; i++) {
-              final line = lines[i];
-              final String lineToSearch = caseSensitive ? line : line.toLowerCase();
+              final String lineToSearch = caseSensitive ? lines[i] : lines[i].toLowerCase();
 
               if (lineToSearch.contains(searchQuery)) {
-                final displayLine = line.trim();
-                final truncatedLine = displayLine.length > 100 
-                    ? '${displayLine.substring(0, 97)}...' 
-                    : displayLine;
+                if (!snapshotHasMatch) {
+                  final String sId = entry.id.toString();
+                  final String sMsg = entry.message.toString();
+                  print('\n📦 Snapshot: ${sId.green} [${sMsg.italic}]');
+                  snapshotHasMatch = true;
+                  snapshotsWithMatches++;
+                }
 
-                print('  📄 ${fileName.yellow}:${(i + 1).toString().grey}');
-                print('     ${truncatedLine.italic.grey}');
+                print('  📄 ${fileName.yellow}:${(i + 1).toString().white}');                
+                _printSmartContext(lines, i, searchQuery, caseSensitive);
+                
                 totalMatches++;
+                print('     ' + '┄' * 45);
               }
             }
           }
         }
       } catch (e) {
-        print('⚠️ Error searching in snapshot ${entry.id}: $e'.red);
-        continue;
+        print('⚠️  ${"Error searching in snapshot".red} ${entry.id}: $e');
       }
     }
 
     print('\n' + '═' * 60);
     if (totalMatches > 0) {
-      print('✅ Search finished. Found ${totalMatches.toString().green.bold} occurrences.');
+      print('✅ ${"Search finished.".white} Found ${totalMatches.toString().green.bold} occurrences in ${snapshotsWithMatches.toString().cyan} snapshots.');
     } else {
-      print('status: ${"No matches found.".yellow}');
+      print('Status: ${"No matches found.".yellow}');
     }
   }
+
+  void _printSmartContext(List<String> lines, int index, String query, bool caseSensitive) {
+    const int maxLines = 10; 
+    int lastLineToPrint = index + 3;
+    
+    final String currentLine = lines[index];
+    
+    bool isBlockStart = currentLine.contains('{') || 
+                        (index + 1 < lines.length && _getIndent(lines[index + 1]) > _getIndent(currentLine));
+
+    if (isBlockStart) {
+      int openBraces = _countChar(currentLine, '{');
+      int closeBraces = _countChar(currentLine, '}');
+      
+      for (int j = index + 1; j < lines.length && j < index + maxLines; j++) {
+        lastLineToPrint = j;
+        openBraces += _countChar(lines[j], '{');
+        closeBraces += _countChar(lines[j], '}');
+        
+        if (openBraces > 0 && openBraces == closeBraces) break;
+        if (openBraces == 0 && lines[j].trim().isNotEmpty && _getIndent(lines[j]) <= _getIndent(currentLine)) break;
+      }
+    }
+
+    if (lastLineToPrint >= lines.length) lastLineToPrint = lines.length - 1;
+
+    for (int k = index; k <= lastLineToPrint; k++) {
+      final String l = lines[k];
+      final bool isMainLine = k == index;
+      
+      final String gutter = isMainLine ? ' → '.cyan : '   '.grey;
+      final String content = isMainLine ? l.trim().white : l.trim().grey;
+
+      final String finalLine = content.length > 120 ? '${content.substring(0, 117)}...' : content;
+      
+      print('    $gutter $finalLine');
+    }
+  }
+
+  int _getIndent(String line) => line.length - line.trimLeft().length;
+  int _countChar(String line, String char) => char.allMatches(line).length;
 
   Future<void> diff(List<String> args, {String? password}) async {
     final context = await loadRepoContext();
@@ -1146,7 +1249,11 @@ class PortableVcs {
     await temp.rename(file.path);
   }
 
-  Future<void> log({LogViewMode mode = LogViewMode.summary, String? track}) async {
+  Future<void> log({
+    LogViewMode mode = LogViewMode.summary, 
+    String? track, 
+    bool showGraph = false
+  }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -1166,33 +1273,39 @@ class PortableVcs {
     print('\n📜 ${"Snapshot history".cyan} [Track: ${targetTrackName.cyan}]');
     print('═' * 60);
 
-    final logs = trackData.logs.reversed.toList();
+    final logs = trackData.logs; 
+    final total = logs.length;
 
-    for (var i = 0; i < logs.length; i++) {
+    for (var i = total - 1; i >= 0; i--) {
       final entry = logs[i];
       final createdAt = _formatDateForList(entry.createdAt);
       final author = entry.author ?? '-';
-      final isLatest = i == logs.length - 1;
-
+      final isLatest = i == 0; 
+      final isFirstInTerminal = i == total - 1;
+      final visualIndex = total - 1 - i;
       final counts = countChanges(entry.changeSummary);
+      final String node = isLatest ? ' o '.cyan : ' * '.yellow;
+      final String pipe = isFirstInTerminal ? '   ' : ' | '.grey;
+      final String prefix = showGraph ? node : '';
+      final String subPrefix = showGraph ? pipe : '';
 
       print(
-        '[${i.toString().padLeft(2, '0')}] '
+        '$prefix[${visualIndex.toString().padLeft(2, '0')}] '
         '${entry.id.green}'
         '${isLatest ? " ${"(latest)".cyan}" : ""}',
       );
 
-      print('     ${"Date:".yellow.padRight(10)} $createdAt');
-      print('     ${"Author:".yellow.padRight(10)} $author');
-      print('     ${"Message:".yellow.padRight(10)} ${entry.message.cyan}');
+      print('$subPrefix     ${"Date:".yellow.padRight(10)} $createdAt');
+      print('$subPrefix     ${"Author:".yellow.padRight(10)} $author');
+      print('$subPrefix     ${"Message:".yellow.padRight(10)} ${entry.message.cyan}');
 
       switch (mode) {
         case LogViewMode.summary:
           if (entry.changeSummary.isEmpty) {
-            print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
+            print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
           } else {
             print(
-              '     ${"Changes:".yellow.padRight(10)} '
+              '$subPrefix     ${"Changes:".yellow.padRight(10)} '
               '${counts.total.toString().green} file(s) '
               '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
             );
@@ -1201,10 +1314,10 @@ class PortableVcs {
 
         case LogViewMode.standard:
           if (entry.changeSummary.isEmpty) {
-            print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
+            print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
           } else {
             print(
-              '     ${"Changes:".yellow.padRight(10)} '
+              '$subPrefix     ${"Changes:".yellow.padRight(10)} '
               '${counts.total.toString().green} file(s) '
               '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
             );
@@ -1212,45 +1325,49 @@ class PortableVcs {
             final preview = entry.changeSummary.take(5).toList();
             for (final c in preview) {
               if (c.startsWith('[N]')) {
-                print('       ${c.green}');
+                print('$subPrefix       ${c.green}');
               } else if (c.startsWith('[M]')) {
-                print('       ${c.yellow}');
+                print('$subPrefix       ${c.yellow}');
               } else if (c.startsWith('[D]')) {
-                print('       ${c.red}');
+                print('$subPrefix       ${c.red}');
               } else {
-                print('       $c');
+                print('$subPrefix       $c');
               }
             }
 
             final remaining = entry.changeSummary.length - preview.length;
             if (remaining > 0) {
-              print('       ${"... and $remaining more change(s)".yellow}');
+              print('$subPrefix       ${"... and $remaining more change(s)".yellow}');
             }
           }
           break;
 
         case LogViewMode.full:
           if (entry.changeSummary.isEmpty) {
-            print('     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
+            print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
           } else {
-            print('     ${"Changes:".yellow.padRight(10)}');
+            print('$subPrefix     ${"Changes:".yellow.padRight(10)}');
             for (final c in entry.changeSummary) {
               if (c.startsWith('[N]')) {
-                print('       ${c.green}');
+                print('$subPrefix       ${c.green}');
               } else if (c.startsWith('[M]')) {
-                print('       ${c.yellow}');
+                print('$subPrefix       ${c.yellow}');
               } else if (c.startsWith('[D]')) {
-                print('       ${c.red}');
+                print('$subPrefix       ${c.red}');
               } else {
-                print('       $c');
+                print('$subPrefix       $c');
               }
             }
           }
           break;
       }
 
-      if (i != logs.length - 1) {
-        print('─' * 60);
+      if (i != 0) { 
+        if (showGraph) {
+          print(' | '.grey);
+        } else {
+          print('─' * 60);
+        }
       }
     }
 
@@ -1685,7 +1802,12 @@ class PortableVcs {
     print('');
   }
 
-  Future<void> prune({int? keep, int? olderThanDays, bool garbage = false}) async {
+  Future<void> prune({
+    int? keep, 
+    int? olderThanDays, 
+    bool garbage = false, 
+    String? snapshotId
+  }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -1698,7 +1820,8 @@ class PortableVcs {
 
     final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
     final toDeleteFiles = <File>[];
-    final logs = List<SnapshotLogEntry>.from(context.remoteMeta.tracks[context.remoteMeta.activeTrack]?.logs ?? []);
+    final activeTrackName = context.remoteMeta.activeTrack;
+    final logs = List<SnapshotLogEntry>.from(context.remoteMeta.tracks[activeTrackName]?.logs ?? []);
 
     if (garbage && snapshotsDir.existsSync()) {
       print('🔍 ${"Scanning for garbage files...".grey}');
@@ -1713,7 +1836,22 @@ class PortableVcs {
     }
 
     final toDeleteFromLogs = <SnapshotLogEntry>[];
-    if (keep != null || olderThanDays != null) {
+
+    if (snapshotId != null) {
+      print('🎯 ${"Targeting specific snapshot ID: $snapshotId".cyan}');
+      try {
+        final targetEntry = logs.firstWhere((e) => e.id == snapshotId);
+        toDeleteFromLogs.add(targetEntry);
+        
+        final f = File(p.join(snapshotsDir.path, targetEntry.fileName));
+        if (f.existsSync()) toDeleteFiles.add(f);
+      } catch (_) {
+        print('❌ ${"Error:".red} Snapshot ID $snapshotId not found in active track.');
+        return;
+      }
+    } 
+
+    else if (keep != null || olderThanDays != null) {
       if (logs.isEmpty) {
         print('ℹ️ No snapshots in active track to prune by history.');
       } else {
@@ -1757,6 +1895,9 @@ class PortableVcs {
     print('\n${"PREPARING CLEANUP:".bold}');
     if (toDeleteFromLogs.isNotEmpty) {
       print('📦 Snapshots to remove from history: ${toDeleteFromLogs.length}');
+      for (var entry in toDeleteFromLogs) {
+        print('   - ${entry.id.grey} (${entry.message})');
+      }
     }
     if (toDeleteFiles.isNotEmpty) {
       print('🗑️  Physical files to delete: ${toDeleteFiles.length}');
@@ -1768,7 +1909,7 @@ class PortableVcs {
     await _withLock(context.remoteRepoDir, () async {
       for (final file in toDeleteFiles) {
         try {
-          await file.delete();
+          if (await file.exists()) await file.delete();
         } catch (e) {
           print('⚠️ Could not delete ${file.path}: $e');
         }
@@ -1779,7 +1920,7 @@ class PortableVcs {
         final remaining = logs.where((e) => !toDeleteIds.contains(e.id)).toList();
 
         final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-        updatedTracks[context.remoteMeta.activeTrack] = TrackState(logs: remaining);
+        updatedTracks[activeTrackName] = TrackState(logs: remaining);
 
         final updatedMeta = context.remoteMeta.copyWith(
           updatedAt: DateTime.now().toUtc().toIso8601String(),
@@ -1793,7 +1934,9 @@ class PortableVcs {
       }
 
       print('\n✅ ${"Cleanup complete!".green.bold}');
-      if (toDeleteFiles.isNotEmpty) print('🗑️  Freed storage for ${toDeleteFiles.length} files.');
+      if (toDeleteFiles.isNotEmpty) {
+        print('🗑️  Freed storage for ${toDeleteFiles.length} files.');
+      }
     });
   }
 
@@ -4975,7 +5118,8 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         ..addFlag('full', negatable: false)
         ..addFlag('summary', negatable: false)
         ..addFlag('standard', negatable: false)
-        ..addOption('track', abbr: 't', help: 'Show logs from a specific track instead of the active one',),
+        ..addFlag('graph', abbr: 'g', negatable: false, help: 'Visual representation of the snapshot history.')
+        ..addOption('track', abbr: 't', help: 'Show logs from a specific track instead of the active one'),
     )
     ..addCommand('show', ArgParser()
       ..addOption('track', abbr: 't', help: 'Target track to look for the snapshot')
@@ -5030,8 +5174,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand(
       'prune',
       ArgParser()
-        ..addOption('keep', abbr: 'k')
-        ..addOption('older-than', abbr: 'd')
+        ..addOption('id', abbr: 'i', help: 'Delete a specific snapshot by its ID.')
+        ..addOption('keep', abbr: 'k', help: 'Keep only the newest N snapshots.')
+        ..addOption('older-than', abbr: 'd', help: 'Delete snapshots older than N days.')
         ..addFlag('garbage', abbr: 'g', negatable: false, help: 'Remove orphan and temp files.'),
     )
     ..addCommand(
@@ -5066,6 +5211,8 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       'search',
       ArgParser()
         ..addOption('track', abbr: 't', help: 'Search in a specific track')
+        ..addOption('id', help: 'Search only in a specific snapshot ID')
+        ..addOption('max', abbr: 'm', help: 'Search only in the last N snapshots')
         ..addFlag('case-sensitive', abbr: 's', negatable: false, help: 'Perform a case-sensitive search')
     )
     ..addCommand(
@@ -5118,12 +5265,16 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'log':
         final cmd = result.command!;
         LogViewMode mode = LogViewMode.summary;
-        if (cmd['full'] == true) mode = LogViewMode.full;
-        else if (cmd['standard'] == true) mode = LogViewMode.standard;
-        
+        if (cmd['full'] == true) {
+          mode = LogViewMode.full;
+        } else if (cmd['standard'] == true) {
+          mode = LogViewMode.standard;
+        }
+        final showGraph = cmd['graph'] == true;
         await app.log(
           mode: mode, 
-          track: cmd['track']?.toString()
+          track: cmd['track']?.toString(),
+          showGraph: showGraph
         );
         break;
       case 'show':
@@ -5211,7 +5362,11 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         break;
       case 'prune':
         final pruneCmd = result.command!;
-        final keep = pruneCmd['keep'] != null ? int.tryParse(pruneCmd['keep'].toString()) : null;
+        final id = pruneCmd['id']?.toString(); 
+        final keep = pruneCmd['keep'] != null 
+            ? int.tryParse(pruneCmd['keep'].toString()) 
+            : null;
+            
         final olderThan = pruneCmd['older-than'] != null
             ? int.tryParse(pruneCmd['older-than'].toString())
             : null;
@@ -5219,6 +5374,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         final garbage = pruneCmd['garbage'] as bool? ?? false;
 
         await app.prune(
+          snapshotId: id,
           keep: keep, 
           olderThanDays: olderThan, 
           garbage: garbage
@@ -5341,14 +5497,29 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'search':
         final cmd = result.command!;
         if (cmd.rest.isEmpty) {
-          print('❌ Usage: vcs search <query> [--track <name>] [-s]');
+          print('\n❌ ${"Usage:".red} vcs search <query> [options]');
+          print('   ${"Example:".grey} vcs search "main" --max 5');
+          print('   ${"Example:".grey} vcs search "auth" --id 1776896734970\n');
           return;
         }
+        
         final query = cmd.rest.join(' ');
+        
+        int? maxLimit;
+        if (cmd['max'] != null) {
+          maxLimit = int.tryParse(cmd['max']);
+          if (maxLimit == null) {
+            print('❌ ${"Error:".red} --max must be a valid number.');
+            return;
+          }
+        }
+
         await app.search(
           query,
           track: cmd['track'],
           caseSensitive: cmd['case-sensitive'],
+          snapshotId: cmd['id'],
+          limit: maxLimit,
         );
         break;
       default:
