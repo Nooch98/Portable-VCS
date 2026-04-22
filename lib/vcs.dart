@@ -112,34 +112,74 @@ class PortableVcs {
           'Expand-Archive -Path "${zipFile.path}" -DestinationPath "${tempDir.path}" -Force'
         ]);
       } else {
-        await Process.run('unzip', ['-o', zipFile.path, '-d', tempDir.path]);
+        final unzipResult = await Process.run('unzip', ['-o', zipFile.path, '-d', tempDir.path]);
+        if (unzipResult.exitCode != 0) {
+          throw 'Failed to unzip source. Make sure "unzip" is installed.';
+        }
       }
 
-      final extractedDirs = tempDir.listSync().whereType<Directory>().toList();
-      if (extractedDirs.isEmpty) throw 'Extraction failed.';
-      final sourcePath = extractedDirs.first.path;
+      File? vcsFile;
+      File? pubspecFile;
 
-      print('🛠️  Compiling new binary...');
+      try {
+        final allFiles = tempDir.listSync(recursive: true).whereType<File>();
+
+        vcsFile = allFiles.firstWhere((f) => 
+            p.basename(f.path) == 'vcs.dart' && 
+            f.path.contains('${p.separator}lib${p.separator}'));
+            
+        pubspecFile = allFiles.firstWhere((f) => p.basename(f.path) == 'pubspec.yaml');
+      } catch (_) {
+        throw 'Could not locate lib/vcs.dart or pubspec.yaml in the extracted source.';
+      }
+
+      final sourceRoot = pubspecFile.parent.path;
       final String currentExePath = Platform.resolvedExecutable;
       final String newExeName = Platform.isWindows ? 'vcs_next.exe' : 'vcs_next';
       final newExePath = p.join(tempDir.path, newExeName);
 
+      print('🛠️  Running pub get & Compiling binary...');
+      print('   > Source found at: ${p.relative(vcsFile.path, from: tempDir.path).grey}');
+
+      print('   > Fetching dependencies...');
+      final pubResult = await Process.run('dart', ['pub', 'get'], 
+        workingDirectory: sourceRoot, 
+        runInShell: true
+      );
+
+      if (pubResult.exitCode != 0) {
+        print(pubResult.stderr);
+        throw 'pub get failed';
+      }
+
+      print('   > Building executable...');
       final compileResult = await Process.run('dart', [
         'compile', 'exe', 
-        p.join(sourcePath, 'bin', 'vcs.dart'), 
+        vcsFile.path, 
         '-o', newExePath
-      ], workingDirectory: sourcePath);
+      ], 
+      workingDirectory: sourceRoot,
+      runInShell: true);
 
       if (compileResult.exitCode != 0) {
+        print('\n--- COMPILE ERROR ---'.red);
         print(compileResult.stderr);
-        throw 'Compilation failed.';
+        throw 'Compilation failed with exit code ${compileResult.exitCode}.';
       }
 
       print('📦 Replacing binary at: ${currentExePath.grey}');
       
       if (Platform.isWindows) {
         final oldExe = File(currentExePath);
-        await oldExe.rename('${currentExePath}.old');
+        if (await oldExe.exists()) {
+          try {
+            await oldExe.rename('${currentExePath}.old');
+          } catch (e) {
+            final oldFile = File('${currentExePath}.old');
+            if (await oldFile.exists()) await oldFile.delete();
+            await oldExe.rename('${currentExePath}.old');
+          }
+        }
         await File(newExePath).copy(currentExePath);
       } else {
         await File(newExePath).copy(currentExePath);
@@ -149,7 +189,7 @@ class PortableVcs {
       try { await tempDir.delete(recursive: true); } catch (_) {}
 
       print('\n🎉 ${"Update successful!".green.bold}');
-      print('The new binary is ready. You can now delete the .old file if you wish.\n');
+      print('The new binary is ready. Restart VCS to apply changes.\n');
 
     } catch (e) {
       print('❌ ${"Update failed:".red} $e');
