@@ -26,7 +26,7 @@ import 'package:vcs/models/tree_node.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.2-Experimental';
+const String vcsBaseVersion = '0.3.2-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -77,12 +77,12 @@ class PortableVcs {
       
       if (versionResponse.statusCode == 200) {
         final remoteContent = versionResponse.body;
-        final versionRegex = RegExp(r"const String baseVersion = '([^']+)'");
+        final versionRegex = RegExp(r"const String (?:vcsBaseVersion|baseVersion) = '([^']+)'");
         final remoteMatch = versionRegex.firstMatch(remoteContent);
         
         if (remoteMatch != null) {
           final remoteV = remoteMatch.group(1);
-          final localV = getFullVersion().split(' ').lastWhere((e) => e.contains('.'));
+          final localV = getFullVersion().split(' ').lastWhere((e) => e.contains('.'), orElse: () => "");
           
           if (remoteV == localV) {
             print('✅ ${"You are already on the latest version ($localV).".green}');
@@ -92,6 +92,8 @@ class PortableVcs {
           } else {
             print('🚀 New version detected: ${localV.grey} -> ${remoteV!.green.bold}');
           }
+        } else {
+          print('⚠️  Could not parse remote version. Proceeding with update anyway...');
         }
       }
 
@@ -1968,7 +1970,7 @@ class PortableVcs {
       return;
     }
 
-    print('\n${'--- Pull/Restore Preview ---'.cyan}');
+    print('\n${'--- PULL/RESTORE PREVIEW ---'.black.onCyan}');
     print('${'Source Track:'.padRight(15)} $targetTrackName');
     print('${'Snapshot ID:'.padRight(15)} ${entry.id.green}');
     print('${'Message:'.padRight(15)} ${entry.message.yellow}');
@@ -1976,38 +1978,86 @@ class PortableVcs {
     print('');
 
     if (entry.changeSummary.isEmpty) {
-      print('  ${"(No file changes recorded in this snapshot)".yellow}');
+      print('  ${"(No file changes recorded)".grey.italic}');
     } else {
       for (final c in entry.changeSummary) {
-        if (c.startsWith('[N]')) {
-          print('  ${'[+]'.green} ${c.substring(3).trim()}');
-        } else if (c.startsWith('[M]')) {
-          print('  ${'[~]'.yellow} ${c.substring(3).trim()}');
-        } else if (c.startsWith('[D]')) {
-          print('  ${'[-]'.red} ${c.substring(3).trim()}');
-        } else {
-          print('  $c');
-        }
+        if (c.startsWith('[N]')) print('  ${'[+]'.green} ${c.substring(3).trim()}');
+        else if (c.startsWith('[M]')) print('  ${'[~]'.yellow} ${c.substring(3).trim()}');
+        else if (c.startsWith('[D]')) print('  ${'[-]'.red} ${c.substring(3).trim()}');
+        else print('  $c');
       }
     }
 
-    print('\n${'⚠️ WARNING:'.red} This operation will overwrite your current working directory.');
-    stdout.write('Do you want to proceed with the pull? (y/N): ');
+    print('\n${'⚠️  WARNING:'.red.bold} This will overwrite files and remove those marked as deleted in the snapshot.');
+    stdout.write('Proceed with pull? (y/N): ');
     String? confirm = stdin.readLineSync()?.trim().toLowerCase();
     
     if (confirm != 'y' && confirm != 'yes') {
-      print('🚫 Pull aborted by user.');
+      print('🚫 Pull aborted.');
       return;
     }
 
     final finalPassword = password ?? askPassword();
     if (finalPassword == null || finalPassword.isEmpty) {
-      print('❌ Password required for decryption.');
+      print('❌ Password required.');
       return;
     }
 
-    print('📥 Pulling snapshot ${finalSnapshotId.green} from track ${targetTrackName.cyan}...');
-    await revertWithPassword(finalSnapshotId, finalPassword);
+    print('\n📥 Processing snapshot ${finalSnapshotId.green}...');
+    
+    try {
+      final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
+      if (snapshot == null) {
+        print('❌ Failed to read or decrypt snapshot data.');
+        return;
+      }
+
+      final filesInSnapshot = await _decodeSnapshotFiles(snapshot);
+      int restoredCount = 0;
+      int deletedCount = 0;
+
+      for (final change in entry.changeSummary) {
+        if (change.startsWith('[D]')) {
+          final pathToDelete = change.substring(3).trim();
+          final file = File(pathToDelete);
+          if (await file.exists()) {
+            try {
+              await file.delete();
+              deletedCount++;
+            } catch (e) {
+              print('⚠️  Could not delete file ${pathToDelete.grey}: $e');
+            }
+          }
+        }
+      }
+
+      for (final path in filesInSnapshot.keys) {
+        final bytes = filesInSnapshot[path]!;
+        final file = File(path);
+
+        final directory = Directory(file.parent.path);
+        if (!await directory.exists()) {
+          await directory.create(recursive: true);
+        }
+
+        await file.writeAsBytes(bytes, flush: true);
+        
+        restoredCount++;
+        if (restoredCount % 5 == 0) {
+          stdout.write('\rRestoring: ${((restoredCount / filesInSnapshot.length) * 100).toInt()}% ($restoredCount files)');
+        }
+      }
+
+      print('\r✅ Pull complete!');
+      print('   ${restoredCount.toString().green} files updated/restored.');
+      if (deletedCount > 0) {
+        print('   ${deletedCount.toString().red} files removed as per snapshot metadata.');
+      }
+
+    } catch (e) {
+      print('\n❌ ${'CRITICAL ERROR during pull:'.red} $e');
+      print('ℹ️  Your files might be in an inconsistent state. Suggesting a new pull.');
+    }
   }
 
   Future<void> revert(String snapshotId, {String? password}) async {
@@ -3427,21 +3477,22 @@ class PortableVcs {
   ) async {
     print('📥 ${"Restoring snapshot directly from memory...".grey}');
     final backupDir = Directory(
-      p.join(_localMetaDir.path, 'backup_before_publish_${DateTime.now().millisecondsSinceEpoch}'),
+      p.join(_localMetaDir.path, 'backups', 'publish_safety_${DateTime.now().millisecondsSinceEpoch}'),
     );
 
     try {
       await _createTrackedBackup(backupDir);
+      
       final currentTracked = await _listTrackedFiles(_cwd);
       final archive = ZipDecoder().decodeBytes(snapshot.zipBytes);
 
       for (final rel in currentTracked) {
         final file = File(p.join(_cwd.path, rel));
-        if (file.existsSync()) {
+        if (await file.exists()) {
           try {
             await file.delete();
           } catch (e) {
-            print('⚠️  Note: Could not delete $rel, will attempt overwrite.');
+            //
           }
         }
       }
@@ -3450,9 +3501,14 @@ class PortableVcs {
         final path = p.join(_cwd.path, file.name);
         if (file.isFile) {
           final outFile = File(path);
-          await outFile.parent.create(recursive: true);
+
+          final parentDir = Directory(outFile.parent.path);
+          if (!await parentDir.exists()) {
+            await parentDir.create(recursive: true);
+          }
           
           final data = file.content as List<int>;
+
           await outFile.writeAsBytes(data, flush: true);
         } else {
           await Directory(path).create(recursive: true);
@@ -3461,21 +3517,26 @@ class PortableVcs {
 
       print('✅ ${"Working tree updated successfully.".green}');
 
-      if (backupDir.existsSync()) {
-        await backupDir.delete(recursive: true).catchError((_) => null);
+      if (await backupDir.exists()) {
+        try {
+          await backupDir.delete(recursive: true);
+        } catch (_) {
+          print('ℹ️  ${"Safety backup kept at:".grey} ${backupDir.path}');
+        }
       }
 
     } catch (e) {
-      print('❌ Restore failed: $e');
+      print('❌ ${"Restore failed:".red} $e');
       print('⚠️  Attempting recovery from safety backup...');
 
       try {
-        if (backupDir.existsSync()) {
+        if (await backupDir.exists()) {
+          // Usamos copia archivo por archivo para restaurar el backup
           await _copyTrackedFiles(backupDir, _cwd);
           print('✅ Recovery successful.');
         }
       } catch (recoveryError) {
-        print('❌ Critical: Recovery failed. Check $backupDir');
+        print('❌ ${"CRITICAL: Recovery failed.".red} Manual recovery needed from: ${backupDir.path}');
       }
       rethrow;
     }
