@@ -9,7 +9,6 @@ import 'package:archive/archive.dart';
 import 'package:args/args.dart';
 import 'package:crypto/crypto.dart' as hash;
 import 'package:cryptography/cryptography.dart' as crypto_alg;
-import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
@@ -26,7 +25,7 @@ import 'package:vcs/models/tree_node.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.2-Experimental.1';
+const String vcsBaseVersion = '0.3.3-Experimental';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -185,8 +184,21 @@ class PortableVcs {
         }
         await File(newExePath).copy(currentExePath);
       } else {
-        await File(newExePath).copy(currentExePath);
-        await Process.run('chmod', ['+x', currentExePath]);
+        try {
+          await File(newExePath).copy(currentExePath);
+          await Process.run('chmod', ['+x', currentExePath]);
+        } catch (e) {
+          print('\n${'❌ PERMISSION DENIED'.red.bold}');
+          print('VCS is installed in a protected directory: ${currentExePath.grey}');
+          print('Please run the following command to apply the update:');
+          
+          final sudoCmd = 'sudo cp "${newExePath}" "${currentExePath}" && sudo chmod +x "${currentExePath}"';
+          print('\n  ${sudoCmd.cyan.bold}\n');
+          
+          print('After running that, you can delete the temporary build at:');
+          print('  ${tempDir.path.grey}\n');
+          return; 
+        }
       }
 
       try { await tempDir.delete(recursive: true); } catch (_) {}
@@ -1251,6 +1263,52 @@ class PortableVcs {
     await temp.rename(file.path);
   }
 
+  String _renderMarkdown(String text) {
+    if (text.isEmpty) return text;
+    String rendered = text.replaceAllMapped(RegExp(r'^# (.*)$', multiLine: true), (m) {
+      return '${m.group(1)}'.cyan.bold.underline;
+    });
+
+    rendered = rendered.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) {
+      return '${m.group(1)}'.blue.underline;
+    });
+
+    rendered = rendered.replaceAllMapped(RegExp(r'#(\d+)'), (m) {
+      return '${m.group(0)}'.yellow.bold;
+    });
+    rendered = rendered.replaceAllMapped(RegExp(r'@([a-zA-Z0-9_-]+)'), (m) {
+      return '@${m.group(1)}'.green.italic;
+    });
+
+    rendered = rendered.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) {
+      return '${m.group(1)}'.white.bold;
+    });
+
+    rendered = rendered.replaceAllMapped(RegExp(r'(?<!\*)\*(?!\*)(.*?)\*'), (m) {
+      return '${m.group(1)}'.grey.italic;
+    });
+
+    rendered = rendered.replaceAllMapped(RegExp(r'`(.*?)`'), (m) {
+      return ' ${m.group(1)} '.black.grey; 
+    });
+
+    rendered = rendered.split('\n').map((line) {
+      if (RegExp(r'^\s*[-\*] ').hasMatch(line)) {
+        return line.replaceFirst(RegExp(r'[-\*] '), '•'.cyan + ' ');
+      }
+      if (RegExp(r'^\s*\d+\. ').hasMatch(line)) {
+        return line.replaceAllMapped(RegExp(r'(\d+\.) '), (m) => '${m.group(1)}'.yellow + ' ');
+      }
+      return line;
+    }).join('\n');
+
+    rendered = rendered.replaceAllMapped(RegExp(r'^> (.*)$', multiLine: true), (m) {
+      return '${"┃".grey} ${m.group(1)?.italic}';
+    });
+
+    return rendered;
+  }
+
   Future<void> log({
     LogViewMode mode = LogViewMode.summary, 
     String? track, 
@@ -1299,7 +1357,12 @@ class PortableVcs {
 
       print('$subPrefix     ${"Date:".yellow.padRight(10)} $createdAt');
       print('$subPrefix     ${"Author:".yellow.padRight(10)} $author');
-      print('$subPrefix     ${"Message:".yellow.padRight(10)} ${entry.message.cyan}');
+
+      final msgLines = _renderMarkdown(entry.message).split('\n');
+      for (var j = 0; j < msgLines.length; j++) {
+        final label = j == 0 ? "Message:".yellow.padRight(10) : " ".padRight(10);
+        print('$subPrefix     $label ${msgLines[j]}');
+      }
 
       switch (mode) {
         case LogViewMode.summary:
@@ -1398,7 +1461,7 @@ class PortableVcs {
     );
   }
 
-  Future<void> showSnapshot(String snapshotId, {String? track}) async {
+  Future<void> showSnapshot(String? snapshotId, {String? track}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -1410,11 +1473,21 @@ class PortableVcs {
       return;
     }
 
+    if (trackData.logs.isEmpty) {
+      print('ℹ️  ${"No snapshots available in track".yellow} ${targetTrackName.cyan}');
+      return;
+    }
+
     SnapshotLogEntry? entry;
-    for (final item in trackData.logs) {
-      if (item.id == snapshotId) {
-        entry = item;
-        break;
+    if (snapshotId == null || snapshotId.isEmpty) {
+      entry = trackData.logs.first;
+      print('ℹ️  ${"No ID provided. Showing latest snapshot from".grey} ${targetTrackName.cyan}');
+    } else {
+      for (final item in trackData.logs) {
+        if (item.id == snapshotId) {
+          entry = item;
+          break;
+        }
       }
     }
 
@@ -2172,26 +2245,25 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    stdout.write('⚠️ Delete snapshot history from USB? (y/N): ');
-    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') {
-      print('Cancelled.');
+    print('\n⚠️  ${"WARNING:".red.bold} This will delete ALL snapshots from ALL tracks.');
+    stdout.write('Type the project name "${context.remoteMeta.projectName.green}" to confirm: ');
+    
+    if (stdin.readLineSync()?.trim() != context.remoteMeta.projectName) {
+      print('🚫 Confirmation failed. Aborting.');
       return;
     }
 
     await _withLock(context.remoteRepoDir, () async {
       final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
-      if (snapshotsDir.existsSync()) {
-        snapshotsDir.deleteSync(recursive: true);
+
+      if (await snapshotsDir.exists()) {
+        await snapshotsDir.delete(recursive: true).catchError((e) => print("Note: $e"));
       }
       await snapshotsDir.create(recursive: true);
 
-      final updatedTracks = Map<String, TrackState>.from(
-        context.remoteMeta.tracks,
-      );
-
-      updatedTracks[context.remoteMeta.activeTrack] = TrackState(
-        logs: [],
-      );
+      final updatedTracks = context.remoteMeta.tracks.map((name, state) {
+        return MapEntry(name, TrackState(logs: []));
+      });
 
       final updatedMeta = context.remoteMeta.copyWith(
         updatedAt: DateTime.now().toUtc().toIso8601String(),
@@ -2203,7 +2275,7 @@ class PortableVcs {
         const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
       );
 
-      print('🗑️ History deleted.');
+      print('🗑️  ${"All history wiped successfully.".green}');
     });
   }
 
@@ -2211,42 +2283,49 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    print('\n${'🔥 DANGER ZONE: PURGE REPOSITORY'.black.onRed}');
+    print('\n${'🔥 DANGER ZONE: PURGE REPOSITORY '.black.onRed}');
     print('${'Project:'.yellow} ${context.remoteMeta.projectName}');
-    print('${'Repo ID:'.yellow} ${context.remoteMeta.repoId}');
-    print('\n${'This will permanently delete:'.red}');
-    print('  1. The entire remote vault on the USB drive.');
-    print('  2. The local ${'.vcs/'.cyan} metadata folder in this project.');
+    print('${'Vault Path:'.yellow} ${context.remoteRepoDir.path}');
+    print('\nThis will ${'PERMANENTLY DELETE'.red.bold}:');
+    print('  1. All snapshots and metadata on the USB.');
+    print('  2. Local link and settings (${'.vcs/'.cyan}).');
     
-    stdout.write('\n⚠️ Are you absolutely sure? (y/N): ');
-    final confirm = (stdin.readLineSync() ?? '').trim().toLowerCase();
-    
-    if (confirm != 'y' && confirm != 'yes') {
+    stdout.write('\n⚠️  To confirm, type "${'PURGE'.red}": ');
+    if (stdin.readLineSync()?.trim().toUpperCase() != 'PURGE') {
       print('🚫 Purge cancelled.');
       return;
     }
 
+    bool remoteDeleted = false;
+
     await _withLock(context.remoteRepoDir, () async {
       try {
-        if (context.remoteRepoDir.existsSync()) {
-          context.remoteRepoDir.deleteSync(recursive: true);
+        if (await context.remoteRepoDir.exists()) {
+          await context.remoteRepoDir.delete(recursive: true);
           print('💀 ${'Remote repo deleted from USB.'.green}');
+          remoteDeleted = true;
         }
       } catch (e) {
         print('❌ ${'Error deleting remote repo:'.red} $e');
+        print('💡 Check if the USB is still connected or a file is open.');
       }
     });
 
-    try {
-      if (_localMetaDir.existsSync()) {
-        _localMetaDir.deleteSync(recursive: true);
-        print('🗑️  ${'Local .vcs folder removed.'.green}');
+    if (remoteDeleted || !(await context.remoteRepoDir.exists())) {
+      try {
+        if (await _localMetaDir.exists()) {
+          await _localMetaDir.delete(recursive: true);
+          print('🗑️  ${'Local .vcs folder removed.'.green}');
+        }
+      } catch (e) {
+        print('❌ ${'Error deleting local metadata:'.red} $e');
+        print('Manual action: You can delete ${_localMetaDir.path} manually.');
       }
-    } catch (e) {
-      print('❌ ${'Error deleting local metadata:'.red} $e');
+    } else {
+      print('\n⚠️  ${"Purge incomplete:".yellow} Local metadata kept because remote deletion failed.');
     }
 
-    print('\n✨ ${"Purge complete. The project is no longer linked to the vault.".bold}\n');
+    print('\n✨ ${"Process finished.".bold}\n');
   }
 
   Future<List<Directory>> _listCandidateDrives() async {
@@ -4415,120 +4494,131 @@ class PortableVcs {
 
   String _generateDashboardHtml(RepoMeta meta) {
     final String css = r"""
-            :root { 
-              --bg: #0d1117; --card: #161b22; --accent: #58a6ff; 
-              --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
-              --success: #238636; --error: #f85149; --warning: #d29922;
-              --added: #3fb950; --modified: #d29922; --deleted: #f85149;
-              --term-bg: #010409;
-            }
-            * { box-sizing: border-box; }
-            body { 
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; 
-              background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden;
-            }
-            
-            .sidebar { 
-              width: 300px; border-right: 1px solid var(--border); padding: 25px; 
-              display: flex; flex-direction: column; background: #010409;
-            }
-            .stats-card { background: var(--card); border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin-bottom: 10px; }
-            .stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 1px; }
-            .stat-value { font-size: 14px; font-weight: bold; color: var(--accent); display: block; margin-top: 2px; }
+        :root { 
+          --bg: #0d1117; --card: #161b22; --accent: #58a6ff; 
+          --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
+          --success: #238636; --error: #f85149; --warning: #d29922;
+          --added: #3fb950; --modified: #d29922; --deleted: #f85149;
+          --term-bg: #010409;
+        }
+        * { box-sizing: border-box; transition: background 0.2s, border-color 0.2s; }
+        body { 
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; 
+          background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden;
+        }
+        
+        .sidebar { 
+          width: 300px; border-right: 1px solid var(--border); padding: 25px; 
+          display: flex; flex-direction: column; background: #010409; z-index: 10;
+        }
+        .stats-card { background: var(--card); border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin-bottom: 10px; }
+        .stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 1px; }
+        .stat-value { font-size: 14px; font-weight: bold; color: var(--accent); display: block; margin-top: 2px; }
 
-            .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; }
-            .btn-action { 
-              background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 12px;
-              border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: 0.2s;
-              display: flex; flex-direction: column; align-items: center; gap: 4px;
-            }
-            .btn-action:hover { border-color: var(--accent); background: #1c2128; transform: translateY(-2px); }
+        .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; }
+        .btn-action { 
+          background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 12px;
+          border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+          display: flex; flex-direction: column; align-items: center; gap: 4px;
+        }
+        .btn-action:hover { border-color: var(--accent); background: #1c2128; transform: translateY(-1px); }
+        .btn-action:active { transform: translateY(0); }
 
-            .workspace { flex: 1; display: flex; flex-direction: column; height: 100vh; }
-            .main-content { flex: 1; overflow-y: auto; padding: 40px; }
-            
-            .terminal-container {
-              height: 250px; background: var(--term-bg); border-top: 1px solid var(--border);
-              display: flex; flex-direction: column; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-            }
-            .terminal-output { flex: 1; overflow-y: auto; padding: 15px; font-size: 13px; line-height: 1.5; color: #d1d5da; }
-            .terminal-output div { white-space: pre-wrap; word-break: break-all; }
-            .terminal-input-area { 
-              display: flex; align-items: center; padding: 10px 15px; background: #090c10; border-top: 1px solid #21262d;
-            }
-            .prompt { color: var(--added); margin-right: 10px; font-weight: bold; }
-            .cmd-input { 
-              flex: 1; background: transparent; border: none; color: white; font-family: inherit; font-size: 14px; outline: none;
-            }
+        .workspace { flex: 1; display: flex; flex-direction: column; height: 100vh; position: relative; }
+        .main-content { flex: 1; overflow-y: auto; padding: 40px; scroll-behavior: smooth; }
+        
+        .terminal-container {
+          height: 280px; background: var(--term-bg); border-top: 1px solid var(--border);
+          display: flex; flex-direction: column; font-family: 'SFMono-Regular', Consolas, monospace;
+          box-shadow: 0 -10px 30px rgba(0,0,0,0.5);
+        }
+        .terminal-output { flex: 1; overflow-y: auto; padding: 15px; font-size: 13px; line-height: 1.6; color: #d1d5da; }
+        .terminal-output div { white-space: pre-wrap; word-break: break-all; margin-bottom: 2px; }
+        .terminal-input-area { 
+          display: flex; align-items: center; padding: 12px 15px; background: #090c10; border-top: 1px solid #21262d;
+        }
+        .prompt { color: var(--added); margin-right: 10px; font-weight: bold; user-select: none; }
+        .cmd-input { 
+          flex: 1; background: transparent; border: none; color: white; font-family: inherit; font-size: 14px; outline: none;
+        }
 
-            .snapshot-card { 
-              background: var(--card); border: 1px solid var(--border); padding: 15px; 
-              margin-bottom: 10px; border-radius: 8px; cursor: pointer; 
-              display: flex; justify-content: space-between; align-items: center; transition: 0.1s;
-            }
-            .snapshot-card:hover { border-color: var(--accent); background: #1c2128; }
-            
-            #codeViewer { 
-              display: none; position: fixed; inset: 20px; background: var(--term-bg); border: 1px solid var(--border);
-              border-radius: 12px; z-index: 1000; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,0.7);
-            }
+        .snapshot-card { 
+          background: var(--card); border: 1px solid var(--border); padding: 15px; 
+          margin-bottom: 10px; border-radius: 8px; cursor: pointer; 
+          display: flex; justify-content: space-between; align-items: center;
+        }
+        .snapshot-card:hover { border-color: var(--accent); background: #1c2128; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        
+        #codeViewer { 
+          display: none; position: fixed; inset: 20px; background: var(--term-bg); border: 1px solid var(--border);
+          border-radius: 12px; z-index: 1000; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+        }
 
-            /* Estilos para Vista Partida */
-            .diff-container {
-              display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
-              background: var(--border); flex: 1; overflow: hidden;
-            }
-            .diff-pane { 
-              background: var(--term-bg); overflow: auto; padding: 20px 0;
-              display: flex; flex-direction: column;
-            }
-            .diff-line { 
-              white-space: pre; 
-              font-family: 'SFMono-Regular', Consolas, monospace; 
-              padding: 1px 15px; /* Reducido un poco el padding vertical */
-              font-size: 12px; 
-              height: 1.5em; /* Altura fija para forzar alineación */
-              line-height: 1.5;
-              display: block;
-            }
-            .diff-line.add { background-color: rgba(46, 160, 67, 0.15); color: #7ee787; border-left: 4px solid #3fb950; }
-            .diff-line.del { background-color: rgba(248, 81, 73, 0.15); color: #ff7b72; border-left: 4px solid #f85149; }
-            .diff-line.empty { background-color: rgba(0, 0, 0, 0.1); opacity: 0.5; }
+        .diff-container {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+          background: var(--border); flex: 1; overflow: hidden;
+        }
+        .diff-pane { 
+          background: var(--term-bg); overflow: auto; padding: 20px 0;
+          display: flex; flex-direction: column;
+        }
+        .diff-line { 
+          white-space: pre; 
+          font-family: 'SFMono-Regular', Consolas, monospace; 
+          padding: 0 15px;
+          font-size: 12px; 
+          min-height: 1.5em;
+          line-height: 1.5;
+          display: block;
+        }
+        .diff-line.add { background-color: rgba(46, 160, 67, 0.15); color: #7ee787; border-left: 3px solid #3fb950; }
+        .diff-line.del { background-color: rgba(248, 81, 73, 0.15); color: #ff7b72; border-left: 3px solid #f85149; }
+        .diff-line.empty { background-color: rgba(255, 255, 255, 0.02); }
 
-            #passwordModal { 
-              display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); 
-              backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 2000;
-            }
-            .modal-content { background: var(--card); padding: 30px; border-radius: 12px; border: 1px solid var(--border); width: 350px; text-align: center;}
-            .modal-content input { 
-              width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); 
-              color: white; border-radius: 6px; margin: 15px 0; outline: none;
-            }
-            .badge-status { padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid; }
-            .added { color: var(--added); border-color: var(--added); }
-            .modified { color: var(--modified); border-color: var(--modified); }
-            .deleted { color: var(--deleted); border-color: var(--deleted); }
+        #passwordModal { 
+          display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); 
+          backdrop-filter: blur(8px); justify-content: center; align-items: center; z-index: 2000;
+        }
+        .modal-content { 
+          background: var(--card); padding: 30px; border-radius: 12px; border: 1px solid var(--border); 
+          width: 380px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+        .modal-content input { 
+          width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); 
+          color: white; border-radius: 6px; margin: 20px 0; outline: none; font-size: 16px;
+        }
+        .badge-status { padding: 2px 8px; border-radius: 12px; font-size: 10px; border: 1px solid; font-weight: bold; text-transform: uppercase; }
+        .added { color: var(--added); border-color: var(--added); }
+        .modified { color: var(--modified); border-color: var(--modified); }
+        .deleted { color: var(--deleted); border-color: var(--deleted); }
 
-            .track-select {
-              width: 100%; background: transparent; border: none; color: var(--added); 
-              font-size: 14px; font-weight: bold; outline: none; cursor: pointer;
-              padding: 0; margin-top: 2px; appearance: none;
-            }
-            .track-select option { background: var(--card); color: var(--text); }
-        """;
+        .track-select {
+          width: 100%; background: transparent; border: none; color: var(--accent); 
+          font-size: 14px; font-weight: bold; outline: none; cursor: pointer;
+          padding: 0; margin-top: 2px; appearance: none;
+        }
+        .track-select option { background: var(--card); color: var(--text); }
+
+        /* Loading Animation */
+        .loader {
+          width: 14px; height: 14px; border: 2px solid var(--text-dim); border-bottom-color: transparent;
+          border-radius: 50%; display: inline-block; animation: rotation 1s linear infinite; margin-left: 10px; visibility: hidden;
+        }
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    """;
 
     final snapshotsHtml = meta.logs.map((log) {
       return """
-              <div class="snapshot-card" onclick="openInspector('${log.id}', '${log.message}')">
-                <div>
-                  <div style="font-weight:600; color:#f0f6fc;">${log.message}</div>
-                  <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">
-                    <strong>${log.author ?? "Anonymous"}</strong> • ${log.createdAt}
-                  </div>
-                </div>
-                <div style="font-family:monospace; font-size:11px; background:#30363d; padding:4px 8px; border-radius:4px;">${log.id}</div>
+          <div class="snapshot-card" onclick="openInspector('${log.id}', '${log.message}')">
+            <div>
+              <div style="font-weight:600; color:#f0f6fc;">${log.message}</div>
+              <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">
+                <strong style="color:var(--text)">${log.author ?? "Anonymous"}</strong> • ${log.createdAt}
               </div>
-            """;
+            </div>
+            <div style="font-family:monospace; font-size:11px; background:#30363d; padding:4px 8px; border-radius:4px; color:var(--accent);">${log.id.substring(0, 8)}</div>
+          </div>
+        """;
     }).join('');
 
     final trackOptions = meta.tracks.keys
@@ -4536,244 +4626,350 @@ class PortableVcs {
         .join('');
 
     return r"""
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <title>VCS Terminal Dashboard</title>
-            <style>""" + css + r"""</style>
-          </head>
-          <body>
-            <div class="sidebar">
-              <h2 style="font-size: 18px; margin-bottom: 20px;">📁 Repository</h2>
-              <div class="stats-card">
-                <span class="stat-label">Project</span>
-                <span class="stat-value">""" + meta.projectName + r"""</span>
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>VCS Terminal Dashboard</title>
+        <style>""" + css + r"""</style>
+      </head>
+      <body>
+        <div class="sidebar">
+          <h2 style="font-size: 18px; margin-bottom: 20px; display:flex; align-items:center; gap:10px;">
+            <span style="font-size:24px;">📦</span> Repo Explorer
+          </h2>
+          
+          <div class="stats-card">
+            <span class="stat-label">Project</span>
+            <span class="stat-value">""" + meta.projectName + r"""</span>
+          </div>
+          
+          <div class="stats-card">
+            <span class="stat-label">Active Track</span>
+            <select class="track-select" onchange="switchTrack(this.value)">
+              """ + trackOptions + r"""
+            </select>
+          </div>
+
+          <div class="actions-grid">
+            <button class="btn-action" onclick="setCmd('status')"><span>🔍</span>Status</button>
+            <button class="btn-action" onclick="setCmd('diff')"><span>🌓</span>Diff</button>
+            <button class="btn-action" onclick="setCmd('push \"\" -a ')"><span>📤</span>Push</button>
+            <button class="btn-action" onclick="setCmd('pull')"><span>📥</span>Pull</button>
+            <button class="btn-action" onclick="setCmd('publish --branch main')"><span>🚀</span>Publish</button>
+            <button class="btn-action" onclick="setCmd('doctor')"><span>🩺</span>Doctor</button>
+            <button class="btn-action" onclick="executeRaw('help')" style="grid-column: span 2; border-color: var(--warning); color: var(--warning);">❓ Help Guide</button>
+          </div>
+          
+          <div style="margin-top:auto; font-size:10px; color:var(--text-dim); text-align:center;">
+            Portable VCS Web v2.1.0
+          </div>
+        </div>
+
+        <div class="workspace">
+          <div class="main-content">
+            <div id="viewList">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
+                <h1 style="font-size:24px; margin:0;">History Logs</h1>
+                <input type="text" placeholder="Search snapshots..." oninput="filterLogs(this.value)" 
+                      style="background:var(--card); border:1px solid var(--border); color:white; padding:10px 15px; border-radius:20px; outline:none; width:250px; font-size:13px;">
               </div>
+              <div id="snapshotList">""" + snapshotsHtml + r"""</div>
+            </div>
+
+            <div id="fileInspector" style="display:none">
+              <button onclick="closeInspector()" style="background:transparent; color:var(--accent); border:none; cursor:pointer; padding:0; margin-bottom:20px; font-size:14px; font-weight:bold; display:flex; align-items:center; gap:5px;">
+                <span>&larr;</span> Back to Timeline
+              </button>
+              <h1 id="inspectTitle" style="margin:0 0 25px 0; font-size:22px;">Files in Snapshot</h1>
+              <div id="fileList" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap:15px;"></div>
+            </div>
+          </div>
+
+          <div class="terminal-container">
+            <div class="terminal-output" id="termOut">Welcome to Portable VCS Web Terminal. Type 'help' to begin.</div>
+            <div class="terminal-input-area">
+              <span class="prompt">vcs &gt;</span>
+              <input type="text" class="cmd-input" id="cmdIn" placeholder="Enter command..." autofocus onkeydown="handleTermKey(event)">
+              <span id="termLoader" class="loader"></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="passwordModal">
+          <div class="modal-content">
+            <h3 id="modalTitle" style="margin-top:0;">🔒 Unlock Snapshot</h3>
+            <p id="modalDesc" style="font-size:12px; color:var(--text-dim);">Enter your repository password to continue.</p>
+            <input type="password" id="passInput" placeholder="Password...">
+            <div style="display:flex; gap:12px;">
+              <button onclick="submitPassword()" style="flex:2; padding:12px; background:var(--accent); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">Confirm</button>
+              <button onclick="closeModal()" style="flex:1; background:transparent; color:var(--text-dim); border:none; cursor:pointer; font-size:13px;">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="codeViewer">
+          <div style="padding:15px 25px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:#161b22;">
+            <div>
+              <span style="color:var(--text-dim); font-size:12px;">FILE INSPECTOR</span>
+              <div id="fileNameDisplay" style="font-weight:bold; font-family:monospace; color:var(--accent);"></div>
+            </div>
+            <button onclick="closeCode()" style="background:#30363d; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-weight:600;">Close View</button>
+          </div>
+          <div class="diff-container">
+              <div class="diff-pane" id="leftPane"></div>
+              <div class="diff-pane" id="rightPane"></div>
+          </div>
+        </div>
+
+        <script>
+          let currentId = null, currentPass = null;
+          let pendingCommand = null;
+          let pendingTrackName = null;
+          let restoreDecision = false;
+          
+          // Historial de comandos
+          let cmdHistory = [];
+          let historyIndex = -1;
+
+          function setCmd(c) {
+            const input = document.getElementById('cmdIn');
+            input.value = c;
+            input.focus();
+            if(c.includes('""')) {
+              const pos = c.indexOf('"') + 1;
+              input.setSelectionRange(pos, pos);
+            }
+          }
+
+          async function switchTrack(trackName) {
+            currentId = null; 
+            pendingTrackName = trackName;
+            restoreDecision = confirm(`Switching to track "${trackName}".\n\nWould you like to restore the project files to the latest state of this track?`);
+            if (restoreDecision) {
+              document.getElementById('modalTitle').innerText = "🔑 Restore Encryption Key";
+              document.getElementById('passwordModal').style.display = 'flex';
+              document.getElementById('passInput').focus();
+            } else {
+              executeSwitch(trackName, '', false);
+            }
+          }
+
+          async function executeSwitch(name, pass, restore) {
+            const out = document.getElementById('termOut');
+            toggleLoader(true);
+            out.innerHTML += `<div style="color:var(--warning); margin-top:10px;">🔄 Switching track to: ${name}...</div>`;
+            try {
+              const resp = await fetch(`/api/switch-track?name=${encodeURIComponent(name)}&password=${encodeURIComponent(pass)}&restore=${restore}`);
+              const data = await resp.json();
+              if (data.success) {
+                out.innerHTML += `<div style="color:var(--added)">✅ Track changed successfully. Refreshing UI...</div>`;
+                setTimeout(() => location.reload(), 800);
+              } else { 
+                alert("Error: " + (data.error || "Failed to switch")); 
+                toggleLoader(false);
+              }
+            } catch(e) { 
+              alert("Network error"); 
+              toggleLoader(false);
+            }
+          }
+
+          function handleTermKey(e) {
+            const input = document.getElementById('cmdIn');
+            
+            if(e.key === 'Enter') {
+              const raw = input.value.trim();
+              if(!raw) return;
               
-              <div class="stats-card">
-                <span class="stat-label">Active Track</span>
-                <select class="track-select" onchange="switchTrack(this.value)">
-                  """ + trackOptions + r"""
-                </select>
-              </div>
-
-              <div class="actions-grid">
-                <button class="btn-action" onclick="setCmd('status')">🔍 Status</button>
-                <button class="btn-action" onclick="setCmd('diff')">🌓 Diff</button>
-                <button class="btn-action" onclick="setCmd('push \"\" -a ')">📤 Push</button>
-                <button class="btn-action" onclick="setCmd('pull')">📥 Pull</button>
-                <button class="btn-action" onclick="setCmd('publish --branch main')">🚀 Publish</button>
-                <button class="btn-action" onclick="setCmd('doctor')">🩺 Doctor</button>
-                <button class="btn-action" onclick="executeRaw('help')" style="grid-column: span 2; border-color: var(--warning);">❓ Help Guide</button>
-              </div>
-            </div>
-
-            <div class="workspace">
-              <div class="main-content">
-                <div id="viewList">
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                    <h1 style="font-size:24px;">History</h1>
-                    <input type="text" placeholder="Filter..." oninput="filterLogs(this.value)" style="background:var(--card); border:1px solid var(--border); color:white; padding:8px; border-radius:6px; outline:none;">
-                  </div>
-                  <div id="snapshotList">""" + snapshotsHtml + r"""</div>
-                </div>
-
-                <div id="fileInspector" style="display:none">
-                  <button onclick="closeInspector()" style="background:transparent; color:var(--accent); border:none; cursor:pointer; padding:0; margin-bottom:10px;">&larr; Back to snapshots</button>
-                  <h1 id="inspectTitle" style="margin:0 0 20px 0; font-size:24px;">Files</h1>
-                  <div id="fileList" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:12px;"></div>
-                </div>
-              </div>
-
-              <div class="terminal-container">
-                <div class="terminal-output" id="termOut">Welcome to Portable VCS Web Terminal.</div>
-                <div class="terminal-input-area">
-                  <span class="prompt">vcs &gt;</span>
-                  <input type="text" class="cmd-input" id="cmdIn" placeholder="Enter command..." autofocus onkeypress="handleTermKey(event)">
-                </div>
-              </div>
-            </div>
-
-            <div id="passwordModal">
-              <div class="modal-content">
-                <h3 id="modalTitle">🔒 Unlock Snapshot</h3>
-                <input type="password" id="passInput" placeholder="Password...">
-                <div style="display:flex; gap:10px;">
-                  <button onclick="submitPassword()" style="flex:1; padding:10px; background:var(--success); color:white; border:none; border-radius:6px; cursor:pointer;">Confirm</button>
-                  <button onclick="closeModal()" style="flex:1; background:transparent; color:var(--text-dim); border:none; cursor:pointer;">Cancel</button>
-                </div>
-              </div>
-            </div>
-
-            <div id="codeViewer">
-              <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:#161b22;">
-                <strong id="fileNameDisplay"></strong>
-                <button onclick="closeCode()" style="background:var(--error); color:white; border:none; padding:5px 15px; border-radius:4px; cursor:pointer;">Close</button>
-              </div>
-              <div class="diff-container">
-                  <div class="diff-pane" id="leftPane"></div>
-                  <div class="diff-pane" id="rightPane"></div>
-              </div>
-            </div>
-
-            <script>
-              let currentId = null, currentPass = null;
-              let pendingCommand = null;
-              let pendingTrackName = null;
-              let restoreDecision = false;
-
-              function setCmd(c) {
-                const input = document.getElementById('cmdIn');
-                input.value = c;
-                input.focus();
-                if(c.includes('""')) {
-                  const pos = c.indexOf('"') + 1;
-                  input.setSelectionRange(pos, pos);
-                }
-              }
-
-              async function switchTrack(trackName) {
-                currentId = null; 
-                pendingTrackName = trackName;
-                restoreDecision = confirm(`Switched to track "${trackName}".\n\nDo you want to restore the latest snapshot?`);
-                if (restoreDecision) {
-                  document.getElementById('modalTitle').innerText = "🔑 Password to Restore Tree";
-                  document.getElementById('passwordModal').style.display = 'flex';
-                  document.getElementById('passInput').focus();
-                } else {
-                  executeSwitch(trackName, '', false);
-                }
-              }
-
-              async function executeSwitch(name, pass, restore) {
-                const out = document.getElementById('termOut');
-                out.innerHTML += `<div style="color:var(--warning); margin-top:10px;">🔄 Switching to track: ${name}...</div>`;
-                try {
-                  const resp = await fetch(`/api/switch-track?name=${encodeURIComponent(name)}&password=${encodeURIComponent(pass)}&restore=${restore}`);
-                  const data = await resp.json();
-                  if (data.success) {
-                    out.innerHTML += `<div style="color:var(--added)">✅ Track changed successfully.</div>`;
-                    setTimeout(() => location.reload(), 600);
-                  } else { alert("Error: " + data.error); }
-                } catch(e) { alert("Network error"); }
-              }
-
-              function handleTermKey(e) {
-                if(e.key === 'Enter') {
-                  const raw = e.target.value.trim();
-                  const needsAuth = ['push', 'pull', 'status', 'diff'].some(cmd => raw.startsWith(cmd));
-                  if (needsAuth) {
-                    pendingCommand = raw;
-                    document.getElementById('modalTitle').innerText = "🔑 Authentication Required";
-                    document.getElementById('passwordModal').style.display = 'flex';
-                    document.getElementById('passInput').focus();
-                  } else { executeRaw(raw); }
-                }
-              }
-
-              async function executeRaw(raw, pass = '') {
-                if(!raw.trim()) return;
-                const out = document.getElementById('termOut');
-                document.getElementById('cmdIn').value = '';
-                out.innerHTML += `<div style="color:var(--accent); margin-top:10px;">$ vcs ${raw}</div>`;
-                try {
-                  const resp = await fetch(`/api/command?raw=${encodeURIComponent(raw)}&password=${encodeURIComponent(pass)}`);
-                  const data = await resp.json();
-                  out.innerHTML += `<div>${data.output.replace(/\n/g, '<br>')}</div>`;
-                  out.scrollTop = out.scrollHeight;
-                  if(data.refresh) setTimeout(() => location.reload(), 1500);
-                } catch(e) { out.innerHTML += `<div style="color:var(--error)">Network error.</div>`; }
-              }
-
-              function openInspector(id, msg) {
-                currentId = id;
-                pendingCommand = null;
-                pendingTrackName = null;
-                document.getElementById('modalTitle').innerText = "🔒 Unlock Snapshot";
+              cmdHistory.push(raw);
+              historyIndex = cmdHistory.length;
+              
+              const needsAuth = ['push', 'pull', 'status', 'diff'].some(cmd => raw.startsWith(cmd));
+              if (needsAuth) {
+                pendingCommand = raw;
+                document.getElementById('modalTitle').innerText = "🔑 Authentication Required";
                 document.getElementById('passwordModal').style.display = 'flex';
                 document.getElementById('passInput').focus();
+              } else { executeRaw(raw); }
+            } 
+            else if (e.key === 'ArrowUp') {
+              if (historyIndex > 0) {
+                historyIndex--;
+                input.value = cmdHistory[historyIndex];
               }
-
-              function closeModal() { 
-                document.getElementById('passwordModal').style.display = 'none';
-                document.getElementById('passInput').value = '';
+              e.preventDefault();
+            } 
+            else if (e.key === 'ArrowDown') {
+              if (historyIndex < cmdHistory.length - 1) {
+                historyIndex++;
+                input.value = cmdHistory[historyIndex];
+              } else {
+                historyIndex = cmdHistory.length;
+                input.value = "";
               }
+              e.preventDefault();
+            }
+          }
 
-              function closeInspector() { 
-                document.getElementById('fileInspector').style.display = 'none';
-                document.getElementById('viewList').style.display = 'block';
-              }
+          function toggleLoader(show) {
+            document.getElementById('termLoader').style.visibility = show ? 'visible' : 'hidden';
+          }
 
-              async function submitPassword() {
-                const pass = document.getElementById('passInput').value;
-                if (pendingTrackName) {
-                  const name = pendingTrackName;
-                  closeModal();
-                  await executeSwitch(name, pass, restoreDecision);
-                  return;
-                }
-                if (pendingCommand) {
-                  const cmd = pendingCommand;
-                  pendingCommand = null;
-                  closeModal();
-                  executeRaw(cmd, pass);
-                  return;
-                }
-                if (currentId) {
-                  currentPass = pass;
-                  try {
-                    const resp = await fetch(`/api/inspect?id=${currentId}&password=${encodeURIComponent(pass)}`);
-                    const data = await resp.json();
-                    if (data.success) {
-                      closeModal();
-                      renderFiles(data.files);
-                    } else { alert("Wrong password"); }
-                  } catch(e) { alert("Error"); }
-                }
-              }
-
-              function renderFiles(files) {
-                document.getElementById('viewList').style.display = 'none';
-                document.getElementById('fileInspector').style.display = 'block';
-                document.getElementById('fileList').innerHTML = files.map(f => `
-                  <div class="snapshot-card" onclick="viewCode('${f.name}')">
-                    <span>📄 ${f.name}</span>
-                    <span class="badge-status ${f.status}">${f.status}</span>
-                  </div>
-                `).join('');
-              }
-
-              async function viewCode(file) {
-                try {
-                  const resp = await fetch(`/api/content?id=${currentId}&password=${encodeURIComponent(currentPass)}&file=${encodeURIComponent(file)}`);
-                  const data = await resp.json();
-                  
-                  document.getElementById('leftPane').innerHTML = data.left || '<div class="diff-line empty"> (New File) </div>';
-                  document.getElementById('rightPane').innerHTML = data.right;
-                  document.getElementById('fileNameDisplay').innerText = file;
-                  document.getElementById('codeViewer').style.display = 'flex';
-
-                  const left = document.getElementById('leftPane');
-                  const right = document.getElementById('rightPane');
-                  left.onscroll = () => { right.scrollTop = left.scrollTop; };
-                  right.onscroll = () => { left.scrollTop = right.scrollTop; };
-
-                } catch(e) { alert("Error loading diff"); }
-              }
+          async function executeRaw(raw, pass = '') {
+            if(!raw.trim()) return;
+            const out = document.getElementById('termOut');
+            document.getElementById('cmdIn').value = '';
+            toggleLoader(true);
+            
+            out.innerHTML += `<div style="color:var(--accent); margin-top:10px; font-weight:bold;">$ vcs ${raw}</div>`;
+            try {
+              const resp = await fetch(`/api/command?raw=${encodeURIComponent(raw)}&password=${encodeURIComponent(pass)}`);
+              const data = await resp.json();
               
-              function closeCode() { document.getElementById('codeViewer').style.display = 'none'; }
+              out.innerHTML += `<div style="margin-bottom:10px;">${data.output}</div>`;
+              out.scrollTop = out.scrollHeight;
               
-              function filterLogs(q) {
-                const query = q.toLowerCase();
-                document.querySelectorAll('#snapshotList .snapshot-card').forEach(c => {
-                  c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
-                });
+              if(data.refresh) {
+                out.innerHTML += `<div style="color:var(--warning)">♻️ Action requires UI refresh...</div>`;
+                setTimeout(() => location.reload(), 1200);
               }
-            </script>
-          </body>
-          </html>
-          """;
+            } catch(e) { 
+              out.innerHTML += `<div style="color:var(--error)">❌ Connection to local server lost.</div>`; 
+            } finally {
+              toggleLoader(false);
+            }
+          }
+
+          function openInspector(id, msg) {
+            currentId = id;
+            pendingCommand = null;
+            pendingTrackName = null;
+            document.getElementById('modalTitle').innerText = "🔒 Unlock Snapshot";
+            document.getElementById('passwordModal').style.display = 'flex';
+            document.getElementById('passInput').focus();
+          }
+
+          function closeModal() { 
+            document.getElementById('passwordModal').style.display = 'none';
+            document.getElementById('passInput').value = '';
+            pendingCommand = null;
+            pendingTrackName = null;
+          }
+
+          // Cerrar modal con ESC
+          window.addEventListener('keydown', (e) => {
+            if(e.key === 'Escape') {
+              closeModal();
+              closeCode();
+            }
+          });
+
+          function closeInspector() { 
+            document.getElementById('fileInspector').style.display = 'none';
+            document.getElementById('viewList').style.display = 'block';
+          }
+
+          async function submitPassword() {
+            const pass = document.getElementById('passInput').value;
+            if(!pass) return;
+
+            if (pendingTrackName) {
+              const name = pendingTrackName;
+              closeModal();
+              await executeSwitch(name, pass, restoreDecision);
+              return;
+            }
+            if (pendingCommand) {
+              const cmd = pendingCommand;
+              pendingCommand = null;
+              closeModal();
+              executeRaw(cmd, pass);
+              return;
+            }
+            if (currentId) {
+              currentPass = pass;
+              try {
+                const resp = await fetch(`/api/inspect?id=${currentId}&password=${encodeURIComponent(pass)}`);
+                const data = await resp.json();
+                if (data.success) {
+                  closeModal();
+                  renderFiles(data.files);
+                } else { 
+                  alert("Incorrect password for this repository."); 
+                  document.getElementById('passInput').value = '';
+                }
+              } catch(e) { alert("Error connecting to server"); }
+            }
+          }
+
+          function renderFiles(files) {
+            document.getElementById('viewList').style.display = 'none';
+            document.getElementById('fileInspector').style.display = 'block';
+            
+            if(files.length === 0) {
+              document.getElementById('fileList').innerHTML = '<div style="color:var(--text-dim)">No files in this snapshot.</div>';
+              return;
+            }
+
+            document.getElementById('fileList').innerHTML = files.map(f => `
+              <div class="snapshot-card" onclick="viewCode('${f.name}')">
+                <span style="display:flex; align-items:center; gap:10px;">
+                  <span style="font-size:18px;">${getFileIcon(f.name)}</span> 
+                  ${f.name}
+                </span>
+                <span class="badge-status ${f.status}">${f.status}</span>
+              </div>
+            `).join('');
+          }
+
+          function getFileIcon(name) {
+            if(name.endsWith('.dart')) return '🎯';
+            if(name.endsWith('.js') || name.endsWith('.ts')) return '📜';
+            if(name.endsWith('.json')) return '⚙️';
+            if(name.endsWith('.md')) return '📝';
+            if(name.endsWith('.yaml')) return '🛠️';
+            return '📄';
+          }
+
+          async function viewCode(file) {
+            const left = document.getElementById('leftPane');
+            const right = document.getElementById('rightPane');
+            
+            left.innerHTML = '<div style="padding:20px; color:var(--text-dim)">Loading diff...</div>';
+            right.innerHTML = '';
+            
+            document.getElementById('fileNameDisplay').innerText = file;
+            document.getElementById('codeViewer').style.display = 'flex';
+
+            try {
+              const resp = await fetch(`/api/content?id=${currentId}&password=${encodeURIComponent(currentPass)}&file=${encodeURIComponent(file)}`);
+              const data = await resp.json();
+              
+              left.innerHTML = data.left || '<div class="diff-line empty" style="padding:15px; text-align:center;">(File did not exist)</div>';
+              right.innerHTML = data.right;
+
+              // Sync scrolling
+              left.onscroll = () => { right.scrollTop = left.scrollTop; right.scrollLeft = left.scrollLeft; };
+              right.onscroll = () => { left.scrollTop = right.scrollTop; left.scrollLeft = right.scrollLeft; };
+
+            } catch(e) { 
+              left.innerHTML = '<div style="padding:20px; color:var(--error)">Error loading file content.</div>';
+            }
+          }
+          
+          function closeCode() { document.getElementById('codeViewer').style.display = 'none'; }
+          
+          function filterLogs(q) {
+            const query = q.toLowerCase();
+            document.querySelectorAll('#snapshotList .snapshot-card').forEach(c => {
+              c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
+            });
+          }
+        </script>
+      </body>
+      </html>
+      """;
   }
 
   Future<void> _openBrowser(String url) async {
@@ -5341,14 +5537,8 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'show':
         final cmd = result.command!;
         final rest = cmd.rest;
-        
-        if (rest.isEmpty) {
-          print('❌ You must provide a snapshot ID.');
-          return;
-        }
-
-        final snapshotId = rest.first;
         final track = cmd['track'] as String?;
+        final String? snapshotId = rest.isNotEmpty ? rest.first : null;
 
         await app.showSnapshot(snapshotId, track: track);
         break;
