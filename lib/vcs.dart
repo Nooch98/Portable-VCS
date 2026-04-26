@@ -25,7 +25,7 @@ import 'package:vcs/models/tree_node.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.3-Experimental';
+const String vcsBaseVersion = '0.3.3-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -65,7 +65,7 @@ class PortableVcs {
     const String owner = 'Nooch98';
     const String repo = 'Portable-VCS';
     const String branch = 'main';
-    const String zipUrl = 'https://github.com/$owner/$repo/archive/refs/heads/$branch.zip';
+    const String gitUrl = 'https://github.com/$owner/$repo.git';
     const String rawVersionUrl = 'https://raw.githubusercontent.com/$owner/$repo/$branch/lib/vcs.dart';
 
     print('\n✨ ${"VCS REMOTE UPDATE & COMPILE".black.onCyan}');
@@ -100,24 +100,17 @@ class PortableVcs {
       if (await tempDir.exists()) await tempDir.delete(recursive: true);
       await tempDir.create();
 
-      print('📥 Downloading latest source code...');
-      final zipResponse = await http.get(Uri.parse(zipUrl));
-      if (zipResponse.statusCode != 200) throw 'Failed to download ZIP from GitHub.';
-      
-      final zipFile = File(p.join(tempDir.path, 'source.zip'));
-      await zipFile.writeAsBytes(zipResponse.bodyBytes);
+      print('📥 Cloning latest source code (metrics enabled)...');
+      final cloneResult = await Process.run('git', [
+        'clone',
+        '--depth', '1',
+        '--branch', branch,
+        gitUrl,
+        tempDir.path
+      ]);
 
-      print('📦 Extracting...');
-      if (Platform.isWindows) {
-        await Process.run('powershell', [
-          '-Command', 
-          'Expand-Archive -Path "${zipFile.path}" -DestinationPath "${tempDir.path}" -Force'
-        ]);
-      } else {
-        final unzipResult = await Process.run('unzip', ['-o', zipFile.path, '-d', tempDir.path]);
-        if (unzipResult.exitCode != 0) {
-          throw 'Failed to unzip source. Make sure "unzip" is installed.';
-        }
+      if (cloneResult.exitCode != 0) {
+        throw 'Failed to clone repository from GitHub. Make sure "git" is installed.\n${cloneResult.stderr}';
       }
 
       File? vcsFile;
@@ -132,7 +125,7 @@ class PortableVcs {
             
         pubspecFile = allFiles.firstWhere((f) => p.basename(f.path) == 'pubspec.yaml');
       } catch (_) {
-        throw 'Could not locate lib/vcs.dart or pubspec.yaml in the extracted source.';
+        throw 'Could not locate lib/vcs.dart or pubspec.yaml in the cloned source.';
       }
 
       final sourceRoot = pubspecFile.parent.path;
@@ -265,105 +258,96 @@ class PortableVcs {
   }
 
   void showHelp() {
-    const int col = 38;
-    const String line = '━';
+    const String helpMarkdown = '''
+  # 🚀 PORTABLE SNAPSHOT VAULT [[ V.${vcsBaseVersion} ]]
+  > Offline encrypted snapshot tool for Git-compatible local workflows.
 
-    print('\n  ' + line * 91);
-    print('    🚀 ${'PORTABLE SNAPSHOT VAULT'.black.onCyan}');
-    print('    ${'Offline encrypted snapshot tool for Git-compatible local workflows.'.yellow}');
-    print('  ' + line * 91);
+  ## 📂 REPOSITORY SETUP
+  - `setup` Prepare a USB drive or external storage for VCS use.
+  - `init` Initialize current project and link to remote storage.
+  - `list` List repositories available on the connected storage.
+  - `clone [repo_id]` Clone a repository from USB into a local folder.
+    - `--into <dir>` Specify a custom directory name for the clone.
+  - `bind [repo_id]` Bind current folder to an existing remote repository.
 
-    print('\n  ${"📂 REPOSITORY SETUP".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'setup'.green.padRight(col)} Prepare a USB drive or external storage for VCS use.');
-    print('  ${'init'.green.padRight(col)} Initialize current project and link to remote storage.');
-    print('  ${'list'.green.padRight(col)} List repositories available on the connected storage.');
-    print('  ${'clone [repo_id]'.green.padRight(col)} Clone a repository from USB into a local folder.');
-    print('    ${'--into <dir>'.grey.padRight(col - 4)} Specify a custom directory name for the clone.');
-    print('  ${'bind [repo_id]'.green.padRight(col)} Bind current folder to an existing remote repository.');
+  ## 🛤️ TRACKS MANAGEMENT
+  - `track list` List all available tracks.
+  - `track current` Show the name of the active track.
+  - `track create <name>` Create a new empty track.
+  - `track switch <name>` Switch to another track.
+    - `--restore` Optional: Restore the tree files upon switching.
+  - `track delete <name>` Delete an existing non-active track.
 
-    print('\n  ${"🛤️  TRACKS MANAGEMENT".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'track list'.green.padRight(col)} List all available tracks.');
-    print('  ${'track current'.green.padRight(col)} Show the name of the active track.');
-    print('  ${'track create <name>'.green.padRight(col)} Create a new empty track.');
-    print('  ${'track switch <name>'.green.padRight(col)} Switch to another track.');
-    print('    ${'--restore'.grey.padRight(col - 4)} Optional: Restore the tree files upon switching.');
-    print('  ${'track delete <name>'.green.padRight(col)} Delete an existing non-active track.');
+  ## 📦 SNAPSHOT WORKFLOW
+  - `push "message"` Create a snapshot (with preview & confirmation).
+    - `-a, --author <name>` Override the author name for this snapshot.
+    - `-t, --track <name>` Target a specific track instead of active.
+  - `pull [id]` Restore latest or specific snapshot (with preview).
+    - `-t, --track <name>` Source snapshot from a specific track.
+  - `revert <id>` Quick restore of a specific ID from active track.
+  - `restore <id>` Restore a specific snapshot into another folder.
+    - `--to <dir>` Destination path for the restored files.
 
-    print('\n  ${"📦 SNAPSHOT WORKFLOW".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'push "message"'.green.padRight(col)} Create a snapshot (with preview & confirmation).');
-    print('    ${'-a, --author <name>'.grey.padRight(col - 4)} Override the author name for this snapshot.');
-    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Target a specific track instead of active.');
-    print('  ${'pull [id]'.green.padRight(col)} Restore latest or specific snapshot (with preview).');
-    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Source snapshot from a specific track.');
-    print('  ${'revert <id>'.green.padRight(col)} Quick restore of a specific ID from active track.');
-    print('  ${'restore <id>'.green.padRight(col)} Restore a specific snapshot into another folder.');
-    print('    ${'--to <dir>'.grey.padRight(col - 4)} Destination path for the restored files.');
+  ## 🔍 INSPECTION & WEB INTERFACE
+  - `ui` Launch the Web Dashboard (Split-view diff support).
+  - `status` Compare local tree vs latest of the active track.
+  - `search <query>` Search text inside encrypted snapshots.
+    - `-t, --track <name>` Search only within a specific track.
+    - `--id <snapshot_id>` Search only in a specific snapshot.
+    - `-m, --max <n>` Search only in the last N snapshots.
+    - `-s, --case-sensitive` Perform a case-sensitive search.
+  - `info` Project overview, storage impact and activity charts.
+    - `--charts` Display 7-day activity histogram.
+  - `summary` Summary of messages to help create Git/GitHub commits.
+  - `diff` Compare latest snapshot vs current live files.
+  - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
+    - `-t, --tracks <tk1> <tk2>` Compare the last snapshot between two tracks.
+  - `log` Show history of snapshots.
+    - `--graph, -g` Visual representation of the snapshot timeline.
+    - `--full` Show extended details (IDs, dates, metadata).
+    - `--standard` Show summary with 5-file change preview.
+    - `--summary` (Default) Show only statistics and message.
+  - `show <id>` Show details of a specific snapshot.
+  - `tree [id]` Show visual file tree representation.
+  - `verify <id|--all>` Verify cryptographic integrity of snapshots.
 
-    print('\n  ${"🔍 INSPECTION & WEB INTERFACE".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'ui'.green.padRight(col)} Launch the Web Dashboard (Split-view diff support).');
-    print('  ${'status'.green.padRight(col)} Compare local tree vs latest of the active track.');
-    print('  ${'search <query>'.green.padRight(col)} Search text inside encrypted snapshots.');
-    print('    ${'-t, --track <name>'.grey.padRight(col - 4)} Search only within a specific track.');
-    print('    ${'--id <snapshot_id>'.grey.padRight(col - 4)} Search only in a specific snapshot.');
-    print('    ${'-m, --max <n>'.grey.padRight(col - 4)} Search only in the last N snapshots.');
-    print('    ${'-s, --case-sensitive'.grey.padRight(col - 4)} Perform a case-sensitive search.');
-    print('  ${'info'.green.padRight(col)} Project overview, storage impact and activity charts.');
-    print('    ${'--charts'.grey.padRight(col - 4)} Display 7-day activity histogram.');
-    print('  ${'summary'.green.padRight(col)} Summary of messages to help create Git/GitHub commits.');
-    print('  ${'diff'.green.padRight(col)} Compare latest snapshot vs current live files.');
-    print('  ${'diff [id1] [id2|.]'.green.padRight(col)} Compare snapshots or snapshot vs working tree.');
-    print('    ${'-t, --tracks <tk1> <tk2>'.grey.padRight(col - 4)} Compare the last snapshot between two tracks.');
-    print('  ${'log'.green.padRight(col)} Show history of snapshots.');
-    print('    ${'--graph, -g'.grey.padRight(col - 4)} Visual representation of the snapshot timeline.');
-    print('    ${'--full'.grey.padRight(col - 4)} Show extended details (IDs, dates, metadata).');
-    print('    ${'--standard'.grey.padRight(col - 4)} Show summary with 5-file change preview.');
-    print('    ${'--summary'.grey.padRight(col - 4)} (Default) Show only statistics and message.');
-    print('  ${'show <id>'.green.padRight(col)} Show details of a specific snapshot.');
-    print('  ${'tree [id]'.green.padRight(col)} Show visual file tree representation.');
-    print('  ${'verify <id|--all>'.green.padRight(col)} Verify cryptographic integrity of snapshots.');
+  ## 🐙 GIT INTEGRATION
+  - `git-prepare [id]` Prepare current Git repo from a snapshot.
+  - `publish [id]` Safe commit & push with remote conflict check.
+    - `--branch <name>` Specify target branch for the push.
+    - `--verify` Enforce security check for secrets.
+  - `git-diff [id]` Compare snapshot against current Git HEAD.
+  - `stash` Manage Git stash (save current Git changes):
+    - `--pop` Restore and remove last stash.
+    - `--list` Show all currently stashed changes.
 
-    print('\n  ${"🐙 GIT INTEGRATION".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'git-prepare [id]'.green.padRight(col)} Prepare current Git repo from a snapshot.');
-    print('  ${'publish [id]'.green.padRight(col)} Safe commit & push with remote conflict check.');
-    print('    ${'--branch <name>'.grey.padRight(col - 4)} Specify target branch for the push.');
-    print('    ${'--verify'.grey.padRight(col - 4)} Enforce security check for secrets.');
-    print('  ${'git-diff [id]'.green.padRight(col)} Compare snapshot against current Git HEAD.');
-    print('  ${'stash'.green.padRight(col)} Manage Git stash (save current Git changes):');
-    print('    ${'--pop'.grey.padRight(col - 4)} Restore and remove last stash.');
-    print('    ${'--list'.grey.padRight(col - 4)} Show all currently stashed changes.');
+  ## 🛠️ MAINTENANCE
+  - `update` Download latest source from GitHub and recompile.
+  - `doctor` Run repository diagnostics and health checks.
+  - `stats` Show global repo metrics and track breakdown.
+  - `prune` Clean up old snapshots:
+    - `--id <id>` Delete a specific snapshot by its ID.
+    - `--keep N` Keep only the newest N snapshots.
+    - `--older-than N` Delete snapshots older than N days.
+    - `--garbage` Deep clean: Remove orphaned data blobs.
+  - `storage-check` Hardware diagnostic and latency test of the device.
+  - `migrate` Move your vault to a new drive or NAS:
+    - `--to <path>` Target destination path for migration.
+    - `--delete-source` Remove data from old drive after success.
 
-    print('\n  ${"🛠️  MAINTENANCE".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'update'.green.padRight(col)} Download latest source from GitHub and recompile.');
-    print('  ${'doctor'.green.padRight(col)} Run repository diagnostics and health checks.');
-    print('  ${'stats'.green.padRight(col)} Show global repo metrics and track breakdown.');
-    print('  ${'prune'.green.padRight(col)} Clean up old snapshots:');
-    print('    ${'--id <id>'.grey.padRight(col - 4)} Delete a specific snapshot by its ID.');
-    print('    ${'--keep N'.grey.padRight(col - 4)} Keep only the newest N snapshots.');
-    print('    ${'--older-than N'.grey.padRight(col - 4)} Delete snapshots older than N days.');
-    print('    ${'--garbage'.grey.padRight(col - 4)} Deep clean: Remove orphaned data blobs.');
-    print('  ${'storage-check'.green.padRight(col)} Hardware diagnostic and latency test of the device.');
-    print('  ${'migrate'.green.padRight(col)} Move your vault to a new drive or NAS:');
-    print('    ${'--to <path>'.grey.padRight(col - 4)} Target destination path for migration.');
-    print('    ${'--delete-source'.grey.padRight(col - 4)} Remove data from old drive after success.');
+  ## ⚙️ GENERAL
+  - `help` Show this help message.
+  - `version` Show tool version.
 
+  ---
 
-    print('\n  ${"⚙️  GENERAL".cyan.bold}');
-    print('  ' + '─' * 40);
-    print('  ${'help'.green.padRight(col)} Show this help message.');
-    print('  ${'version'.green.padRight(col)} Show tool version.');
+  ### 💡 PRO TIPS
+  - Combine `--track` with inspection commands for cross-track analysis.
+  - Use `summary` before Git commits to maintain a clean history.
+  - All data is **AES-256 encrypted**. Keep your vault password safe.
+  ''';
 
-    print('\n  ' + line * 91);
-    print('  ${"💡 PRO TIPS".bold.yellow}');
-    print('    • Combine ${'--track'.white} with inspection commands for cross-track analysis.');
-    print('    • Use ${'summary'.green} before Git commits to maintain a clean history.');
-    print('    • All data is ${'AES-256 encrypted'.green.bold}. Keep your vault password safe.');
-    print('  ' + line * 91 + '\n');
+    print(_renderMarkdown(helpMarkdown));
   }
 
   Future<void> setupDrive() async {
@@ -1265,48 +1249,100 @@ class PortableVcs {
 
   String _renderMarkdown(String text) {
     if (text.isEmpty) return text;
-    String rendered = text.replaceAllMapped(RegExp(r'^# (.*)$', multiLine: true), (m) {
-      return '${m.group(1)}'.cyan.bold.underline;
+
+    String rendered = text.replaceAllMapped(RegExp(r'```[a-z]*\n([\s\S]*?)```'), (m) {
+      final content = m.group(1)?.trim() ?? "";
+      return content.split('\n').map((l) => '    ┃ '.italic + l).join('\n');
     });
 
-    rendered = rendered.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) {
-      return '${m.group(1)}'.blue.underline;
-    });
+    List<String> lines = rendered.split('\n');
+    List<String> result = [];
+    String? activeAdmonitionType;
 
-    rendered = rendered.replaceAllMapped(RegExp(r'#(\d+)'), (m) {
-      return '${m.group(0)}'.yellow.bold;
-    });
-    rendered = rendered.replaceAllMapped(RegExp(r'@([a-zA-Z0-9_-]+)'), (m) {
-      return '@${m.group(1)}'.green.italic;
-    });
+    for (var line in lines) {
+      String processedLine = line;
+      String trimmed = line.trimLeft();
 
-    rendered = rendered.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) {
-      return '${m.group(1)}'.white.bold;
-    });
-
-    rendered = rendered.replaceAllMapped(RegExp(r'(?<!\*)\*(?!\*)(.*?)\*'), (m) {
-      return '${m.group(1)}'.grey.italic;
-    });
-
-    rendered = rendered.replaceAllMapped(RegExp(r'`(.*?)`'), (m) {
-      return ' ${m.group(1)} '.black.grey; 
-    });
-
-    rendered = rendered.split('\n').map((line) {
-      if (RegExp(r'^\s*[-\*] ').hasMatch(line)) {
-        return line.replaceFirst(RegExp(r'[-\*] '), '•'.cyan + ' ');
+      if (trimmed.startsWith('# ')) {
+        String content = trimmed.replaceFirst('# ', '');
+        int badgeStart = content.indexOf('[[');
+        
+        if (badgeStart != -1) {
+          String titlePart = content.substring(0, badgeStart);
+          String badgePart = content.substring(badgeStart);
+          String styledTitle = titlePart.cyan.bold.underline;
+          String styledBadge = _renderBadge(badgePart);
+          processedLine = '  $styledTitle $styledBadge';
+          
+          result.add(processedLine);
+          continue;
+        } else {
+          result.add('  ' + content.cyan.bold.underline);
+          continue;
+        }
       }
-      if (RegExp(r'^\s*\d+\. ').hasMatch(line)) {
-        return line.replaceAllMapped(RegExp(r'(\d+\.) '), (m) => '${m.group(1)}'.yellow + ' ');
+
+      if (trimmed.startsWith('> [!')) {
+        final match = RegExp(r'> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', caseSensitive: false).firstMatch(trimmed);
+        if (match != null) {
+          activeAdmonitionType = match.group(1)!.toUpperCase();
+          final icons = {'NOTE': 'ℹ', 'TIP': '💡', 'IMPORTANT': '📢', 'WARNING': '⚠️', 'CAUTION': '🛑'};
+          final res = '  ' + icons[activeAdmonitionType]! + ' ' + activeAdmonitionType;
+          result.add(activeAdmonitionType == 'IMPORTANT' ? res.cyan.bold : (activeAdmonitionType == 'WARNING' ? res.yellow.bold : (activeAdmonitionType == 'CAUTION' ? res.red.bold : res.blue.bold)));
+          continue;
+        }
       }
-      return line;
-    }).join('\n');
 
-    rendered = rendered.replaceAllMapped(RegExp(r'^> (.*)$', multiLine: true), (m) {
-      return '${"┃".grey} ${m.group(1)?.italic}';
-    });
+      if (activeAdmonitionType != null && trimmed.startsWith('>')) {
+        String content = trimmed.substring(1).trimLeft();
+        result.add('    ' + (activeAdmonitionType == 'IMPORTANT' ? content.cyan : (activeAdmonitionType == 'WARNING' ? content.yellow : content.blue)));
+        continue;
+      }
+      if (!trimmed.startsWith('>')) activeAdmonitionType = null;
 
-    return rendered;
+      processedLine = processedLine.replaceAllMapped(RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]'), (m) => _renderBadge(m.group(0)!));
+
+      processedLine = processedLine.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) {
+        final cmd = m.group(1) ?? "";
+        return line.startsWith('    ') ? cmd.italic : cmd.green;
+      });
+
+      if (trimmed.startsWith('## ')) {
+        processedLine = '\n  ' + processedLine.replaceFirst('## ', '').bold + '\n  ' + ('─' * 40).italic;
+      }
+
+      if (trimmed.startsWith('- ')) {
+        processedLine = processedLine.replaceFirst('- ', '• '.cyan);
+      }
+
+      processedLine = processedLine.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => (m.group(1) ?? "").blue.underline);
+      processedLine = processedLine.replaceAllMapped(RegExp(r'(^|\s)#(\d+)'), (m) => '${m.group(1) ?? ""}${(m.group(2) ?? "").yellow.bold}');
+      processedLine = processedLine.replaceAllMapped(RegExp(r'@([a-zA-Z0-9_-]+)'), (m) => '@${(m.group(1) ?? "").green.italic}');
+      processedLine = processedLine.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => (m.group(1) ?? "").bold);
+      
+      result.add(processedLine);
+    }
+
+    return result.join('\n');
+  }
+
+  String _renderBadge(String rawBadge) {
+    final match = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]').firstMatch(rawBadge);
+    if (match == null) return rawBadge;
+    
+    final colorKey = (match.group(1) ?? 'CYAN').toUpperCase();
+    final label = (match.group(2) ?? "").trim();
+    final badgeText = ' $label '.bold;
+
+    switch (colorKey) {
+      case 'RED':     return badgeText.white.onRed;
+      case 'GREEN':   return badgeText.black.onGreen;
+      case 'YELLOW':  return badgeText.black.onYellow;
+      case 'BLUE':    return badgeText.white.blue;
+      case 'MAGENTA': return badgeText.white.magenta;
+      case 'CYAN':    return badgeText.black.onCyan;
+      default:        return badgeText.black.onCyan;
+    }
   }
 
   Future<void> log({
@@ -3610,7 +3646,6 @@ class PortableVcs {
 
       try {
         if (await backupDir.exists()) {
-          // Usamos copia archivo por archivo para restaurar el backup
           await _copyTrackedFiles(backupDir, _cwd);
           print('✅ Recovery successful.');
         }
@@ -4728,7 +4763,6 @@ class PortableVcs {
           let pendingTrackName = null;
           let restoreDecision = false;
           
-          // Historial de comandos
           let cmdHistory = [];
           let historyIndex = -1;
 
@@ -4857,7 +4891,6 @@ class PortableVcs {
             pendingTrackName = null;
           }
 
-          // Cerrar modal con ESC
           window.addEventListener('keydown', (e) => {
             if(e.key === 'Escape') {
               closeModal();
@@ -4949,7 +4982,6 @@ class PortableVcs {
               left.innerHTML = data.left || '<div class="diff-line empty" style="padding:15px; text-align:center;">(File did not exist)</div>';
               right.innerHTML = data.right;
 
-              // Sync scrolling
               left.onscroll = () => { right.scrollTop = left.scrollTop; right.scrollLeft = left.scrollLeft; };
               right.onscroll = () => { left.scrollTop = right.scrollTop; left.scrollLeft = right.scrollLeft; };
 
