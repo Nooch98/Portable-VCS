@@ -22,10 +22,11 @@ import 'package:vcs/models/repo_meta.dart';
 import 'package:vcs/models/snapshot_log_entry.dart';
 import 'package:vcs/models/track_state.dart';
 import 'package:vcs/models/tree_node.dart';
+import 'package:vcs/models/update_cache.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.3-Experimental.1';
+const String vcsBaseVersion = '0.3.3-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -34,6 +35,7 @@ class PortableVcs {
   static const String remoteReposDir = 'repos';
   static const String remoteMetaFileName = 'meta.json';
   static const String lockFileName = '.lock';
+  File get _cacheFile => File(p.join(Directory.systemTemp.path, '.vcs_update_cache'));
   String? currentWebPassword;
 
   final List<String> internalIgnoredNames = const [
@@ -59,6 +61,18 @@ class PortableVcs {
     else if (Platform.isMacOS) osName = 'macOS';
     
     return '🚀 Portable VCS Version $vcsBaseVersion ($osName)';
+  }
+
+  Future<UpdateCache?> _loadCache() async {
+    if (!_cacheFile.existsSync()) return null;
+    try {
+      final lines = await _cacheFile.readAsLines();
+      return UpdateCache(lines[0], DateTime.parse(lines[1]));
+    } catch (_) { return null; }
+  }
+
+  Future<void> _saveCache(String version) async {
+    await _cacheFile.writeAsString('$version\n${DateTime.now().toIso8601String()}');
   }
 
   Future<void> update() async {
@@ -227,6 +241,14 @@ class PortableVcs {
     return null;
   }
 
+  void _printUpdateToast(String current, String latest) {
+    print('');
+    print('  ${" UPGRADE ".black.onYellow.bold} ${"New version available!".yellow}');
+    print('  ${"┃".yellow.bold}  ${current.grey} → ${latest.green.bold}');
+    print('  ${"┃".yellow.bold}  Run ${"vcs update".cyan.bold} to install.');
+    print('  ${"━" * 45}\n'.grey);
+  }
+
   Future<void> showVersion() async {
     final String currentFull = getFullVersion();
     final String dartVer = Platform.version.split(" ").first;
@@ -260,7 +282,9 @@ class PortableVcs {
   void showHelp() {
     const String helpMarkdown = '''
   # 🚀 PORTABLE SNAPSHOT VAULT [[ V.${vcsBaseVersion} ]]
+
   > Offline encrypted snapshot tool for Git-compatible local workflows.
+
 
   ## 📂 REPOSITORY SETUP
   - `setup` Prepare a USB drive or external storage for VCS use.
@@ -1257,70 +1281,99 @@ class PortableVcs {
 
     List<String> lines = rendered.split('\n');
     List<String> result = [];
-    String? activeAdmonitionType;
+    String? activeAdmonition;
 
     for (var line in lines) {
-      String processedLine = line;
-      String trimmed = line.trimLeft();
+      String processed = line;
+      String trimmed = line.trim();
 
-      if (trimmed.startsWith('# ')) {
-        String content = trimmed.replaceFirst('# ', '');
-        int badgeStart = content.indexOf('[[');
-        
-        if (badgeStart != -1) {
-          String titlePart = content.substring(0, badgeStart);
-          String badgePart = content.substring(badgeStart);
-          String styledTitle = titlePart.cyan.bold.underline;
-          String styledBadge = _renderBadge(badgePart);
-          processedLine = '  $styledTitle $styledBadge';
-          
-          result.add(processedLine);
-          continue;
-        } else {
-          result.add('  ' + content.cyan.bold.underline);
-          continue;
+      processed = processed.replaceAllMapped(
+        RegExp(r'!\[.*?\]\(https:\/\/img\.shields\.io\/badge\/(.*?)-(.*?)-(.*?)(?:\?.*?)?\)'), 
+        (m) {
+          String label = (m.group(1) ?? "").replaceAll('--', '-').replaceAll('_', ' ');
+          String message = (m.group(2) ?? "").replaceAll('--', '-').replaceAll('_', ' ');
+          String color = (m.group(3) ?? "blue").split('?')[0].toUpperCase();
+          return _renderBadge('[[ $color: $label $message ]]');
         }
-      }
+      );
 
       if (trimmed.startsWith('> [!')) {
         final match = RegExp(r'> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', caseSensitive: false).firstMatch(trimmed);
         if (match != null) {
-          activeAdmonitionType = match.group(1)!.toUpperCase();
+          activeAdmonition = match.group(1)!.toUpperCase();
           final icons = {'NOTE': 'ℹ', 'TIP': '💡', 'IMPORTANT': '📢', 'WARNING': '⚠️', 'CAUTION': '🛑'};
-          final res = '  ' + icons[activeAdmonitionType]! + ' ' + activeAdmonitionType;
-          result.add(activeAdmonitionType == 'IMPORTANT' ? res.cyan.bold : (activeAdmonitionType == 'WARNING' ? res.yellow.bold : (activeAdmonitionType == 'CAUTION' ? res.red.bold : res.blue.bold)));
+          final head = '  ${icons[activeAdmonition]} $activeAdmonition';
+          
+          if (activeAdmonition == 'IMPORTANT') result.add(head.cyan.bold);
+          else if (activeAdmonition == 'WARNING') result.add(head.yellow.bold);
+          else if (activeAdmonition == 'CAUTION') result.add(head.red.bold);
+          else result.add(head.blue.bold);
           continue;
         }
       }
 
-      if (activeAdmonitionType != null && trimmed.startsWith('>')) {
+      if (trimmed.startsWith('>')) {
         String content = trimmed.substring(1).trimLeft();
-        result.add('    ' + (activeAdmonitionType == 'IMPORTANT' ? content.cyan : (activeAdmonitionType == 'WARNING' ? content.yellow : content.blue)));
+        if (content.isNotEmpty) {
+          if (activeAdmonition == 'IMPORTANT') {
+            result.add('    ${content.cyan}');
+          } else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') {
+            result.add('    ${content.yellow}');
+          } else if (activeAdmonition == 'TIP') {
+            result.add('    ${content.green}');
+          } else if (activeAdmonition == 'NOTE') {
+            result.add('    ${content.blue}');
+          } else {
+            result.add('  ${content.grey.italic}');
+          }
+        }
         continue;
       }
-      if (!trimmed.startsWith('>')) activeAdmonitionType = null;
 
-      processedLine = processedLine.replaceAllMapped(RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]'), (m) => _renderBadge(m.group(0)!));
-
-      processedLine = processedLine.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) {
-        final cmd = m.group(1) ?? "";
-        return line.startsWith('    ') ? cmd.italic : cmd.green;
-      });
-
-      if (trimmed.startsWith('## ')) {
-        processedLine = '\n  ' + processedLine.replaceFirst('## ', '').bold + '\n  ' + ('─' * 40).italic;
+      if (activeAdmonition != null && trimmed.startsWith('>')) {
+        String content = trimmed.substring(1).trimLeft();
+        if (content.isNotEmpty) {
+          if (activeAdmonition == 'IMPORTANT') result.add('    ${content.cyan}');
+          else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') result.add('    ${content.yellow}');
+          else result.add('    ${content.blue}');
+        }
+        continue;
       }
 
-      if (trimmed.startsWith('- ')) {
-        processedLine = processedLine.replaceFirst('- ', '• '.cyan);
+      if (!trimmed.startsWith('>') && trimmed.isNotEmpty) activeAdmonition = null;
+
+      if (trimmed.startsWith('# ')) {
+        String content = trimmed.replaceFirst('# ', '');
+        int bStart = content.indexOf('[[');
+        if (bStart != -1) {
+          processed = '  ' + content.substring(0, bStart).cyan.bold.underline + ' ' + _renderBadge(content.substring(bStart));
+        } else {
+          processed = '  ' + content.cyan.bold.underline;
+        }
+      } 
+      else if (trimmed.startsWith('## ')) {
+        processed = '\n  ' + trimmed.replaceFirst('## ', '').bold + '\n  ' + ('─' * 45).italic;
+      } 
+      else if (trimmed.startsWith('### ')) {
+        processed = '    ' + trimmed.replaceFirst('### ', '').yellow.bold;
       }
 
-      processedLine = processedLine.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => (m.group(1) ?? "").blue.underline);
-      processedLine = processedLine.replaceAllMapped(RegExp(r'(^|\s)#(\d+)'), (m) => '${m.group(1) ?? ""}${(m.group(2) ?? "").yellow.bold}');
-      processedLine = processedLine.replaceAllMapped(RegExp(r'@([a-zA-Z0-9_-]+)'), (m) => '@${(m.group(1) ?? "").green.italic}');
-      processedLine = processedLine.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => (m.group(1) ?? "").bold);
-      
-      result.add(processedLine);
+      processed = processed.replaceAllMapped(RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]'), (m) => _renderBadge(m.group(0)!));
+
+      if (trimmed.startsWith('• ') || trimmed.startsWith('- ')) {
+        processed = processed.replaceFirst(RegExp(r'^[•-] '), '  • '.cyan);
+      }
+      if (trimmed == '---') {
+        processed = '  ' + ('━' * 50).italic;
+      }
+
+      processed = processed.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => (m.group(1) ?? "").green);
+      processed = processed.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => (m.group(1) ?? "").bold);
+      processed = processed.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => (m.group(1) ?? "").blue.underline);
+
+      if (!trimmed.startsWith('> [!') && !(activeAdmonition != null && trimmed.startsWith('>'))) {
+        result.add(processed);
+      }
     }
 
     return result.join('\n');
@@ -1335,13 +1388,12 @@ class PortableVcs {
     final badgeText = ' $label '.bold;
 
     switch (colorKey) {
-      case 'RED':     return badgeText.white.onRed;
-      case 'GREEN':   return badgeText.black.onGreen;
-      case 'YELLOW':  return badgeText.black.onYellow;
-      case 'BLUE':    return badgeText.white.blue;
-      case 'MAGENTA': return badgeText.white.magenta;
-      case 'CYAN':    return badgeText.black.onCyan;
-      default:        return badgeText.black.onCyan;
+      case 'RED': case 'CRITICAL': case 'ORANGE': return badgeText.white.onRed;
+      case 'GREEN': case 'SUCCESS': return badgeText.black.onGreen;
+      case 'YELLOW': return badgeText.black.onYellow;
+      case 'BLUE': return badgeText.white.onBlue;
+      case 'MAGENTA': return badgeText.white.onMagenta;
+      default: return badgeText.black.onCyan;
     }
   }
 
@@ -3607,7 +3659,7 @@ class PortableVcs {
           try {
             await file.delete();
           } catch (e) {
-            //
+            // silent error
           }
         }
       }
@@ -5355,6 +5407,51 @@ class PortableVcs {
       }
     }
   }
+
+  Future<void> checkUpdatesSilently() async {
+    final cacheFile = File(p.join(Directory.systemTemp.path, '.vcs_update_cache'));
+    String? cachedLatest;
+    DateTime? lastCheck;
+
+    if (cacheFile.existsSync()) {
+      try {
+        final lines = await cacheFile.readAsLines();
+        if (lines.length >= 2) {
+          cachedLatest = lines[0];
+          lastCheck = DateTime.parse(lines[1]);
+        }
+      } catch (_) {}
+    }
+
+    if (cachedLatest != null && cachedLatest != vcsBaseVersion) {
+      _printUpdateToast(vcsBaseVersion, cachedLatest);
+    }
+
+    final bool isFirstTime = lastCheck == null;
+    final bool isExpired = !isFirstTime && DateTime.now().difference(lastCheck).inHours >= 24;
+
+    if (isFirstTime) {
+      try {
+        final latestV = await _getLatestGitHubVersion().timeout(const Duration(seconds: 2));
+        if (latestV != null) {
+          await cacheFile.writeAsString('$latestV\n${DateTime.now().toIso8601String()}');
+          if (latestV != vcsBaseVersion && latestV != cachedLatest) {
+            _printUpdateToast(vcsBaseVersion, latestV);
+          }
+        }
+      } catch (_) {
+        // silent error
+      }
+    } 
+    else if (isExpired) {
+      _getLatestGitHubVersion().then((latestV) async {
+        if (latestV != null) {
+          final data = '$latestV\n${DateTime.now().toIso8601String()}';
+          await cacheFile.writeAsString(data);
+        }
+      });
+    }
+  }
 }
 
 extension ColorConsole on String {
@@ -5373,15 +5470,24 @@ extension ColorConsole on String {
   String get onRed => '\x1B[41m$this\x1B[0m';
   String get onGreen => '\x1B[42m$this\x1B[0m';
   String get onYellow => '\x1B[43m$this\x1B[0m';
-
+  String get onBlue => '\x1B[44m$this\x1B[0m';
+  String get onMagenta => '\x1B[45m$this\x1B[0m';
+  String get onWhite => '\x1B[47m$this\x1B[0m';
+  String get onBlack => '\x1B[40m$this\x1B[0m';
   String get black => '\x1B[30m$this\x1B[0m';
 }
 
 Future<void> main(List<String> args) async {
   final app = PortableVcs();
-  await runWithArgs(args, app);
+  try {
+    await runWithArgs(args, app);
+  } finally {
+    final cmd = args.isNotEmpty ? args[0].toLowerCase() : '';
+    if (cmd != 'update' && cmd != 'version') {
+      await app.checkUpdatesSilently();
+    }
+  }
 }
-
 
 Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password}) async {
   app.currentWebPassword = password;
