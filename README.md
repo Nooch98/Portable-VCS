@@ -411,8 +411,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs search <query> --id <snapshot_id>` | Search only inside a specific snapshot ID. |
 | | `vcs search <query> -m/--max <n>` | Limit search to the last N snapshots. |
 | | `vcs search <query> -s/--case-sensitive` | Perform a case-sensitive search. |
-| **Aliases** | `vcs alias --list, -l` List all custom shortcuts saved in the USB |
-| | `vcs alias --set, -s "name=cmd"` Create a shortcut (e.g., `alias -s "st=status"`) |
+| **Aliases** | `vcs alias --list, -l` | List all custom shortcuts saved in the USB |
+| | `vcs alias --set, -s "name=cmd"` | Create a shortcut (e.g., `alias -s "st=status"`) |
 | | `vcs alias --rm <name>` | Remove a specific alias from the storage |
 | **Tracks** | `vcs track list` | List all available history tracks. |
 | | `vcs track current` | Show the name of the currently active track. |
