@@ -441,7 +441,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs migrate --to <path>` | Target destination path for the migration. |
 | | `vcs migrate --delete-source` | Remove data from old drive after success. |
 | **General** | `vcs version` | Show tool version, OS information and **check for updates**. |
-| | `vcs changelog | Show changes of the version |
+| | `vcs changelog` | Show changes of the version |
 | | `vcs help` | Show this help message. |
 
 # Encryption
