@@ -10,6 +10,7 @@ import 'package:args/args.dart';
 import 'package:crypto/crypto.dart' as hash;
 import 'package:cryptography/cryptography.dart' as crypto_alg;
 import 'package:http/http.dart' as http;
+import 'package:vcs/models/alias_manager.dart';
 import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
 import 'package:vcs/models/diff_line.dart';
@@ -23,10 +24,11 @@ import 'package:vcs/models/snapshot_log_entry.dart';
 import 'package:vcs/models/track_state.dart';
 import 'package:vcs/models/tree_node.dart';
 import 'package:vcs/models/update_cache.dart';
+import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.3-Experimental.2';
+const String vcsBaseVersion = '0.3.4-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -84,26 +86,53 @@ class PortableVcs {
 
     print('\n✨ ${"VCS REMOTE UPDATE & COMPILE".black.onCyan}');
 
+    bool isUpdateAvailable(String local, String remote) {
+      try {
+        if (local == remote) return false;
+        List<int> parse(String v) {
+          final clean = v.replaceAll('-Experimental.', '.').replaceAll('-', '.');
+          return clean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+        }
+        final localParts = parse(local);
+        final remoteParts = parse(remote);
+        final maxLen = localParts.length > remoteParts.length ? localParts.length : remoteParts.length;
+        for (var i = 0; i < maxLen; i++) {
+          final l = i < localParts.length ? localParts[i] : 0;
+          final r = i < remoteParts.length ? remoteParts[i] : 0;
+          if (r > l) return true;
+          if (l > r) return false;
+        }
+      } catch (_) {
+        return local != remote;
+      }
+      return false;
+    }
+
     try {
       print('🔍 Checking for updates on GitHub ($branch)...');
       final versionResponse = await http.get(Uri.parse(rawVersionUrl));
       
       if (versionResponse.statusCode == 200) {
         final remoteContent = versionResponse.body;
-        final versionRegex = RegExp(r"const String (?:vcsBaseVersion|baseVersion) = '([^']+)'");
+        final versionRegex = RegExp(r"(?:vcsBaseVersion|baseVersion)\s*=\s*['" + '"' + r"]([^'" + '"' + r"]+)['" + '"' + r"]");
         final remoteMatch = versionRegex.firstMatch(remoteContent);
         
         if (remoteMatch != null) {
-          final remoteV = remoteMatch.group(1);
-          final localV = getFullVersion().split(' ').lastWhere((e) => e.contains('.'), orElse: () => "");
+          final remoteV = remoteMatch.group(1)!;
+          final localV = vcsBaseVersion;
           
-          if (remoteV == localV) {
-            print('✅ ${"You are already on the latest version ($localV).".green}');
+          if (!isUpdateAvailable(localV, remoteV)) {
+            if (localV == remoteV) {
+              print('✅ ${"You are already on the latest version ($localV).".green}');
+            } else {
+              print('🚀 ${"Local version ($localV) is ahead of GitHub ($remoteV).".magenta}');
+            }
+            
             stdout.write('Force re-download and re-compile? (y/n): ');
             final force = stdin.readLineSync();
             if (force?.toLowerCase() != 'y') return;
           } else {
-            print('🚀 New version detected: ${localV.grey} -> ${remoteV!.green.bold}');
+            print('🚀 New version detected: ${localV.grey} -> ${remoteV.green.bold}');
           }
         } else {
           print('⚠️  Could not parse remote version. Proceeding with update anyway...');
@@ -114,17 +143,13 @@ class PortableVcs {
       if (await tempDir.exists()) await tempDir.delete(recursive: true);
       await tempDir.create();
 
-      print('📥 Cloning latest source code (metrics enabled)...');
+      print('📥 Cloning latest source code...');
       final cloneResult = await Process.run('git', [
-        'clone',
-        '--depth', '1',
-        '--branch', branch,
-        gitUrl,
-        tempDir.path
+        'clone', '--depth', '1', '--branch', branch, gitUrl, tempDir.path
       ]);
 
       if (cloneResult.exitCode != 0) {
-        throw 'Failed to clone repository from GitHub. Make sure "git" is installed.\n${cloneResult.stderr}';
+        throw 'Failed to clone repository. Make sure "git" is installed.\n${cloneResult.stderr}';
       }
 
       File? vcsFile;
@@ -132,11 +157,9 @@ class PortableVcs {
 
       try {
         final allFiles = tempDir.listSync(recursive: true).whereType<File>();
-
         vcsFile = allFiles.firstWhere((f) => 
             p.basename(f.path) == 'vcs.dart' && 
             f.path.contains('${p.separator}lib${p.separator}'));
-            
         pubspecFile = allFiles.firstWhere((f) => p.basename(f.path) == 'pubspec.yaml');
       } catch (_) {
         throw 'Could not locate lib/vcs.dart or pubspec.yaml in the cloned source.';
@@ -150,44 +173,28 @@ class PortableVcs {
       print('🛠️  Running pub get & Compiling binary...');
       print('   > Source found at: ${p.relative(vcsFile.path, from: tempDir.path).grey}');
 
-      print('   > Fetching dependencies...');
       final pubResult = await Process.run('dart', ['pub', 'get'], 
-        workingDirectory: sourceRoot, 
-        runInShell: true
-      );
+        workingDirectory: sourceRoot, runInShell: true);
 
-      if (pubResult.exitCode != 0) {
-        print(pubResult.stderr);
-        throw 'pub get failed';
-      }
+      if (pubResult.exitCode != 0) throw 'pub get failed: ${pubResult.stderr}';
 
-      print('   > Building executable...');
       final compileResult = await Process.run('dart', [
-        'compile', 'exe', 
-        vcsFile.path, 
-        '-o', newExePath
-      ], 
-      workingDirectory: sourceRoot,
-      runInShell: true);
+        'compile', 'exe', vcsFile.path, '-o', newExePath
+      ], workingDirectory: sourceRoot, runInShell: true);
 
-      if (compileResult.exitCode != 0) {
-        print('\n--- COMPILE ERROR ---'.red);
-        print(compileResult.stderr);
-        throw 'Compilation failed with exit code ${compileResult.exitCode}.';
-      }
+      if (compileResult.exitCode != 0) throw 'Compilation failed: ${compileResult.stderr}';
 
       print('📦 Replacing binary at: ${currentExePath.grey}');
-      
+
       if (Platform.isWindows) {
         final oldExe = File(currentExePath);
-        if (await oldExe.exists()) {
-          try {
-            await oldExe.rename('${currentExePath}.old');
-          } catch (e) {
-            final oldFile = File('${currentExePath}.old');
-            if (await oldFile.exists()) await oldFile.delete();
-            await oldExe.rename('${currentExePath}.old');
-          }
+        final backupExe = File('$currentExePath.old');
+        if (await backupExe.exists()) await backupExe.delete();
+        
+        try {
+          await oldExe.rename(backupExe.path);
+        } catch (e) {
+          throw 'Could not rename current executable. Close any other VCS instances.';
         }
         await File(newExePath).copy(currentExePath);
       } else {
@@ -196,14 +203,8 @@ class PortableVcs {
           await Process.run('chmod', ['+x', currentExePath]);
         } catch (e) {
           print('\n${'❌ PERMISSION DENIED'.red.bold}');
-          print('VCS is installed in a protected directory: ${currentExePath.grey}');
-          print('Please run the following command to apply the update:');
-          
           final sudoCmd = 'sudo cp "${newExePath}" "${currentExePath}" && sudo chmod +x "${currentExePath}"';
-          print('\n  ${sudoCmd.cyan.bold}\n');
-          
-          print('After running that, you can delete the temporary build at:');
-          print('  ${tempDir.path.grey}\n');
+          print('Run: ${sudoCmd.cyan.bold}\n');
           return; 
         }
       }
@@ -212,13 +213,9 @@ class PortableVcs {
 
       print('\n🎉 ${"Update successful!".green.bold}');
       if (Platform.isWindows) {
-        print('The new binary is ready.');
-        print('💡 ${"Note:".yellow} A ${".old".cyan} file was created to allow the update.');
-        print('You can now delete ${p.basename(currentExePath)}.old and restart VCS.\n');
-      } else {
-        print('The binary has been updated successfully.');
-        print('Just restart VCS to apply changes. No manual cleanup needed.\n');
+        print('💡 ${"Note:".yellow} A ${".old".cyan} file was created. You can delete it now.');
       }
+      print('Restart VCS to apply changes.\n');
 
     } catch (e) {
       print('❌ ${"Update failed:".red} $e');
@@ -228,25 +225,34 @@ class PortableVcs {
   Future<String?> _getLatestGitHubVersion() async {
     try {
       final url = Uri.parse('https://raw.githubusercontent.com/Nooch98/Portable-VCS/main/lib/vcs.dart');      
-      final response = await http.get(url).timeout(const Duration(seconds: 3));
+      final response = await http.get(url).timeout(const Duration(seconds: 4));
+      
       if (response.statusCode == 200) {
-        final regExp = RegExp(r"Version\s*=\s*'([^']+)'");
+        final regExp = RegExp(r"vcsBaseVersion\s*=\s*['" + '"' + r"]([^'" + '"' + r"]+)['" + '"' + r"]");
         final match = regExp.firstMatch(response.body);
         
         if (match != null) {
           return match.group(1);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      // silent
+    }
     return null;
   }
 
   void _printUpdateToast(String current, String latest) {
+    final String title = " UPGRADE New version available!";
+    final String info = " ┃ $current → $latest";
+    final String action = " ┃ Run vcs update to install.";
+
+    final int width = [title.length, info.length, action.length].reduce((a, b) => a > b ? a : b) + 2;
+
     print('');
     print('  ${" UPGRADE ".black.onYellow.bold} ${"New version available!".yellow}');
     print('  ${"┃".yellow.bold}  ${current.grey} → ${latest.green.bold}');
     print('  ${"┃".yellow.bold}  Run ${"vcs update".cyan.bold} to install.');
-    print('  ${"━" * 45}\n'.grey);
+    print('  ${"━" * width}\n'.grey);
   }
 
   Future<void> showVersion() async {
@@ -275,103 +281,135 @@ class PortableVcs {
     print('  ' + '─' * 41);
     print('  ${'Runtime:'.yellow} ${'Dart $dartVer'.white}');
     print('  ${'Platform:'.yellow} ${os.toUpperCase().white}');
-    print('  ${'Source:'.yellow} ${'https://github.com/Nooch98/vcs'.blue}');
+    print('  ${'Source:'.yellow} ${'https://github.com/Nooch98/Portable-VCS'.blue}');
     print('═' * 45 + '\n');
   }
 
   void showHelp() {
     const String helpMarkdown = '''
-  # 🚀 PORTABLE SNAPSHOT VAULT [[ V.${vcsBaseVersion} ]]
 
-  > Offline encrypted snapshot tool for Git-compatible local workflows.
+    # 🚀 PORTABLE SNAPSHOT VAULT [[ V.${vcsBaseVersion} ]]
+
+    > Offline encrypted snapshot tool for Git-compatible local workflows.
 
 
-  ## 📂 REPOSITORY SETUP
-  - `setup` Prepare a USB drive or external storage for VCS use.
-  - `init` Initialize current project and link to remote storage.
-  - `list` List repositories available on the connected storage.
-  - `clone [repo_id]` Clone a repository from USB into a local folder.
-    - `--into <dir>` Specify a custom directory name for the clone.
-  - `bind [repo_id]` Bind current folder to an existing remote repository.
+    ## 📂 REPOSITORY SETUP
+    - `setup` Prepare a USB drive or external storage for VCS use.
+    - `init` Initialize current project and link to remote storage.
+    - `list` List repositories available on the connected storage.
+    - `clone [repo_id]` Clone a repository from USB into a local folder.
+      - `--into <dir>` Specify a custom directory name for the clone.
+    - `bind [repo_id]` Bind current folder to an existing remote repository.
 
-  ## 🛤️ TRACKS MANAGEMENT
-  - `track list` List all available tracks.
-  - `track current` Show the name of the active track.
-  - `track create <name>` Create a new empty track.
-  - `track switch <name>` Switch to another track.
-    - `--restore` Optional: Restore the tree files upon switching.
-  - `track delete <name>` Delete an existing non-active track.
+    ## 🛤️ TRACKS MANAGEMENT
+    - `track list` List all available tracks.
+    - `track current` Show the name of the active track.
+    - `track create <name>` Create a new empty track.
+    - `track switch <name>` Switch to another track.
+      - `--restore` Optional: Restore the tree files upon switching.
+    - `track delete <name>` Delete an existing non-active track.
 
-  ## 📦 SNAPSHOT WORKFLOW
-  - `push "message"` Create a snapshot (with preview & confirmation).
-    - `-a, --author <name>` Override the author name for this snapshot.
-    - `-t, --track <name>` Target a specific track instead of active.
-  - `pull [id]` Restore latest or specific snapshot (with preview).
-    - `-t, --track <name>` Source snapshot from a specific track.
-  - `revert <id>` Quick restore of a specific ID from active track.
-  - `restore <id>` Restore a specific snapshot into another folder.
-    - `--to <dir>` Destination path for the restored files.
+    ## 📦 SNAPSHOT WORKFLOW
+    - `push "message"` Create a snapshot (with preview & confirmation).
+      - `-a, --author <name>` Override the author name for this snapshot.
+      - `-t, --track <name>` Target a specific track instead of active.
+    - `pull [id]` Restore latest or specific snapshot (with preview).
+      - `-t, --track <name>` Source snapshot from a specific track.
+      - `--dry-run` Preview changes without applying.
+    - `revert <id>` Quick restore of a specific ID from active track.
+    - `restore <id>` Restore a specific snapshot into another folder.
+      - `--to <dir>` Destination path for the restored files.
 
-  ## 🔍 INSPECTION & WEB INTERFACE
-  - `ui` Launch the Web Dashboard (Split-view diff support).
-  - `status` Compare local tree vs latest of the active track.
-  - `search <query>` Search text inside encrypted snapshots.
-    - `-t, --track <name>` Search only within a specific track.
-    - `--id <snapshot_id>` Search only in a specific snapshot.
-    - `-m, --max <n>` Search only in the last N snapshots.
-    - `-s, --case-sensitive` Perform a case-sensitive search.
-  - `info` Project overview, storage impact and activity charts.
-    - `--charts` Display 7-day activity histogram.
-  - `summary` Summary of messages to help create Git/GitHub commits.
-  - `diff` Compare latest snapshot vs current live files.
-  - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
-    - `-t, --tracks <tk1> <tk2>` Compare the last snapshot between two tracks.
-  - `log` Show history of snapshots.
-    - `--graph, -g` Visual representation of the snapshot timeline.
-    - `--full` Show extended details (IDs, dates, metadata).
-    - `--standard` Show summary with 5-file change preview.
-    - `--summary` (Default) Show only statistics and message.
-  - `show <id>` Show details of a specific snapshot.
-  - `tree [id]` Show visual file tree representation.
-  - `verify <id|--all>` Verify cryptographic integrity of snapshots.
+    ## 🔍 INSPECTION & WEB INTERFACE
+    - `ui` Launch the Web Dashboard (Split-view diff support).
+    - `status` Compare local tree vs latest of the active track.
+    - `search <query>` Search text inside encrypted snapshots.
+      - `-t, --track <name>` Search only within a specific track.
+      - `--id <snapshot_id>` Search only in a specific snapshot.
+      - `-m, --max <n>` Search only in the last N snapshots.
+      - `-s, --case-sensitive` Perform a case-sensitive search.
+    - `info` Project overview, storage impact and activity charts.
+      - `--charts` Display 7-day activity histogram.
+    - `summary` Summary of messages to help create Git/GitHub commits.
+    - `diff` Compare latest snapshot vs current live files.
+    - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
+      - `-t, --tracks <tk1> <tk2>` Compare the last snapshot between two tracks.
+    - `log` Show history of snapshots.
+      - `--graph, -g` Visual representation of the snapshot timeline.
+      - `--full` Show extended details (IDs, dates, metadata).
+      - `--standard` Show summary with 5-file change preview.
+      - `--summary` (Default) Show only statistics and message.
+    - `show <id>` Show details of a specific snapshot.
+    - `tree [id]` Show visual file tree representation.
+    - `verify <id|--all>` Verify cryptographic integrity of snapshots.
 
-  ## 🐙 GIT INTEGRATION
-  - `git-prepare [id]` Prepare current Git repo from a snapshot.
-  - `publish [id]` Safe commit & push with remote conflict check.
-    - `--branch <name>` Specify target branch for the push.
-    - `--verify` Enforce security check for secrets.
-  - `git-diff [id]` Compare snapshot against current Git HEAD.
-  - `stash` Manage Git stash (save current Git changes):
-    - `--pop` Restore and remove last stash.
-    - `--list` Show all currently stashed changes.
+    ## ⌨️ ALIASES (USB Portable)
+    - `alias --list, -l` List all custom shortcuts saved in the USB.
+    - `alias --set "name=cmd"` Create a shortcut (e.g., `alias -s "st=status"`).
+    - `alias --rm <name>` Remove a specific alias from the storage.
 
-  ## 🛠️ MAINTENANCE
-  - `update` Download latest source from GitHub and recompile.
-  - `doctor` Run repository diagnostics and health checks.
-  - `stats` Show global repo metrics and track breakdown.
-  - `prune` Clean up old snapshots:
-    - `--id <id>` Delete a specific snapshot by its ID.
-    - `--keep N` Keep only the newest N snapshots.
-    - `--older-than N` Delete snapshots older than N days.
-    - `--garbage` Deep clean: Remove orphaned data blobs.
-  - `storage-check` Hardware diagnostic and latency test of the device.
-  - `migrate` Move your vault to a new drive or NAS:
-    - `--to <path>` Target destination path for migration.
-    - `--delete-source` Remove data from old drive after success.
+    ## 🐙 GIT INTEGRATION
+    - `git-prepare [id]` Prepare current Git repo from a snapshot.
+    - `publish [id]` Safe commit & push with remote conflict check.
+      - `--branch <name>` Specify target branch for the push.
+      - `--verify` Enforce security check for secrets.
+    - `git-diff [id]` Compare snapshot against current Git HEAD.
+    - `stash` Manage Git stash (save current Git changes):
+      - `--pop` Restore and remove last stash.
+      - `--list` Show all currently stashed changes.
 
-  ## ⚙️ GENERAL
-  - `help` Show this help message.
-  - `version` Show tool version.
+    ## 🛠️ MAINTENANCE
+    - `update` Download latest source from GitHub and recompile.
+    - `doctor` Run repository diagnostics and health checks.
+    - `stats` Show global repo metrics and track breakdown.
+    - `prune` Clean up old snapshots:
+      - `--id <id>` Delete a specific snapshot by its ID.
+      - `--keep N` Keep only the newest N snapshots.
+      - `--older-than N` Delete snapshots older than N days.
+      - `--garbage` Deep clean: Remove orphaned data blobs.
+    - `storage-check` Hardware diagnostic and latency test of the device.
+    - `migrate` Move your vault to a new drive or NAS:
+      - `--to <path>` Target destination path for migration.
+      - `--delete-source` Remove data from old drive after success.
 
-  ---
+    ## ⚙️ GENERAL
+    - `help` Show this help message.
+    - `version` Show tool version.
+    - `changelog` Show changes of the version
 
-  ### 💡 PRO TIPS
-  - Combine `--track` with inspection commands for cross-track analysis.
-  - Use `summary` before Git commits to maintain a clean history.
-  - All data is **AES-256 encrypted**. Keep your vault password safe.
-  ''';
+    ---
+
+    ### 💡 PRO TIPS
+    - **USB Aliases:** Aliases are stored in the USB root, so they follow you to any computer.
+    - Combine `--track` with inspection commands for cross-track analysis.
+    - Use `summary` before Git commits to maintain a clean history.
+    - All data is **AES-256 encrypted**. Keep your vault password safe.
+
+    ''';
 
     print(_renderMarkdown(helpMarkdown));
+  }
+
+  void showChangelog() {
+    final String content = VersionHistory.getMarkdown(vcsBaseVersion);
+    
+    final String changelogMarkdown = '''
+
+    # 📜 CHANGELOG [[ V.${vcsBaseVersion} ]]
+
+    > What's new in this release? Here is a summary of the latest changes.
+
+    ${content}
+
+    ---
+
+    ### 💡 INFO
+    - You are currently running the **Experimental** branch.
+    - For full history and source code, visit the GitHub repository.
+
+    ''';
+
+    print(_renderMarkdown(changelogMarkdown));
   }
 
   Future<void> setupDrive() async {
@@ -838,25 +876,24 @@ class PortableVcs {
         print('\n✨ ${"Empty project. Nothing to track.".grey}');
         return;
       }
-      print('\n${"Untracked files:".bold}');
+      print('\n${"Untracked files (Initial commit):".bold}');
       print('  ${"(use \"vcs push <message>\" to create the initial snapshot)".grey}');
-      for (final path in current.keys.toList()..sort()) {
-        print('    ${'[NEW]'.green} $path');
+      for (final path in (current.keys.toList()..sort())) {
+        print('    ${'NEW'.black.onGreen.padRight(7)} $path');
       }
       return;
     }
 
     final lastEntry = trackData.logs.first;
-    
-    final finalPassword = password ?? askPassword();
-    if (finalPassword == null) return;
+    final String? inputPassword = password ?? askPassword();
+    if (inputPassword == null) return; 
 
     final snapshot = await readSnapshot(
       context,
       lastEntry.id,
-      password: finalPassword,
+      password: inputPassword,
     );
-    
+
     if (snapshot == null) return;
 
     final lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
@@ -864,7 +901,7 @@ class PortableVcs {
 
     if (changes.isEmpty) {
       print('\n✨ ${"Working tree clean.".green}');
-      print('${"Your project is up to date with the latest snapshot in".grey} ${targetTrackName.cyan}.');
+      print('${"Your project is up to date with track".grey} ${targetTrackName.cyan}.');
       return;
     }
 
@@ -872,24 +909,32 @@ class PortableVcs {
     print('  ${"(use \"vcs push <message>\" to save these changes)".grey}\n');
 
     int added = 0, modified = 0, deleted = 0;
+    changes.sort((a, b) => a.path.compareTo(b.path));
 
     for (final change in changes) {
       final tag = change.toTag();
       if (tag.startsWith('+')) {
-        print('    ${'[NEW]'.green.padRight(8)} ${change.path}');
+        print('    ${'NEW'.black.onGreen.padRight(7)} ${change.path.green}');
         added++;
       } else if (tag.startsWith('-')) {
-        print('    ${'[DEL]'.red.padRight(8)} ${change.path}');
+        print('    ${'DEL'.black.onRed.padRight(7)} ${change.path.red}');
         deleted++;
       } else {
-        print('    ${'[MOD]'.yellow.padRight(8)} ${change.path}');
+        print('    ${'MOD'.black.onYellow.padRight(7)} ${change.path.yellow}');
         modified++;
       }
     }
 
-    print('\n' + '─' * 40);
-    print('${"Summary:".cyan} ${added.toString().green} new, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
-    print('─' * 40 + '\n');
+    print('\n' + '  ' + '─' * 45);
+    stdout.write('  ${"Summary:".cyan} ');
+    
+    List<String> summaryParts = [];
+    if (added > 0) summaryParts.add('${added} added'.green);
+    if (modified > 0) summaryParts.add('${modified} modified'.yellow);
+    if (deleted > 0) summaryParts.add('${deleted} deleted'.red);
+    
+    stdout.write(summaryParts.join(', '));
+    print('\n  ' + '─' * 45 + '\n');
   }
 
   Future<void> search(
@@ -1770,7 +1815,7 @@ class PortableVcs {
         }
       }
       if (details != null && details.trim().isNotEmpty) {
-        print('      ${details}');
+        print('      $details');
       }
     }
 
@@ -1797,16 +1842,12 @@ class PortableVcs {
       final markerFile = File(p.join(usb.path, driveMarkerFile));
       try {
         final lines = await markerFile.readAsLines();
+        final markerMap = Map.fromEntries(
+          lines.where((l) => l.contains('=')).map((l) => MapEntry(l.split('=')[0], l.split('=')[1]))
+        );
 
-        String? findValue(String key) {
-          try {
-            final line = lines.firstWhere((l) => l.startsWith('$key='), orElse: () => '');
-            return line.contains('=') ? line.split('=')[1] : null;
-          } catch (_) { return null; }
-        }
-
-        final provisionedBy = findValue('provisionedBy');
-        final provisionedAt = findValue('provisionedAt');
+        final provisionedBy = markerMap['provisionedBy'];
+        final provisionedAt = markerMap['provisionedAt'];
 
         if (provisionedBy != null && provisionedAt != null) {
           check(true, 'VCS Marker valid', 
@@ -1819,8 +1860,17 @@ class PortableVcs {
         check(false, 'VCS Marker readable', details: 'Marker file is corrupt or unreadable.');
       }
 
-      final reposDir = Directory(p.join(usb.path, remoteReposDir));
+      final reposDirPath = p.join(usb.path, remoteReposDir);
+      final reposDir = Directory(reposDirPath);
       check(reposDir.existsSync(), 'Vault directory structure', details: reposDir.path);
+
+      final aliasMgr = AliasManager(reposDir);
+      try {
+        await aliasMgr.loadAliases();
+        check(true, 'Alias System', details: 'Portable shortcuts are accessible.');
+      } catch (e) {
+        check(false, 'Alias System', details: 'Error reading vcs_aliases.json');
+      }
     }
 
     if (localInitialized && usb != null) {
@@ -1840,25 +1890,49 @@ class PortableVcs {
             check(false, 'Metadata sync', details: 'Meta file missing in remote.');
           } else {
             final meta = RepoMeta.fromJson(jsonDecode(await metaFile.readAsString()));
-            check(true, 'Metadata integrity', details: '${meta.logs.length} snapshots in history.');
+
+            final Set<String> allExpectedFiles = {};
+            int totalSnapshots = 0;
+
+            meta.tracks.forEach((trackName, trackData) {
+              for (var entry in trackData.logs) {
+                allExpectedFiles.add(entry.fileName);
+                totalSnapshots++;
+              }
+            });
+
+            check(true, 'Metadata integrity', 
+              details: '$totalSnapshots snapshots found across ${meta.tracks.length} tracks.');
 
             final snapshotsDir = Directory(p.join(remoteRepoDir.path, 'snapshots'));
             if (snapshotsDir.existsSync()) {
-              final physicalFiles = snapshotsDir.listSync().whereType<File>().map((f) => p.basename(f.path)).toSet();
-              final expectedFiles = meta.logs.map((e) => e.fileName).toSet();
+              final physicalFiles = snapshotsDir.listSync()
+                  .whereType<File>()
+                  .map((f) => p.basename(f.path))
+                  .toSet();
 
               final tempFiles = physicalFiles.where((f) => f.startsWith('.tmp_')).toList();
               if (tempFiles.isNotEmpty) {
-                check(false, 'Clean environment', details: 'Found ${tempFiles.length} interrupted temporary files.');
+                check(false, 'Clean environment', 
+                  details: 'Found ${tempFiles.length} temp files: ${tempFiles.take(3).join(", ")}${tempFiles.length > 3 ? "..." : ""}');
               } else {
                 check(true, 'No interrupted transactions');
               }
 
-              final orphans = physicalFiles.where((f) => !expectedFiles.contains(f) && !f.startsWith('.tmp_')).toList();
+              final orphans = physicalFiles.where((f) => 
+                !allExpectedFiles.contains(f) && 
+                !f.startsWith('.tmp_') && 
+                f != 'vcs_aliases.json'
+              ).toList();
+
               if (orphans.isNotEmpty) {
-                check(false, 'Storage optimization', details: 'Found ${orphans.length} orphan files (garbage).');
+                String orphanList = orphans.take(5).join(", ");
+                if (orphans.length > 5) orphanList += "... (+${orphans.length - 5} more)";
+                
+                check(false, 'Storage optimization', 
+                  details: 'Found ${orphans.length} orphan files: ${orphanList.grey}');
               } else {
-                check(true, 'Storage optimized (no orphans)');
+                check(true, 'Storage optimized (all tracks accounted for)');
               }
             }
           }
@@ -1878,7 +1952,7 @@ class PortableVcs {
     } else {
       print('\n⚠️  ${"Diagnostics found issues. Review the warnings above.".yellow.bold}');
       if (localInitialized && usb != null) {
-        print('   ${"Tip: Run 'vcs prune' to clean orphans or 'vcs setup' to update the drive.".grey}');
+        print('   ${"Tip: Run 'vcs prune --garbage' to delete the orphan files listed above.".grey}');
       }
     }
     print('');
@@ -2103,7 +2177,12 @@ class PortableVcs {
     });
   }
 
-  Future<void> pull({String? track, String? snapshotId, String? password}) async {
+  Future<void> pull({
+    String? track, 
+    String? snapshotId, 
+    String? password, 
+    bool dryRun = false,
+  }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -2131,7 +2210,8 @@ class PortableVcs {
       return;
     }
 
-    print('\n${'--- PULL/RESTORE PREVIEW ---'.black.onCyan}');
+    final headerLabel = dryRun ? '--- PULL DRY RUN (PREVIEW) ---' : '--- PULL/RESTORE PREVIEW ---';
+    print('\n${headerLabel.black.onCyan}');
     print('${'Source Track:'.padRight(15)} $targetTrackName');
     print('${'Snapshot ID:'.padRight(15)} ${entry.id.green}');
     print('${'Message:'.padRight(15)} ${entry.message.yellow}');
@@ -2139,17 +2219,23 @@ class PortableVcs {
     print('');
 
     if (entry.changeSummary.isEmpty) {
-      print('  ${"(No file changes recorded)".grey.italic}');
+      print('   ${"(No file changes recorded)".grey.italic}');
     } else {
       for (final c in entry.changeSummary) {
-        if (c.startsWith('[N]')) print('  ${'[+]'.green} ${c.substring(3).trim()}');
-        else if (c.startsWith('[M]')) print('  ${'[~]'.yellow} ${c.substring(3).trim()}');
-        else if (c.startsWith('[D]')) print('  ${'[-]'.red} ${c.substring(3).trim()}');
-        else print('  $c');
+        if (c.startsWith('[N]')) print('   ${'[+]'.green} ${c.substring(3).trim()}');
+        else if (c.startsWith('[M]')) print('   ${'[~]'.yellow} ${c.substring(3).trim()}');
+        else if (c.startsWith('[D]')) print('   ${'[-]'.red} ${c.substring(3).trim()}');
+        else print('   $c');
       }
     }
 
-    print('\n${'⚠️  WARNING:'.red.bold} This will overwrite files and remove those marked as deleted in the snapshot.');
+    if (dryRun) {
+      print('\n${'ℹ️  INFO:'.cyan} Dry run mode enabled. No files were touched.');
+      print('Remove ${'--dry-run'.bold} to apply these changes to your directory.\n');
+      return;
+    }
+
+    print('\n${'⚠️  WARNING:'.red.bold} This will overwrite local files and delete those not present in the snapshot.');
     stdout.write('Proceed with pull? (y/N): ');
     String? confirm = stdin.readLineSync()?.trim().toLowerCase();
     
@@ -2169,7 +2255,7 @@ class PortableVcs {
     try {
       final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
       if (snapshot == null) {
-        print('❌ Failed to read or decrypt snapshot data.');
+        print('❌ Failed to read or decrypt snapshot data. Check your password.');
         return;
       }
 
@@ -2177,23 +2263,24 @@ class PortableVcs {
       int restoredCount = 0;
       int deletedCount = 0;
 
-      for (final change in entry.changeSummary) {
-        if (change.startsWith('[D]')) {
-          final pathToDelete = change.substring(3).trim();
-          final file = File(pathToDelete);
-          if (await file.exists()) {
-            try {
-              await file.delete();
-              deletedCount++;
-            } catch (e) {
-              print('⚠️  Could not delete file ${pathToDelete.grey}: $e');
-            }
+      final deletions = entry.changeSummary.where((c) => c.startsWith('[D]'));
+      for (final change in deletions) {
+        final pathToDelete = change.substring(3).trim();
+        final file = File(pathToDelete);
+        if (await file.exists()) {
+          try {
+            await file.delete();
+            deletedCount++;
+          } catch (e) {
+            print('⚠️  Could not delete ${pathToDelete.grey}: $e');
           }
         }
       }
 
-      for (final path in filesInSnapshot.keys) {
-        final bytes = filesInSnapshot[path]!;
+      final totalFiles = filesInSnapshot.length;
+      for (final entry in filesInSnapshot.entries) {
+        final path = entry.key;
+        final bytes = entry.value;
         final file = File(path);
 
         final directory = Directory(file.parent.path);
@@ -2202,22 +2289,24 @@ class PortableVcs {
         }
 
         await file.writeAsBytes(bytes, flush: true);
-        
         restoredCount++;
-        if (restoredCount % 5 == 0) {
-          stdout.write('\rRestoring: ${((restoredCount / filesInSnapshot.length) * 100).toInt()}% ($restoredCount files)');
+
+        if (restoredCount % 5 == 0 || restoredCount == totalFiles) {
+          final percent = ((restoredCount / totalFiles) * 100).toInt();
+          stdout.write('\rRestoring: $percent% ($restoredCount/$totalFiles files)');
         }
       }
 
-      print('\r✅ Pull complete!');
+      print('\n\n✅ Pull complete!');
       print('   ${restoredCount.toString().green} files updated/restored.');
       if (deletedCount > 0) {
-        print('   ${deletedCount.toString().red} files removed as per snapshot metadata.');
+        print('   ${deletedCount.toString().red} files removed as per snapshot.');
       }
+      print('');
 
     } catch (e) {
       print('\n❌ ${'CRITICAL ERROR during pull:'.red} $e');
-      print('ℹ️  Your files might be in an inconsistent state. Suggesting a new pull.');
+      print('ℹ️  Suggestion: Verify your drive connection and try pulling again.');
     }
   }
 
@@ -5413,6 +5502,26 @@ class PortableVcs {
     String? cachedLatest;
     DateTime? lastCheck;
 
+    bool isUpdateAvailable(String local, String remote) {
+      try {
+        if (local == remote) return false;
+        List<int> parse(String v) {
+          final clean = v.replaceAll('-Experimental.', '.').replaceAll('-', '.');
+          return clean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+        }
+        final localParts = parse(local);
+        final remoteParts = parse(remote);
+        final maxLen = localParts.length > remoteParts.length ? localParts.length : remoteParts.length;
+        for (var i = 0; i < maxLen; i++) {
+          final l = i < localParts.length ? localParts[i] : 0;
+          final r = i < remoteParts.length ? remoteParts[i] : 0;
+          if (r > l) return true;
+          if (l > r) return false;
+        }
+      } catch (_) { return false; }
+      return false;
+    }
+
     if (cacheFile.existsSync()) {
       try {
         final lines = await cacheFile.readAsLines();
@@ -5423,7 +5532,7 @@ class PortableVcs {
       } catch (_) {}
     }
 
-    if (cachedLatest != null && cachedLatest != vcsBaseVersion) {
+    if (cachedLatest != null && isUpdateAvailable(vcsBaseVersion, cachedLatest)) {
       _printUpdateToast(vcsBaseVersion, cachedLatest);
     }
 
@@ -5435,13 +5544,11 @@ class PortableVcs {
         final latestV = await _getLatestGitHubVersion().timeout(const Duration(seconds: 2));
         if (latestV != null) {
           await cacheFile.writeAsString('$latestV\n${DateTime.now().toIso8601String()}');
-          if (latestV != vcsBaseVersion && latestV != cachedLatest) {
+          if (isUpdateAvailable(vcsBaseVersion, latestV) && latestV != cachedLatest) {
             _printUpdateToast(vcsBaseVersion, latestV);
           }
         }
-      } catch (_) {
-        // silent error
-      }
+      } catch (_) { /* Silent */ }
     } 
     else if (isExpired) {
       _getLatestGitHubVersion().then((latestV) async {
@@ -5449,7 +5556,7 @@ class PortableVcs {
           final data = '$latestV\n${DateTime.now().toIso8601String()}';
           await cacheFile.writeAsString(data);
         }
-      });
+      }).catchError((_) {});
     }
   }
 }
@@ -5491,39 +5598,39 @@ Future<void> main(List<String> args) async {
 
 Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password}) async {
   app.currentWebPassword = password;
-  
 
   final parser = ArgParser()
     ..addCommand('setup')
     ..addCommand('init')
     ..addCommand('status')
     ..addCommand('update')
+    ..addCommand('changelog')
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
     )
-    ..addCommand(
-      'migrate',
-      ArgParser()
-        ..addOption('to', abbr: 'd', help: 'Path to the new device or network folder')
-        ..addFlag('delete-source', negatable: false, help: 'Remove data from the old drive after migration'),
+    ..addCommand('alias', ArgParser()
+      ..addOption('set', abbr: 's', help: 'Set a new alias. Usage: vcs alias --set "xp=pull -t Experimentos"')
+      ..addOption('rm', help: 'Remove an alias')
+      ..addFlag('list', abbr: 'l', negatable: false, help: 'List all aliases')
     )
-    ..addCommand(
-      'log',
-      ArgParser()
-        ..addFlag('full', negatable: false)
-        ..addFlag('summary', negatable: false)
-        ..addFlag('standard', negatable: false)
-        ..addFlag('graph', abbr: 'g', negatable: false, help: 'Visual representation of the snapshot history.')
-        ..addOption('track', abbr: 't', help: 'Show logs from a specific track instead of the active one'),
+    ..addCommand('migrate', ArgParser()
+      ..addOption('to', abbr: 'd', help: 'Path to the new device or network folder')
+      ..addFlag('delete-source', negatable: false, help: 'Remove data from the old drive after migration'),
+    )
+    ..addCommand('log', ArgParser()
+      ..addFlag('full', negatable: false)
+      ..addFlag('summary', negatable: false)
+      ..addFlag('standard', negatable: false)
+      ..addFlag('graph', abbr: 'g', negatable: false, help: 'Visual representation of the snapshot history.')
+      ..addOption('track', abbr: 't', help: 'Show logs from a specific track instead of the active one'),
     )
     ..addCommand('show', ArgParser()
       ..addOption('track', abbr: 't', help: 'Target track to look for the snapshot')
     )
-    ..addCommand(
-      'pull',
-      ArgParser()
-        ..addOption('track', abbr: 't', help: 'Pull from a specific track')
-        ..addOption('id', help: 'Pull a specific snapshot ID'),
+    ..addCommand('pull', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Pull from a specific track')
+      ..addOption('id', help: 'Pull a specific snapshot ID')
+      ..addFlag('dry-run', negatable: false, help: 'Preview changes without modifying files'),
     )
     ..addCommand('list')
     ..addCommand('doctor')
@@ -5535,14 +5642,8 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('help')
     ..addCommand('clear-history')
     ..addCommand('purge')
-    ..addCommand(
-      'verify',
-      ArgParser()
-        ..addFlag(
-          'all',
-          negatable: false,
-          help: 'Verify all snapshots in repository',
-        ),
+    ..addCommand('verify', ArgParser()
+      ..addFlag('all', negatable: false, help: 'Verify all snapshots in repository'),
     )
     ..addCommand('bind')
     ..addCommand('diff', ArgParser())
@@ -5552,47 +5653,32 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('tree', ArgParser()
       ..addOption('track', abbr: 't', help: 'Target track to visualize')
     )
-    ..addCommand(
-      'push',
-      ArgParser()..addOption('author', abbr: 'a')
+    ..addCommand('push', ArgParser()
+      ..addOption('author', abbr: 'a')
       ..addOption('track', abbr: 't', help: 'Push to a specific track instead of the active one'),
     )
     ..addCommand('revert')
-    ..addCommand(
-      'restore',
-      ArgParser()..addOption('to'),
+    ..addCommand('restore', ArgParser()..addOption('to'))
+    ..addCommand('clone', ArgParser()..addOption('into'))
+    ..addCommand('prune', ArgParser()
+      ..addOption('id', abbr: 'i', help: 'Delete a specific snapshot by its ID.')
+      ..addOption('keep', abbr: 'k', help: 'Keep only the newest N snapshots.')
+      ..addOption('older-than', abbr: 'd', help: 'Delete snapshots older than N days.')
+      ..addFlag('garbage', abbr: 'g', negatable: false, help: 'Remove orphan and temp files.'),
     )
-    ..addCommand(
-      'clone',
-      ArgParser()..addOption('into'),
+    ..addCommand('git-prepare', ArgParser()
+      ..addOption('branch', defaultsTo: 'main')
+      ..addFlag('dry-run', negatable: false),
     )
-    ..addCommand(
-      'prune',
-      ArgParser()
-        ..addOption('id', abbr: 'i', help: 'Delete a specific snapshot by its ID.')
-        ..addOption('keep', abbr: 'k', help: 'Keep only the newest N snapshots.')
-        ..addOption('older-than', abbr: 'd', help: 'Delete snapshots older than N days.')
-        ..addFlag('garbage', abbr: 'g', negatable: false, help: 'Remove orphan and temp files.'),
+    ..addCommand('git-diff', ArgParser()
+      ..addOption('branch', defaultsTo: 'main'),
     )
-    ..addCommand(
-      'git-prepare',
-      ArgParser()
-        ..addOption('branch', defaultsTo: 'main')
-        ..addFlag('dry-run', negatable: false),
-    )
-    ..addCommand(
-      'git-diff',
-      ArgParser()
-        ..addOption('branch', defaultsTo: 'main'),
-    )
-    ..addCommand(
-      'track',
-      ArgParser()
-        ..addCommand('list')
-        ..addCommand('current')
-        ..addCommand('create')
-        ..addCommand('switch')
-        ..addCommand('delete'),
+    ..addCommand('track', ArgParser()
+      ..addCommand('list')
+      ..addCommand('current')
+      ..addCommand('create')
+      ..addCommand('switch')
+      ..addCommand('delete'),
     )
     ..addCommand('version')
     ..addCommand('ui')
@@ -5602,21 +5688,17 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addFlag('clear', negatable: false, help: '⚠️ Delete ALL stashed changes permanently')
       ..addOption('drop', help: 'Delete a specific stash (e.g., stash@{0})')
     )
-    ..addCommand(
-      'search',
-      ArgParser()
-        ..addOption('track', abbr: 't', help: 'Search in a specific track')
-        ..addOption('id', help: 'Search only in a specific snapshot ID')
-        ..addOption('max', abbr: 'm', help: 'Search only in the last N snapshots')
-        ..addFlag('case-sensitive', abbr: 's', negatable: false, help: 'Perform a case-sensitive search')
+    ..addCommand('search', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Search in a specific track')
+      ..addOption('id', help: 'Search only in a specific snapshot ID')
+      ..addOption('max', abbr: 'm', help: 'Search only in the last N snapshots')
+      ..addFlag('case-sensitive', abbr: 's', negatable: false, help: 'Perform a case-sensitive search')
     )
-    ..addCommand(
-      'publish',
-      ArgParser()
-        ..addOption('branch', defaultsTo: 'main', abbr: 'b')
-        ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
-        ..addFlag('dry-run', negatable: false)
-        ..addFlag('verify', defaultsTo: true, help: 'Run security hooks before publishing'),
+    ..addCommand('publish', ArgParser()
+      ..addOption('branch', defaultsTo: 'main', abbr: 'b')
+      ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
+      ..addFlag('dry-run', negatable: false)
+      ..addFlag('verify', defaultsTo: true, help: 'Run security hooks before publishing'),
     );
 
   if (args.isEmpty) {
@@ -5624,293 +5706,256 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     return;
   }
 
+  final context = await app.loadRepoContext();
+  Map<String, String> aliases = {};
+  AliasManager? aliasMgr;
+
+  if (context != null) {
+    aliasMgr = AliasManager(context.remoteRepoDir);
+    aliases = await aliasMgr.loadAliases();
+    
+    final String firstArg = args.first;
+    if (aliases.containsKey(firstArg) && firstArg != 'alias') {
+      final String expanded = aliases[firstArg]!;
+      print('🚀 ${"Alias detected:".grey} ${firstArg.cyan} -> ${expanded.yellow}');
+      args = [...expanded.split(' '), ...args.skip(1)];
+    }
+  }
+
   try {
     final result = parser.parse(args);
-    switch (result.command?.name) {
-      case 'version':
-        app.showVersion();
+    final command = result.command;
+    final commandName = command?.name;
+
+    switch (commandName) {
+      case 'alias':
+        if (aliasMgr == null) {
+          print('❌ ${"Error:".red} USB storage context not found. Cannot manage aliases.');
+          return;
+        }
+        if (command!['list'] == true) {
+          if (aliases.isEmpty) {
+            print('\n  ${"No aliases configured.".grey}');
+          } else {
+            print('\n📌 ${"CURRENT ALIASES (USB):".bold.cyan}');
+            aliases.forEach((k, v) => print('  ${k.green.padRight(12)} -> ${v.yellow}'));
+          }
+        } else if (command['set'] != null) {
+          final input = command['set'].toString();
+          if (!input.contains('=')) {
+            print('❌ Invalid format. Use: vcs alias --set "name=command"');
+          } else {
+            final parts = input.split('=');
+            await aliasMgr.saveAlias(parts[0].trim(), parts[1].trim());
+            print('✅ Alias ${parts[0].trim().green} saved successfully.');
+          }
+        } else if (command['rm'] != null) {
+          await aliasMgr.removeAlias(command['rm'].toString());
+          print('🗑️ Alias removed.');
+        }
         break;
-      case 'update':
-        app.update();
-        break;
+
+      case 'setup': await app.setupDrive(); break;
+      case 'init': await app.init(); break;
+      case 'status': await app.status(); break;
+      case 'update': await app.update(); break;
+      case 'changelog': app.showChangelog(); break;
+      case 'version': app.showVersion(); break;
+      case 'ui': await app.launchUI(); break;
+      case 'list': await app.listRepos(); break;
+      case 'doctor': await app.doctor(); break;
+      case 'stats': await app.stats(); break;
+      case 'clear-history': await app.clearHistory(); break;
+      case 'purge': await app.purge(); break;
+      case 'storage-check': await app.checkStorageHealth(); break;
+
       case 'info':
-        final cmd = result.command!;
-        await app.info(showCharts: cmd['charts']);
+        await app.info(showCharts: command!['charts'] == true);
         break;
-      case 'setup':
-        await app.setupDrive();
-        break;
-      case 'init':
-        await app.init();
-        break;
-      case 'list':
-        await app.listRepos();
-        break;
+
       case 'bind':
-        final bindCmd = result.command!;
-        final repoId = bindCmd.rest.isNotEmpty ? bindCmd.rest.first : null;
+        final repoId = command!.rest.isNotEmpty ? command.rest.first : null;
         await app.bindRepo(repoId: repoId);
         break;
-      case 'status':
-        await app.status();
-        break;
+
       case 'diff':
-        await app.diff(result.command?.rest ?? []);
+        await app.diff(command?.rest ?? []);
         break;
+
       case 'log':
-        final cmd = result.command!;
         LogViewMode mode = LogViewMode.summary;
-        if (cmd['full'] == true) {
-          mode = LogViewMode.full;
-        } else if (cmd['standard'] == true) {
-          mode = LogViewMode.standard;
-        }
-        final showGraph = cmd['graph'] == true;
+        if (command!['full'] == true) mode = LogViewMode.full;
+        else if (command['standard'] == true) mode = LogViewMode.standard;
         await app.log(
           mode: mode, 
-          track: cmd['track']?.toString(),
-          showGraph: showGraph
+          track: command['track']?.toString(),
+          showGraph: command['graph'] == true
         );
         break;
+
       case 'show':
-        final cmd = result.command!;
-        final rest = cmd.rest;
-        final track = cmd['track'] as String?;
-        final String? snapshotId = rest.isNotEmpty ? rest.first : null;
+        await app.showSnapshot(
+          command!.rest.isNotEmpty ? command.rest.first : null, 
+          track: command['track'] as String?
+        );
+        break;
 
-        await app.showSnapshot(snapshotId, track: track);
-        break;
-      case 'doctor':
-        await app.doctor();
-        break;
-      case 'stats':
-        await app.stats();
-        break;
       case 'pull':
-        final pullCmd = result.command!;
         await app.pull(
-          track: pullCmd['track']?.toString(),
-          snapshotId: pullCmd['id']?.toString(),
+          track: command!['track']?.toString(),
+          snapshotId: command['id']?.toString(),
+          dryRun: command['dry-run'] == true,
         );
         break;
-      case 'clear-history':
-        await app.clearHistory();
-        break;
-      case 'purge':
-        await app.purge();
-        break;
-      case 'verify':
-        final cmd = result.command!;
-        final verifyAll = cmd['all'] == true;
-        final rest = cmd.rest;
-        final snapshotId = rest.isNotEmpty ? rest.first : null;
 
-        await app.verify(
-          snapshotId: snapshotId,
-          verifyAll: verifyAll,
-        );
-        break;
-      case 'revert':
-        final rest = result.command?.rest ?? [];
-        if (rest.isEmpty) {
-          print('❌ You must provide a snapshot ID.');
-          return;
-        }
-        await app.revert(rest.first);
-        break;
-      case 'restore':
-        final restoreCmd = result.command!;
-        if (restoreCmd.rest.isEmpty) {
-          print('❌ You must provide a snapshot ID.');
-          return;
-        }
-        final to = restoreCmd['to']?.toString();
-        if (to == null || to.trim().isEmpty) {
-          print('❌ You must provide --to <folder>.');
-          return;
-        }
-        await app.restoreTo(restoreCmd.rest.first, to);
-        break;
-      case 'push':
-        final pushCmd = result.command!;
-        if (pushCmd.rest.isEmpty) {
-          print('❌ You must provide a message.');
-          return;
-        }
-        await app.push(
-          pushCmd.rest.join(' '),
-          author: pushCmd['author']?.toString(),
-          track: pushCmd['track']?.toString(),
-        );
-        break;
-      case 'clone':
-        final cloneCmd = result.command!;
-        final repoId = cloneCmd.rest.isNotEmpty ? cloneCmd.rest.first : null;
-        final into = cloneCmd['into']?.toString();
-        await app.cloneRepo(repoId: repoId, into: into);
-        break;
-      case 'prune':
-        final pruneCmd = result.command!;
-        final id = pruneCmd['id']?.toString(); 
-        final keep = pruneCmd['keep'] != null 
-            ? int.tryParse(pruneCmd['keep'].toString()) 
-            : null;
-            
-        final olderThan = pruneCmd['older-than'] != null
-            ? int.tryParse(pruneCmd['older-than'].toString())
-            : null;
-
-        final garbage = pruneCmd['garbage'] as bool? ?? false;
-
-        await app.prune(
-          snapshotId: id,
-          keep: keep, 
-          olderThanDays: olderThan, 
-          garbage: garbage
-        );
-        break;
-      case 'git-prepare':
-        final cmd = result.command!;
-        final snapshotId = cmd.rest.isNotEmpty ? cmd.rest.first : null;
-        await app.gitPrepare(
-          snapshotId: snapshotId,
-          branch: cmd['branch'].toString(),
-          dryRun: cmd['dry-run'] == true,
-        );
-        break;
-      case 'publish':
-        final cmd = result.command!;
-        final snapshotId = cmd.rest.isNotEmpty ? cmd.rest.first : null;
-        await app.publish(
-          snapshotId: snapshotId,
-          branch: cmd['branch'].toString(),
-          remote: cmd['remote'].toString(),
-          dryRun: cmd['dry-run'] == true,
-          verify: cmd['verify'] == true,
-        );
-        break;
-      case 'tree':
-        final cmd = result.command!;
-        final rest = cmd.rest;
-        final snapshotId = rest.isNotEmpty ? rest.first : null;
-        final track = cmd['track'] as String?;
-        await app.tree(snapshotId, track);
-        break;
-      case 'git-diff':
-        final cmd = result.command!;
-        final snapshotId = cmd.rest.isNotEmpty ? cmd.rest.first : null;
-        await app.gitDiff(
-          snapshotId: snapshotId,
-          branch: cmd['branch'].toString(),
-        );
-        break;
-      case 'track':
-        final trackCmd = result.command!;
-        final sub = trackCmd.command;
-
-        if (sub == null) {
-          print('❌ ${"Usage: vcs track <list|current|create|switch|delete> [name]".red}');
-          break;
-        }
-
-        switch (sub.name) {
-          case 'list':
-            await app.trackList();
-            break;
-
-          case 'current':
-            await app.trackCurrent();
-            break;
-
-          case 'create':
-            if (sub.rest.isEmpty) {
-              print('❌ ${"Track name required.".red}');
-            } else {
-              await app.trackCreate(sub.rest.first);
-            }
-            break;
-
-          case 'switch':
-            if (sub.rest.isEmpty) {
-              print('❌ ${"Track name required.".red}');
-            } else {
-              await app.trackSwitch(sub.rest.first);
-            }
-            break;
-
-          case 'delete':
-            if (sub.rest.isEmpty) {
-              print('❌ ${"Track name required.".red}');
-            } else {
-              await app.trackDelete(sub.rest.first);
-            }
-            break;
-
-          default:
-            print('❌ ${"Usage: vcs track <list|current|create|switch|delete> [name]".red}');
-        }
-        break;
-      case 'ui':
-        await app.launchUI();
-        break;
       case 'summary':
-        final cmd = result.command!;
-        await app.showCommitHelper(
-          track: cmd['track']?.toString()
+        await app.showCommitHelper(track: command!['track']?.toString());
+        break;
+
+      case 'verify':
+        await app.verify(
+          snapshotId: command!.rest.isNotEmpty ? command.rest.first : null,
+          verifyAll: command['all'] == true,
         );
         break;
-      case 'storage-check':
-        await app.checkStorageHealth();
-        break;
-      case 'stash':
-        final cmd = result.command!;
-        await app.gitStash(
-          pop: cmd['pop'] == true,
-          list: cmd['list'] == true,
-          clear: cmd['clear'] == true,
-          drop: cmd['drop']?.toString(),
-        );
-        break;
-      case 'migrate':
-        final cmd = result.command!;
-        final to = cmd['to']?.toString();
-        if (to == null) {
-          print('❌ ${"Target path required: --to <path>".red}');
-          return;
+
+      case 'revert':
+        if (command!.rest.isEmpty) {
+          print('❌ You must provide a snapshot ID.');
+        } else {
+          await app.revert(command.rest.first);
         }
-        await app.migrateVault(
-          targetPath: to,
-          deleteSource: cmd['delete-source'] == true
-        );
         break;
-      case 'search':
-        final cmd = result.command!;
-        if (cmd.rest.isEmpty) {
-          print('\n❌ ${"Usage:".red} vcs search <query> [options]');
-          print('   ${"Example:".grey} vcs search "main" --max 5');
-          print('   ${"Example:".grey} vcs search "auth" --id 1776896734970\n');
-          return;
-        }
-        
-        final query = cmd.rest.join(' ');
-        
-        int? maxLimit;
-        if (cmd['max'] != null) {
-          maxLimit = int.tryParse(cmd['max']);
-          if (maxLimit == null) {
-            print('❌ ${"Error:".red} --max must be a valid number.');
-            return;
+
+      case 'restore':
+        if (command!.rest.isEmpty) {
+          print('❌ You must provide a snapshot ID.');
+        } else {
+          final to = command['to']?.toString();
+          if (to == null || to.isEmpty) {
+            print('❌ You must provide a destination with --to <path>.');
+          } else {
+            await app.restoreTo(command.rest.first, to);
           }
         }
+        break;
 
-        await app.search(
-          query,
-          track: cmd['track'],
-          caseSensitive: cmd['case-sensitive'],
-          snapshotId: cmd['id'],
-          limit: maxLimit,
+      case 'push':
+        if (command!.rest.isEmpty) {
+          print('❌ You must provide a message.');
+        } else {
+          await app.push(
+            command.rest.join(' '),
+            author: command['author']?.toString(),
+            track: command['track']?.toString(),
+          );
+        }
+        break;
+
+      case 'clone':
+        await app.cloneRepo(
+          repoId: command!.rest.isNotEmpty ? command.rest.first : null, 
+          into: command['into']?.toString()
         );
         break;
+
+      case 'prune':
+        await app.prune(
+          snapshotId: command!['id']?.toString(),
+          keep: int.tryParse(command['keep']?.toString() ?? ''),
+          olderThanDays: int.tryParse(command['older-than']?.toString() ?? ''),
+          garbage: command['garbage'] == true
+        );
+        break;
+
+      case 'git-prepare':
+        await app.gitPrepare(
+          snapshotId: command!.rest.isNotEmpty ? command.rest.first : null,
+          branch: command['branch'].toString(),
+          dryRun: command['dry-run'] == true,
+        );
+        break;
+
+      case 'publish':
+        await app.publish(
+          snapshotId: command!.rest.isNotEmpty ? command.rest.first : null,
+          branch: command['branch'].toString(),
+          remote: command['remote'].toString(),
+          dryRun: command['dry-run'] == true,
+          verify: command['verify'] == true,
+        );
+        break;
+
+      case 'tree':
+        await app.tree(
+          command!.rest.isNotEmpty ? command.rest.first : null, 
+          command['track'] as String?
+        );
+        break;
+
+      case 'git-diff':
+        await app.gitDiff(
+          snapshotId: command!.rest.isNotEmpty ? command.rest.first : null,
+          branch: command['branch'].toString(),
+        );
+        break;
+
+      case 'track':
+        final sub = command!.command;
+        if (sub == null) {
+          print('❌ ${"Usage: vcs track <list|current|create|switch|delete> [name]".red}');
+        } else {
+          switch (sub.name) {
+            case 'list': await app.trackList(); break;
+            case 'current': await app.trackCurrent(); break;
+            case 'create': 
+              if (sub.rest.isEmpty) print('❌ Track name required.');
+              else await app.trackCreate(sub.rest.first); 
+              break;
+            case 'switch': 
+              if (sub.rest.isEmpty) print('❌ Track name required.');
+              else await app.trackSwitch(sub.rest.first); 
+              break;
+            case 'delete': 
+              if (sub.rest.isEmpty) print('❌ Track name required.');
+              else await app.trackDelete(sub.rest.first); 
+              break;
+          }
+        }
+        break;
+
+      case 'stash':
+        await app.gitStash(
+          pop: command!['pop'] == true,
+          list: command['list'] == true,
+          clear: command['clear'] == true,
+          drop: command['drop']?.toString(),
+        );
+        break;
+
+      case 'migrate':
+        final to = command!['to']?.toString();
+        if (to == null) {
+          print('❌ Target path required: --to <path>');
+        } else {
+          await app.migrateVault(targetPath: to, deleteSource: command['delete-source'] == true);
+        }
+        break;
+
+      case 'search':
+        if (command!.rest.isEmpty) {
+          print('\n❌ Usage: vcs search <query> [options]');
+          return;
+        }
+        await app.search(
+          command.rest.join(' '),
+          track: command['track'],
+          caseSensitive: command['case-sensitive'] == true,
+          snapshotId: command['id'],
+          limit: int.tryParse(command['max']?.toString() ?? ''),
+        );
+        break;
+
       default:
         app.showHelp();
     }
