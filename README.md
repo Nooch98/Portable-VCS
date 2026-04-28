@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.3.2--experimental-blue)
+![Version](https://img.shields.io/badge/version-0.3.4--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -390,6 +390,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
 | | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
+| | `vcs pull --dry-run | Preview changes without applying |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
 | **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
@@ -410,6 +411,9 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs search <query> --id <snapshot_id>` | Search only inside a specific snapshot ID. |
 | | `vcs search <query> -m/--max <n>` | Limit search to the last N snapshots. |
 | | `vcs search <query> -s/--case-sensitive` | Perform a case-sensitive search. |
+| **Aliases** | `vcs alias --list, -l` List all custom shortcuts saved in the USB |
+| | `vcs alias --set, -s "name=cmd"` Create a shortcut (e.g., `alias -s "st=status"`) |
+| | `vcs alias --rm <name>` | Remove a specific alias from the storage |
 | **Tracks** | `vcs track list` | List all available history tracks. |
 | | `vcs track current` | Show the name of the currently active track. |
 | | `vcs track create <name>` | Create a new independent development lane. |
@@ -437,6 +441,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs migrate --to <path>` | Target destination path for the migration. |
 | | `vcs migrate --delete-source` | Remove data from old drive after success. |
 | **General** | `vcs version` | Show tool version, OS information and **check for updates**. |
+| | `vcs changelog | Show changes of the version |
 | | `vcs help` | Show this help message. |
 
 # Encryption
