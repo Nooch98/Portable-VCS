@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:archive/archive.dart';
@@ -28,7 +29,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.4-Experimental.1';
+const String vcsBaseVersion = '0.3.4-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -264,15 +265,35 @@ class PortableVcs {
     final String? latestV = await _getLatestGitHubVersion();
     stdout.write('\r' + ' ' * 30 + '\r'); 
 
-    final bool hasUpdate = latestV != null && latestV != vcsBaseVersion;
+    bool isNewer(String local, String remote) {
+      try {
+        if (local == remote) return false;
+        List<int> parse(String v) {
+          final clean = v.replaceAll('-Experimental.', '.').replaceAll('-', '.');
+          return clean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+        }
+        final localParts = parse(local);
+        final remoteParts = parse(remote);
+        final maxLen = localParts.length > remoteParts.length ? localParts.length : remoteParts.length;
+        for (var i = 0; i < maxLen; i++) {
+          final l = i < localParts.length ? localParts[i] : 0;
+          final r = i < remoteParts.length ? remoteParts[i] : 0;
+          if (r > l) return true;
+          if (l > r) return false;
+        }
+      } catch (_) {}
+      return false;
+    }
+
+    final bool hasUpdate = latestV != null && isNewer(vcsBaseVersion, latestV);
 
     print('═' * 45);
     print('  ${'VCS'.cyan.bold} ${'·'.grey} ${'The Secure Vault System'.white}');
-    print('  ${'Local:'.grey}  ${currentFull.cyan}');
+    print('  ${'Local:'.grey}   ${currentFull.cyan}');
     
     if (hasUpdate) {
       print('  ' + '─' * 41);
-      print('  ${'🚀 NEW VERSION READY:'.black.onYellow.bold} ${latestV.green.bold}');
+      print('  ${'🚀 NEW VERSION READY:'.black.onYellow.bold} ${latestV!.green.bold}');
       print('  ${'Action:'.grey} Run ${'vcs update'.white.bold} to upgrade');
     } else if (latestV != null) {
       print('  ${'Status:'.grey} ${'Up to date'.green} (GitHub: $latestV)');
@@ -313,11 +334,14 @@ class PortableVcs {
     - `push "message"` Create a snapshot (with preview & confirmation).
       - `-a, --author <name>` Override the author name for this snapshot.
       - `-t, --track <name>` Target a specific track instead of active.
-    - `pull [id]` Restore latest or specific snapshot (with preview).
+    - `tag <name>` Assign a friendly label to a snapshot.
+      - `-i, --id <id>` Target a specific ID (defaults to latest).
+      - `-t, --track <name>` Target a snapshot in a specific track.
+    - `pull [id|tag]` Restore latest, specific ID or **tagged** snapshot.
       - `-t, --track <name>` Source snapshot from a specific track.
       - `--dry-run` Preview changes without applying.
-    - `revert <id>` Quick restore of a specific ID from active track.
-    - `restore <id>` Restore a specific snapshot into another folder.
+    - `revert <id|tag>` Quick restore of a specific version from active track.
+    - `restore <id|tag>` Restore a specific snapshot into another folder.
       - `--to <dir>` Destination path for the restored files.
 
     ## 🔍 INSPECTION & WEB INTERFACE
@@ -334,13 +358,13 @@ class PortableVcs {
     - `diff` Compare latest snapshot vs current live files.
     - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
       - `-t, --tracks <tk1> <tk2>` Compare the last snapshot between two tracks.
-    - `log` Show history of snapshots.
+    - `log` Show history of snapshots (includes **🏷️ Tags**).
       - `--graph, -g` Visual representation of the snapshot timeline.
       - `--full` Show extended details (IDs, dates, metadata).
       - `--standard` Show summary with 5-file change preview.
       - `--summary` (Default) Show only statistics and message.
-    - `show <id>` Show details of a specific snapshot.
-    - `tree [id]` Show visual file tree representation.
+    - `show <id|tag>` Show details of a specific snapshot.
+    - `tree [id|tag]` Show visual file tree representation.
     - `verify <id|--all>` Verify cryptographic integrity of snapshots.
 
     ## ⌨️ ALIASES (USB Portable)
@@ -349,18 +373,18 @@ class PortableVcs {
     - `alias --rm <name>` Remove a specific alias from the storage.
 
     ## 🐙 GIT INTEGRATION
-    - `git-prepare [id]` Prepare current Git repo from a snapshot.
-    - `publish [id]` Safe commit & push with remote conflict check.
+    - `git-prepare [id|tag]` Prepare current Git repo from a snapshot.
+    - `publish [id|tag]` Safe commit & push with remote conflict check.
       - `--branch <name>` Specify target branch for the push.
       - `--verify` Enforce security check for secrets.
-    - `git-diff [id]` Compare snapshot against current Git HEAD.
+    - `git-diff [id|tag]` Compare snapshot against current Git HEAD.
     - `stash` Manage Git stash (save current Git changes):
       - `--pop` Restore and remove last stash.
       - `--list` Show all currently stashed changes.
 
     ## 🛠️ MAINTENANCE
     - `update` Download latest source from GitHub and recompile.
-    - `doctor` Run repository diagnostics and health checks.
+    - `doctor` Run repository diagnostics, health checks and **meta-recovery**.
     - `stats` Show global repo metrics and track breakdown.
     - `prune` Clean up old snapshots:
       - `--id <id>` Delete a specific snapshot by its ID.
@@ -380,9 +404,9 @@ class PortableVcs {
     ---
 
     ### 💡 PRO TIPS
+    - **Human-readable IDs:** Use `vcs tag stable` to avoid typing long IDs in `pull` or `diff`.
+    - **Data Resilience:** The `doctor` command can restore metadata from backups if corruption occurs.
     - **USB Aliases:** Aliases are stored in the USB root, so they follow you to any computer.
-    - Combine `--track` with inspection commands for cross-track analysis.
-    - Use `summary` before Git commits to maintain a clean history.
     - All data is **AES-256 encrypted**. Keep your vault password safe.
 
     ''';
@@ -1269,11 +1293,17 @@ class PortableVcs {
       final tempFile = File(p.join(snapshotsDir.path, '.tmp_$snapshotId.vcs'));
       final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
 
+      String? fileHash;
+
       try {
         print('💾 Writing to drive...');
         await tempFile.writeAsBytes(encrypted, flush: true);
-
         await tempFile.rename(finalFile.path);
+
+        stdout.write('🛡️  Generating integrity hash... ');
+        fileHash = sha256.convert(encrypted).toString(); 
+        print('DONE'.green);
+        
       } catch (e) {
         print('❌ Critical error writing snapshot: $e');
         if (tempFile.existsSync()) await tempFile.delete();
@@ -1287,6 +1317,7 @@ class PortableVcs {
         createdAt: DateTime.now().toUtc().toIso8601String(),
         fileName: '$snapshotId.vcs',
         changeSummary: changes.map((e) => e.toTag()).toList(),
+        hash: fileHash,
       );
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
@@ -1314,6 +1345,9 @@ class PortableVcs {
     final temp = File('${file.path}.tmp');
     await temp.writeAsString(content, flush: true);
     await temp.rename(file.path);
+    
+    final backup = File('${file.path}.bak');
+    await backup.writeAsString(content, flush: true);
   }
 
   String _renderMarkdown(String text) {
@@ -1463,6 +1497,11 @@ class PortableVcs {
       return;
     }
 
+    final Map<String, List<String>> idToTags = {};
+    context.remoteMeta.tags.forEach((tagName, snapshotId) {
+      idToTags.putIfAbsent(snapshotId, () => []).add(tagName);
+    });
+
     print('\n📜 ${"Snapshot history".cyan} [Track: ${targetTrackName.cyan}]');
     print('═' * 60);
 
@@ -1477,15 +1516,23 @@ class PortableVcs {
       final isFirstInTerminal = i == total - 1;
       final visualIndex = total - 1 - i;
       final counts = countChanges(entry.changeSummary);
+      
       final String node = isLatest ? ' o '.cyan : ' * '.yellow;
       final String pipe = isFirstInTerminal ? '   ' : ' | '.grey;
       final String prefix = showGraph ? node : '';
       final String subPrefix = showGraph ? pipe : '';
 
+      String tagLabel = '';
+      if (idToTags.containsKey(entry.id)) {
+        tagLabel = idToTags[entry.id]!.map((t) => '🏷️ $t'.magenta).join(' ');
+        tagLabel = ' ($tagLabel)';
+      }
+
       print(
         '$prefix[${visualIndex.toString().padLeft(2, '0')}] '
         '${entry.id.green}'
-        '${isLatest ? " ${"(latest)".cyan}" : ""}',
+        '${isLatest ? " ${"(latest)".cyan}" : ""}'
+        '$tagLabel',
       );
 
       print('$subPrefix     ${"Date:".yellow.padRight(10)} $createdAt');
@@ -1845,7 +1892,6 @@ class PortableVcs {
         final markerMap = Map.fromEntries(
           lines.where((l) => l.contains('=')).map((l) => MapEntry(l.split('=')[0], l.split('=')[1]))
         );
-
         final provisionedBy = markerMap['provisionedBy'];
         final provisionedAt = markerMap['provisionedAt'];
 
@@ -1878,67 +1924,126 @@ class PortableVcs {
       print('─' * 60);
 
       try {
-        final localMeta = jsonDecode(await _localRepoFile.readAsString());
-        final repoId = localMeta['repo_id']?.toString() ?? '';
+        final localMetaRaw = jsonDecode(await _localRepoFile.readAsString());
+        final repoId = localMetaRaw['repo_id']?.toString() ?? '';
         final remoteRepoDir = Directory(p.join(usb.path, remoteReposDir, repoId));
 
         if (!remoteRepoDir.existsSync()) {
           check(false, 'Remote repository binding', details: 'Repo ID "$repoId" not found on this drive.');
         } else {
           final metaFile = File(p.join(remoteRepoDir.path, remoteMetaFileName));
-          if (!metaFile.existsSync()) {
-            check(false, 'Metadata sync', details: 'Meta file missing in remote.');
-          } else {
-            final meta = RepoMeta.fromJson(jsonDecode(await metaFile.readAsString()));
+          final backupFile = File('${metaFile.path}.bak');
+          
+          RepoMeta? meta;
+          bool restoredFromBackup = false;
 
-            final Set<String> allExpectedFiles = {};
+          if (!metaFile.existsSync()) {
+            if (backupFile.existsSync()) {
+              print('  ${"🔧".magenta} Main metadata missing. Attempting rescue from backup...');
+              meta = RepoMeta.fromJson(jsonDecode(await backupFile.readAsString()));
+              await metaFile.writeAsString(await backupFile.readAsString(), flush: true);
+              restoredFromBackup = true;
+            }
+          } else {
+            try {
+              meta = RepoMeta.fromJson(jsonDecode(await metaFile.readAsString()));
+            } catch (e) {
+              if (backupFile.existsSync()) {
+                print('  ${"🔧".magenta} Main metadata corrupt. Attempting rescue from backup...');
+                meta = RepoMeta.fromJson(jsonDecode(await backupFile.readAsString()));
+                await metaFile.writeAsString(await backupFile.readAsString(), flush: true);
+                restoredFromBackup = true;
+              }
+            }
+          }
+
+          if (meta == null) {
+            check(false, 'Metadata availability', details: 'Critical: Meta file and backup are missing or corrupt.');
+          } else {
+            check(true, restoredFromBackup ? 'Metadata restored from backup' : 'Metadata sync', 
+              details: restoredFromBackup ? 'Disaster recovery successful.' : 'Primary meta file is healthy.');
+
+            if (backupFile.existsSync() && !restoredFromBackup) {
+              final mainContent = await metaFile.readAsString();
+              final backupContent = await backupFile.readAsString();
+              if (mainContent != backupContent) {
+                check(false, 'Metadata Mirroring', isInfo: true, details: 'Backup is out of date. Run "vcs push" to sync.');
+              } else {
+                check(true, 'Metadata Mirroring', details: 'Redundant copy is up to date.');
+              }
+            }
+
+            final Map<String, String?> expectedHashes = {};
             int totalSnapshots = 0;
 
             meta.tracks.forEach((trackName, trackData) {
               for (var entry in trackData.logs) {
-                allExpectedFiles.add(entry.fileName);
+                expectedHashes[entry.fileName] = entry.hash;
                 totalSnapshots++;
               }
             });
 
-            check(true, 'Metadata integrity', 
-              details: '$totalSnapshots snapshots found across ${meta.tracks.length} tracks.');
+            check(true, 'Track Consistency', 
+              details: '$totalSnapshots snapshots across ${meta.tracks.length} tracks.');
 
             final snapshotsDir = Directory(p.join(remoteRepoDir.path, 'snapshots'));
             if (snapshotsDir.existsSync()) {
-              final physicalFiles = snapshotsDir.listSync()
-                  .whereType<File>()
-                  .map((f) => p.basename(f.path))
-                  .toSet();
+              final List<File> physicalFiles = snapshotsDir.listSync().whereType<File>().toList();
+              
+              int corruptCount = 0;
+              int verifiedCount = 0;
+              int legacyCount = 0;
 
-              final tempFiles = physicalFiles.where((f) => f.startsWith('.tmp_')).toList();
-              if (tempFiles.isNotEmpty) {
-                check(false, 'Clean environment', 
-                  details: 'Found ${tempFiles.length} temp files: ${tempFiles.take(3).join(", ")}${tempFiles.length > 3 ? "..." : ""}');
-              } else {
-                check(true, 'No interrupted transactions');
+              for (var file in physicalFiles) {
+                final name = p.basename(file.path);
+                if (name.startsWith('.tmp_') || name == 'vcs_aliases.json') continue;
+
+                if (expectedHashes.containsKey(name)) {
+                  final savedHash = expectedHashes[name];
+                  if (savedHash != null) {
+                    final bytes = await file.readAsBytes();
+                    final currentHash = sha256.convert(bytes).toString();
+                    
+                    if (currentHash != savedHash) {
+                      corruptCount++;
+                      print('  ${"❌".red} Integrity fail: ${name.grey} (Hash mismatch)');
+                    } else {
+                      verifiedCount++;
+                    }
+                  } else {
+                    legacyCount++;
+                  }
+                }
               }
 
-              final orphans = physicalFiles.where((f) => 
-                !allExpectedFiles.contains(f) && 
-                !f.startsWith('.tmp_') && 
-                f != 'vcs_aliases.json'
-              ).toList();
+              if (corruptCount > 0) {
+                check(false, 'Data Content Health', details: 'Found $corruptCount corrupted snapshot files!');
+              } else {
+                String healthDetails = 'Verified $verifiedCount files.';
+                if (legacyCount > 0) healthDetails += ' ($legacyCount legacy files skipped check).';
+                check(true, 'Data Content Health', details: healthDetails);
+              }
+
+              final tempFiles = physicalFiles.where((f) => p.basename(f.path).startsWith('.tmp_')).toList();
+              check(tempFiles.isEmpty, 'Clean environment', 
+                details: tempFiles.isEmpty ? null : 'Found ${tempFiles.length} interrupted transaction files.');
+
+              final orphans = physicalFiles.where((f) {
+                final name = p.basename(f.path);
+                return !expectedHashes.containsKey(name) && !name.startsWith('.tmp_') && name != 'vcs_aliases.json';
+              }).toList();
 
               if (orphans.isNotEmpty) {
-                String orphanList = orphans.take(5).join(", ");
-                if (orphans.length > 5) orphanList += "... (+${orphans.length - 5} more)";
-                
                 check(false, 'Storage optimization', 
-                  details: 'Found ${orphans.length} orphan files: ${orphanList.grey}');
+                  details: 'Found ${orphans.length} orphan files (not in any track).');
               } else {
-                check(true, 'Storage optimized (all tracks accounted for)');
+                check(true, 'Storage optimized');
               }
             }
           }
         }
       } catch (e) {
-        check(false, 'Metadata parsing', details: e.toString());
+        check(false, 'Critical Error', details: e.toString());
       }
     }
 
@@ -1951,9 +2056,6 @@ class PortableVcs {
       print('\n✨ ${"Everything looks perfect. Your portable vault is healthy.".green.bold}');
     } else {
       print('\n⚠️  ${"Diagnostics found issues. Review the warnings above.".yellow.bold}');
-      if (localInitialized && usb != null) {
-        print('   ${"Tip: Run 'vcs prune --garbage' to delete the orphan files listed above.".grey}');
-      }
     }
     print('');
   }
@@ -2199,24 +2301,64 @@ class PortableVcs {
       return;
     }
 
-    final finalSnapshotId = snapshotId ?? trackData.logs.first.id;
+    String finalSnapshotId = snapshotId ?? trackData.logs.first.id;
+    bool isTag = false;
+
+    if (snapshotId != null && context.remoteMeta.tags.containsKey(snapshotId)) {
+      final resolvedId = context.remoteMeta.tags[snapshotId]!;
+      print('🏷️  Tag detected: ${snapshotId.cyan} -> Resolving to $resolvedId');
+      finalSnapshotId = resolvedId;
+      isTag = true;
+    }
+
     final entry = trackData.logs.firstWhere(
       (e) => e.id == finalSnapshotId,
       orElse: () => SnapshotLogEntry(id: '', message: '', createdAt: '', fileName: '', author: '', changeSummary: []),
     );
 
     if (entry.id.isEmpty) {
-      print('❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".');
+      final errorMsg = isTag 
+        ? '❌ The tag "$snapshotId" points to a snapshot ID ($finalSnapshotId) that no longer exists.'
+        : '❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".';
+      print(errorMsg);
       return;
     }
 
     final headerLabel = dryRun ? '--- PULL DRY RUN (PREVIEW) ---' : '--- PULL/RESTORE PREVIEW ---';
     print('\n${headerLabel.black.onCyan}');
     print('${'Source Track:'.padRight(15)} $targetTrackName');
+    
+    if (isTag) {
+      print('${'Active Tag:'.padRight(15)} ${snapshotId?.cyan}');
+    }
+    
     print('${'Snapshot ID:'.padRight(15)} ${entry.id.green}');
     print('${'Message:'.padRight(15)} ${entry.message.yellow}');
     print('${'Author:'.padRight(15)} ${entry.author ?? 'Unknown'}');
     print('');
+
+    final snapshotFile = File(p.join(context.remoteRepoDir.path, 'snapshots', entry.fileName));
+    
+    if (!snapshotFile.existsSync()) {
+      print('❌ ${"CRITICAL:".red} Snapshot file missing at ${snapshotFile.path.grey}');
+      return;
+    }
+
+    if (entry.hash != null) {
+      stdout.write('🛡️  Verifying snapshot integrity... ');
+      final bytes = await snapshotFile.readAsBytes();
+      final currentHash = sha256.convert(bytes).toString();
+
+      if (currentHash != entry.hash) {
+        print('\n\n❌ ${'INTEGRITY CHECK FAILED'.red.bold}');
+        print('The file on the USB has been corrupted or tampered with.');
+        print('Expected: ${entry.hash?.grey}');
+        print('Actual:   ${currentHash.red}');
+        print('\n🚫 Pull aborted to prevent restoring corrupted data.');
+        return;
+      }
+      print('${"OK".green}');
+    }
 
     if (entry.changeSummary.isEmpty) {
       print('   ${"(No file changes recorded)".grey.italic}');
@@ -2278,9 +2420,9 @@ class PortableVcs {
       }
 
       final totalFiles = filesInSnapshot.length;
-      for (final entry in filesInSnapshot.entries) {
-        final path = entry.key;
-        final bytes = entry.value;
+      for (final sEntry in filesInSnapshot.entries) {
+        final path = sEntry.key;
+        final bytes = sEntry.value;
         final file = File(path);
 
         final directory = Directory(file.parent.path);
@@ -5266,11 +5408,15 @@ class PortableVcs {
     if (context == null) return;
 
     final meta = context.remoteMeta;
+    final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
+    final metaFile = File(p.join(context.remoteRepoDir.path, remoteMetaFileName));
+    final backupFile = File('${metaFile.path}.bak');
 
-    print('\nℹ️  ${"PROJECT ARCHIVE INFORMATION".black.onCyan}');
-    print('${"Project Name:".yellow} ${meta.projectName.bold}');
-    print('${"Repo ID:".yellow}      ${meta.repoId.grey}');
-    print('${"Active Track:".yellow} ${meta.activeTrack.magenta.bold}');
+    print('\nℹ️  ${" PROJECT ARCHIVE DASHBOARD ".black.onCyan}');
+    print('${"Project Name:".yellow.padRight(20)} ${meta.projectName.bold}');
+    print('${"Repo ID:".yellow.padRight(20)} ${meta.repoId.grey}');
+    print('${"Active Track:".yellow.padRight(20)} ${meta.activeTrack.magenta.bold}');
+    print('${"Last Sync:".yellow.padRight(20)} ${meta.updatedAt.grey}');
     print('─' * 60);
 
     int totalSnapshots = 0;
@@ -5286,7 +5432,6 @@ class PortableVcs {
       }
     });
 
-    final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
     double totalSizeMb = 0;
     if (await snapshotsDir.exists()) {
       final files = snapshotsDir.listSync();
@@ -5296,7 +5441,6 @@ class PortableVcs {
 
     if (showCharts) {
       print('📅 ${"Activity (Last 7 Days):".bold}');
-      
       final now = DateTime.now();
       final Map<String, int> dailyCounts = {};
 
@@ -5323,21 +5467,18 @@ class PortableVcs {
       dailyCounts.forEach((date, count) {
         final barWidth = maxDayCount == 0 ? 0 : (count / maxDayCount * 20).round();
         final bar = '█' * barWidth;
-        final colorBar = count > 0 ? bar.green : ''.grey;
-        
-        print('  $date | $colorBar ${count > 0 ? count.toString().bold : '0'.grey}');
+        print('  $date | ${count > 0 ? bar.green : ''.grey} ${count > 0 ? count.toString().bold : '0'.grey}');
       });
-      print('               └' + '─' * 22);
-      print('');
+      print('              └' + '─' * 22 + '\n');
     }
 
-    String remoteUrl = 'Not linked';
-    try {
-      final gitResult = await Process.run('git', ['remote', 'get-url', 'origin']);
-      if (gitResult.exitCode == 0) {
-        remoteUrl = gitResult.stdout.toString().trim();
-      }
-    } catch (_) {}
+    if (meta.tags.isNotEmpty) {
+      print('🏷️  ${"Milestones & Tags:".bold}');
+      meta.tags.forEach((tagName, id) {
+        print('  ${tagName.magenta.padRight(20)} ${"→".grey} ${id.green}');
+      });
+      print('');
+    }
 
     final lastPush = totalSnapshots > 0 
         ? _formatDateForList(meta.activeTrackState.logs.first.createdAt)
@@ -5356,7 +5497,17 @@ class PortableVcs {
     print('\n🔒 ${"Metadata & Security:".bold}');
     print('  ${"Format Version:".padRight(20)} ${meta.formatVersion.toString().yellow}');
     print('  ${"Created At:".padRight(20)} ${meta.createdAt.grey}');
+    print('  ${"Updated At:".padRight(20)} ${meta.updatedAt.grey}');
     print('  ${"Encryption:".padRight(20)} ${"AES-256-GCM".green}');
+    
+    final hasBackup = await backupFile.exists();
+    print('  ${"Mirroring (.bak):".padRight(20)} ${hasBackup ? "ACTIVE".green : "MISSING".red}');
+
+    String remoteUrl = 'Not linked';
+    try {
+      final gitResult = await Process.run('git', ['remote', 'get-url', 'origin']);
+      if (gitResult.exitCode == 0) remoteUrl = gitResult.stdout.toString().trim();
+    } catch (_) {}
 
     print('\n🔗 ${"Git Integration:".bold}');
     print('  ${"Origin URL:".padRight(20)} ${remoteUrl.blue}');
@@ -5559,6 +5710,46 @@ class PortableVcs {
       }).catchError((_) {});
     }
   }
+
+  Future<void> tag(String tagName, {String? snapshotId, String? track}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrack = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrack];
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('❌ No snapshots found in track "$targetTrack" to tag.');
+      return;
+    }
+
+    final idToTag = snapshotId ?? trackData.logs.first.id;
+    final exists = trackData.logs.any((e) => e.id == idToTag);
+    if (!exists) {
+      print('❌ Snapshot ID "$idToTag" not found in track "$targetTrack".');
+      return;
+    }
+    final updatedTags = Map<String, String>.from(context.remoteMeta.tags);
+    
+    if (updatedTags.containsKey(tagName)) {
+      print('ℹ️  Moving tag ${tagName.cyan} from ${updatedTags[tagName]!.grey} to ${idToTag.green}');
+    }
+
+    updatedTags[tagName] = idToTag;
+
+    final updatedMeta = context.remoteMeta.copyWith(
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+      tags: updatedTags,
+    );
+
+    final metaFile = File(p.join(context.remoteRepoDir.path, remoteMetaFileName));
+    await _atomicWriteString(
+      metaFile,
+      const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
+    );
+
+    print('✅ Tag ${tagName.magenta.bold} successfully linked to ${idToTag.green}');
+  }
 }
 
 extension ColorConsole on String {
@@ -5607,6 +5798,10 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('changelog')
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
+    )
+    ..addCommand('tag', ArgParser()
+      ..addOption('id', abbr: 'i', help: 'Specific snapshot ID to tag')
+      ..addOption('track', abbr: 't', help: 'Track where the snapshot resides')
     )
     ..addCommand('alias', ArgParser()
       ..addOption('set', abbr: 's', help: 'Set a new alias. Usage: vcs alias --set "xp=pull -t Experimentos"')
@@ -5768,6 +5963,24 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'clear-history': await app.clearHistory(); break;
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
+
+      case 'tag':
+        final tagName = command?.rest.firstOrNull;
+
+        if (tagName == null) {
+          print('❌ Usage: vcs tag <tag_name> [--id <id>] [--track <name>]');
+        } else {
+          if (!RegExp(r'^[a-zA-Z0-9\._\-]+$').hasMatch(tagName)) {
+            print('❌ Invalid tag name. Use only letters, numbers, dots, dashes or underscores.');
+          } else {
+            await app.tag(
+              tagName,
+              snapshotId: command?['id']?.toString(),
+              track: command?['track']?.toString(),
+            );
+          }
+        }
+        break;
 
       case 'info':
         await app.info(showCharts: command!['charts'] == true);
