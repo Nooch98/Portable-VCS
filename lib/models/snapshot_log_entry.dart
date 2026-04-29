@@ -5,6 +5,7 @@ class SnapshotLogEntry {
   final String createdAt;
   final String fileName;
   final List<String> changeSummary;
+  final String? hash;
 
   SnapshotLogEntry({
     required this.id,
@@ -13,6 +14,7 @@ class SnapshotLogEntry {
     required this.createdAt,
     required this.fileName,
     required this.changeSummary,
+    this.hash,
   });
 
   factory SnapshotLogEntry.fromJson(Map<String, dynamic> json) {
@@ -25,6 +27,7 @@ class SnapshotLogEntry {
       changeSummary: ((json['change_summary'] as List?) ?? [])
           .map((e) => e.toString())
           .toList(),
+      hash: json['hash']?.toString(),
     );
   }
 
@@ -35,5 +38,8 @@ class SnapshotLogEntry {
         'created_at': createdAt,
         'file_name': fileName,
         'change_summary': changeSummary,
+        'hash': hash,
       };
+
+  bool get hasIntegrityData => hash != null && hash!.isNotEmpty;
 }
