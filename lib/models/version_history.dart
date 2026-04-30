@@ -1,5 +1,16 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.5-Experimental.1': '''
+  ### 🏎️ PERFORMANCE & VISIBILITY
+  - **New Command: `benchmark`:** Test your USB performance with a stress test covering IOPS, sequential write, and AES-256 encryption latency. Includes a hardware rating (Gold/Silver/Bronze).
+  - **New Command: `timeline`:** A new way to visualize history. View your snapshots in chronological order with customizable limits (`--limit`) and track-specific filtering.
+
+  ### 🛠️ UX & COMMAND REFINEMENT
+  - **Doctor 2.0:** Improved diagnostic logic with better repair suggestions and clearer status reporting.
+  - **Enhanced Stats & Info:** Refined output for repository metrics, including better visualization of track distribution and storage impact.
+  - **Polished List:** The `list` command now provides a cleaner overview of available repositories on the connected drive.
+    ''',
+
     '0.3.4-Experimental.2': '''
   ### 🏷️ HUMAN-READABLE HISTORY
   - **Tagging System:** Assign friendly names (labels) to snapshots. No more copying 13-digit IDs.
