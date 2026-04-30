@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -29,7 +30,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.4-Experimental.2';
+const String vcsBaseVersion = '0.3.5-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -260,10 +261,11 @@ class PortableVcs {
     final String currentFull = getFullVersion();
     final String dartVer = Platform.version.split(" ").first;
     final String os = Platform.operatingSystem;
+    final String arch = Abi.current().toString().split('_').last;
 
-    stdout.write('🔍 Checking for updates...');
+    stdout.write('🔍 ${"Checking for updates...".grey}');
     final String? latestV = await _getLatestGitHubVersion();
-    stdout.write('\r' + ' ' * 30 + '\r'); 
+    stdout.write('\r' + ' ' * 35 + '\r'); 
 
     bool isNewer(String local, String remote) {
       try {
@@ -286,30 +288,38 @@ class PortableVcs {
     }
 
     final bool hasUpdate = latestV != null && isNewer(vcsBaseVersion, latestV);
+    final bool isExp = currentFull.toLowerCase().contains('exp');
 
-    print('═' * 45);
-    print('  ${'VCS'.cyan.bold} ${'·'.grey} ${'The Secure Vault System'.white}');
-    print('  ${'Local:'.grey}   ${currentFull.cyan}');
+    print('\n' + '═' * 55);
     
+    final badge = isExp ? "EXPERIMENTAL".black.onMagenta : "STABLE".black.onGreen;
+    print('  ${'VCS'.cyan.bold} $badge ${'·'.grey} ${'The Secure Vault System'.white}');
+    print('  ' + '─' * 51);
+
+    print('  ${'Local Version:'.yellow.padRight(18)} ${currentFull.white.bold}');
+
     if (hasUpdate) {
-      print('  ' + '─' * 41);
-      print('  ${'🚀 NEW VERSION READY:'.black.onYellow.bold} ${latestV!.green.bold}');
-      print('  ${'Action:'.grey} Run ${'vcs update'.white.bold} to upgrade');
+      print('\n  ${'🚀 NEW VERSION READY:'.black.onYellow.bold} ${latestV!.green.bold}');
+      print('  ${'Update command:'.grey} ${'vcs update'.white.bold}');
     } else if (latestV != null) {
-      print('  ${'Status:'.grey} ${'Up to date'.green} (GitHub: $latestV)');
+      print('  ${'Status:'.yellow.padRight(18)} ${'Up to date'.green} (GitHub: $latestV)');
+    } else {
+      print('  ${'Status:'.yellow.padRight(18)} ${'Check failed (Offline)'.red}');
     }
 
-    print('  ' + '─' * 41);
-    print('  ${'Runtime:'.yellow} ${'Dart $dartVer'.white}');
-    print('  ${'Platform:'.yellow} ${os.toUpperCase().white}');
-    print('  ${'Source:'.yellow} ${'https://github.com/Nooch98/Portable-VCS'.blue}');
-    print('═' * 45 + '\n');
+    print('\n  ${'SYSTEM INFO'.bold.cyan}');
+    print('  ' + '─' * 51);    
+    print('  ${'Runtime:'.grey.padRight(18)} ${'Dart $dartVer ($arch)'.white}');
+    print('  ${'Platform:'.grey.padRight(18)} ${os.toUpperCase().white}');
+    print('  ${'Source:'.grey.padRight(18)} ${'https://github.com/Nooch98/Portable-VCS'.blue}');
+
+    print('═' * 55 + '\n');
   }
 
   void showHelp() {
     const String helpMarkdown = '''
 
-    # 🚀 PORTABLE SNAPSHOT VAULT [[ V.${vcsBaseVersion} ]]
+    # 🚀 PORTABLE SNAPSHOT VAULT [[ V.\${vcsBaseVersion} ]]
 
     > Offline encrypted snapshot tool for Git-compatible local workflows.
 
@@ -347,6 +357,9 @@ class PortableVcs {
     ## 🔍 INSPECTION & WEB INTERFACE
     - `ui` Launch the Web Dashboard (Split-view diff support).
     - `status` Compare local tree vs latest of the active track.
+    - `timeline` Show an interactive or list-based chronological view.
+      - `-t, --track <name>` Visualize a specific track.
+      - `-n, --limit <n>` Number of snapshots to display (default: 15).
     - `search <query>` Search text inside encrypted snapshots.
       - `-t, --track <name>` Search only within a specific track.
       - `--id <snapshot_id>` Search only in a specific snapshot.
@@ -386,12 +399,15 @@ class PortableVcs {
     - `update` Download latest source from GitHub and recompile.
     - `doctor` Run repository diagnostics, health checks and **meta-recovery**.
     - `stats` Show global repo metrics and track breakdown.
+    - `benchmark` Performance stress test (IOPS, Crypto & Transfer speed).
+      - `-i, --intensive` Run a high-load test with larger data buffers.
     - `prune` Clean up old snapshots:
       - `--id <id>` Delete a specific snapshot by its ID.
       - `--keep N` Keep only the newest N snapshots.
       - `--older-than N` Delete snapshots older than N days.
       - `--garbage` Deep clean: Remove orphaned data blobs.
     - `storage-check` Hardware diagnostic and latency test of the device.
+      - `--full` Perform a more intensive read/write integrity check.
     - `migrate` Move your vault to a new drive or NAS:
       - `--to <path>` Target destination path for migration.
       - `--delete-source` Remove data from old drive after success.
@@ -405,6 +421,7 @@ class PortableVcs {
 
     ### 💡 PRO TIPS
     - **Human-readable IDs:** Use `vcs tag stable` to avoid typing long IDs in `pull` or `diff`.
+    - **Performance Check:** Run `vcs benchmark` if you feel the USB is slow; it helps identify hardware bottlenecks.
     - **Data Resilience:** The `doctor` command can restore metadata from backups if corruption occurs.
     - **USB Aliases:** Aliases are stored in the USB root, so they follow you to any computer.
     - All data is **AES-256 encrypted**. Keep your vault password safe.
@@ -639,7 +656,8 @@ class PortableVcs {
       return;
     }
 
-    print('\n📦 ${" VAULT STORAGE ".black.onCyan} ${p.join(usb.path, remoteReposDir).grey}');
+    print('\n📦 ${" VAULT REPOSITORY LIST ".black.onCyan}');
+    print('${"USB Path:".grey} ${p.join(usb.path, remoteReposDir).grey}');
     print('═' * 70);
 
     final localId = await _readLocalRepoId();
@@ -648,36 +666,50 @@ class PortableVcs {
       final repo = repos[i];
       final meta = repo.meta;
 
+      final snapshotsPath = p.join(usb.path, remoteReposDir, meta.repoId, 'snapshots');
+      final snapshotsDir = Directory(snapshotsPath);
+      
+      double sizeMb = 0;
+      if (snapshotsDir.existsSync()) {
+        try {
+          final totalBytes = snapshotsDir.listSync()
+              .whereType<File>()
+              .fold<int>(0, (sum, f) => sum + f.lengthSync());
+          sizeMb = totalBytes / (1024 * 1024);
+        } catch (_) {
+          sizeMb = 0;
+        }
+      }
+
+      final isLinked = localId == meta.repoId;
+      final indexStr = '[${(i + 1).toString().padLeft(2, '0')}]'.green;
+      
       int totalSnapshots = 0;
       meta.tracks.forEach((_, state) => totalSnapshots += state.logs.length);
-      
-      final trackCount = meta.tracks.length;
-      final updatedAt = _formatDateForList(meta.updatedAt);
-      final isLinked = localId == meta.repoId;
 
-      final indexStr = '[${i.toString().padLeft(2, '0')}]'.green;
-      final String statusIcon = isLinked ? '●'.magenta : '○'.grey;
-      final String nameDisplay = isLinked 
-          ? meta.projectName.bold.white 
-          : meta.projectName.cyan;
+      final statusBadge = isLinked ? " LINKED ".black.onMagenta : " REMOTE ".black.onBlue;
+      final nameDisplay = isLinked ? meta.projectName.bold.white : meta.projectName.cyan;
 
-      print('$indexStr $statusIcon $nameDisplay ${isLinked ? "(linked)".magenta.italic : ""}');      
-      print('     ${"ID:".grey} ${meta.repoId.white} ${"|".grey} ${"Updated:".grey} $updatedAt');
+      print('$indexStr $statusBadge $nameDisplay');
+      print('     ${"ID:".grey} ${meta.repoId.white}');
       
       final stats = [
-        '${trackCount.toString().yellow} tracks',
-        '${totalSnapshots.toString().yellow} snapshots',
+        '${meta.tracks.length} tracks'.yellow,
+        '$totalSnapshots snapshots'.yellow,
+        '${sizeMb.toStringAsFixed(1)} MB'.yellow,
       ].join(' ${"•".grey} ');
-      
+
       print('     ${"Stats:".grey} $stats');
-      
+      print('     ${"Last Sync:".grey} ${_formatDateForList(meta.updatedAt).grey}');
+
       if (i < repos.length - 1) {
-        print('     ' + '─' * 50);
+        print('     ' + '┈' * 55);
       }
     }
 
     print('═' * 70);
-    print('💡 ${"Total:".cyan} ${repos.length} repos ${"|".grey} ${"To download:".grey} ${"vcs clone <id>".green}');
+    print('💡 ${"Total:".cyan} ${repos.length} repositories found.');
+    print('🚀 ${"To clone:".grey} ${"vcs clone <id_or_index>".green}');
     print('');
   }
 
@@ -985,10 +1017,11 @@ class PortableVcs {
       return;
     }
 
-    List<dynamic> logsToSearch = trackData.logs;
+    List<dynamic> logsToSearch = List.from(trackData.logs);
+    logsToSearch.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     if (snapshotId != null) {
-      logsToSearch = logsToSearch.where((l) => l.id == snapshotId).toList();
+      logsToSearch = logsToSearch.where((l) => l.id.toString() == snapshotId).toList();
       if (logsToSearch.isEmpty) {
         print('❌ ${"Snapshot ID not found in track:".red} $snapshotId');
         return;
@@ -997,29 +1030,22 @@ class PortableVcs {
       logsToSearch = logsToSearch.take(limit).toList();
     }
 
-    print('\n🔍 ${"SEARCH".black.onCyan} Searching for: "${query.white.bold}"');
-    print('${"Target:".grey} ${snapshotId ?? "Last ${logsToSearch.length} snapshots"} in ${targetTrack.magenta}');
+    print('\n🔍 ${" DEEP CONTENT SEARCH ".black.onCyan}');
+    print('${"Query:".grey} "${query.white.bold}" | ${"Scope:".grey} ${targetTrack.magenta}');
     print('═' * 60);
 
     int totalMatches = 0;
     int snapshotsWithMatches = 0;
     final String searchQuery = caseSensitive ? query : query.toLowerCase();
 
-    bool isBinaryFile(String fileName, Uint8List bytes) {
-      if (bytes.isEmpty) return false;
-      const binaryExtensions = {'.exe', '.dll', '.bin', '.jpg', '.png', '.zip', '.pdf'};
-      if (fileName.contains('.')) {
-        final ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
-        if (binaryExtensions.contains(ext)) return true;
-      }
-      final checkLimit = bytes.length < 1024 ? bytes.length : 1024;
-      for (var i = 0; i < checkLimit; i++) { if (bytes[i] == 0) return true; }
-      return false;
-    }
-
     for (final entry in logsToSearch) {
+      final String sId = entry.id.toString();
+      final String shortId = sId.length > 8 ? sId.substring(0, 8) : sId;
+      
+      stdout.write('⏳ ${"Decrypting:".grey} ${shortId.cyan}...\r');
+
       try {
-        final snapshot = await readSnapshot(context, entry.id, password: password);
+        final snapshot = await readSnapshot(context, sId, password: password);
         if (snapshot == null) continue;
 
         final files = await _decodeSnapshotFiles(snapshot);
@@ -1027,12 +1053,12 @@ class PortableVcs {
 
         for (final fileName in files.keys) {
           final bytes = files[fileName]!;
-          if (isBinaryFile(fileName, bytes)) continue;
+          if (_isBinaryFile(fileName, bytes)) continue;
 
           String content;
           try {
             content = utf8.decode(bytes, allowMalformed: true);
-          } catch (e) { continue; }
+          } catch (_) { continue; }
 
           final String contentToSearch = caseSensitive ? content : content.toLowerCase();
 
@@ -1043,33 +1069,54 @@ class PortableVcs {
 
               if (lineToSearch.contains(searchQuery)) {
                 if (!snapshotHasMatch) {
-                  final String sId = entry.id.toString();
-                  final String sMsg = entry.message.toString();
-                  print('\n📦 Snapshot: ${sId.green} [${sMsg.italic}]');
+                  stdout.write(' ' * 40 + '\r');
+                  print('\n📦 Snapshot: ${sId.green} [${entry.message.toString().italic}]');
                   snapshotHasMatch = true;
                   snapshotsWithMatches++;
                 }
 
                 print('  📄 ${fileName.yellow}:${(i + 1).toString().white}');                
-                _printSmartContext(lines, i, searchQuery, caseSensitive);
+                _printSmartContext(lines, i, query, caseSensitive);
                 
                 totalMatches++;
-                print('     ' + '┄' * 45);
+                print('     ' + '┈' * 45);
               }
             }
           }
         }
       } catch (e) {
-        print('⚠️  ${"Error searching in snapshot".red} ${entry.id}: $e');
+        print('\n⚠️  Error in $shortId: $e');
       }
     }
 
     print('\n' + '═' * 60);
     if (totalMatches > 0) {
-      print('✅ ${"Search finished.".white} Found ${totalMatches.toString().green.bold} occurrences in ${snapshotsWithMatches.toString().cyan} snapshots.');
+      print('✅ Search finished. Found ${totalMatches.toString().green.bold} occurrences in ${snapshotsWithMatches.toString().cyan} snapshots.');
     } else {
+      stdout.write(' ' * 40 + '\r');
       print('Status: ${"No matches found.".yellow}');
     }
+  }
+
+  bool _isBinaryFile(String fileName, Uint8List bytes) {
+    if (bytes.isEmpty) return false;
+    const binaryExtensions = {
+      '.exe', '.dll', '.bin', '.jpg', '.jpeg', 
+      '.png', '.gif', '.zip', '.7z', '.rar', 
+      '.pdf', '.ico', '.pyc', '.o', '.so'
+    };
+
+    if (fileName.contains('.')) {
+      final ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+      if (binaryExtensions.contains(ext)) return true;
+    }
+
+    final checkLimit = bytes.length < 1024 ? bytes.length : 1024;
+    for (var i = 0; i < checkLimit; i++) {
+      if (bytes[i] == 0) return true; 
+    }
+
+    return false;
   }
 
   void _printSmartContext(List<String> lines, int index, String query, bool caseSensitive) {
@@ -1089,7 +1136,6 @@ class PortableVcs {
         lastLineToPrint = j;
         openBraces += _countChar(lines[j], '{');
         closeBraces += _countChar(lines[j], '}');
-        
         if (openBraces > 0 && openBraces == closeBraces) break;
         if (openBraces == 0 && lines[j].trim().isNotEmpty && _getIndent(lines[j]) <= _getIndent(currentLine)) break;
       }
@@ -1102,11 +1148,28 @@ class PortableVcs {
       final bool isMainLine = k == index;
       
       final String gutter = isMainLine ? ' → '.cyan : '   '.grey;
-      final String content = isMainLine ? l.trim().white : l.trim().grey;
+      String content = l.trim();
+      if (content.length > 120) content = '${content.substring(0, 117)}...';
 
-      final String finalLine = content.length > 120 ? '${content.substring(0, 117)}...' : content;
-      
-      print('    $gutter $finalLine');
+      String displayContent;
+      if (isMainLine) {
+        final String lowerContent = caseSensitive ? content : content.toLowerCase();
+        final String lowerQuery = caseSensitive ? query : query.toLowerCase();
+        final int matchIndex = lowerContent.indexOf(lowerQuery);
+
+        if (matchIndex != -1) {
+          final before = content.substring(0, matchIndex);
+          final match = content.substring(matchIndex, matchIndex + query.length);
+          final after = content.substring(matchIndex + query.length);
+          displayContent = "${before.white}${match.black.onYellow}${after.white}";
+        } else {
+          displayContent = content.white;
+        }
+      } else {
+        displayContent = content.grey;
+      }
+
+      print('     $gutter $displayContent');
     }
   }
 
@@ -1963,25 +2026,15 @@ class PortableVcs {
             check(true, restoredFromBackup ? 'Metadata restored from backup' : 'Metadata sync', 
               details: restoredFromBackup ? 'Disaster recovery successful.' : 'Primary meta file is healthy.');
 
-            if (backupFile.existsSync() && !restoredFromBackup) {
-              final mainContent = await metaFile.readAsString();
-              final backupContent = await backupFile.readAsString();
-              if (mainContent != backupContent) {
-                check(false, 'Metadata Mirroring', isInfo: true, details: 'Backup is out of date. Run "vcs push" to sync.');
-              } else {
-                check(true, 'Metadata Mirroring', details: 'Redundant copy is up to date.');
-              }
-            }
-
             final Map<String, String?> expectedHashes = {};
             int totalSnapshots = 0;
 
-            meta.tracks.forEach((trackName, trackData) {
-              for (var entry in trackData.logs) {
+            for (var track in meta.tracks.values) {
+              for (var entry in track.logs) {
                 expectedHashes[entry.fileName] = entry.hash;
                 totalSnapshots++;
               }
-            });
+            }
 
             check(true, 'Track Consistency', 
               details: '$totalSnapshots snapshots across ${meta.tracks.length} tracks.');
@@ -2035,9 +2088,16 @@ class PortableVcs {
 
               if (orphans.isNotEmpty) {
                 check(false, 'Storage optimization', 
-                  details: 'Found ${orphans.length} orphan files (not in any track).');
+                  details: 'Found ${orphans.length} orphan files (garbage).');
+                
+                print('      ${"Potential garbage files:".grey}');
+                for (var o in orphans) {
+                  final size = (o.lengthSync() / 1024).toStringAsFixed(1);
+                  final name = p.basename(o.path);
+                  print('      - ${name.grey} ($size KB)');
+                }
               } else {
-                check(true, 'Storage optimized');
+                check(true, 'Storage optimized', details: 'No unlinked snapshots found.');
               }
             }
           }
@@ -2066,78 +2126,94 @@ class PortableVcs {
 
     final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
     
-    final allLogs = <SnapshotLogEntry>[];
-    context.remoteMeta.tracks.forEach((name, state) {
-      allLogs.addAll(state.logs);
-    });
-
     int totalBytes = 0;
     int largestBytes = 0;
-    String? largestId;
-    String? largestTrack;
+    String? largestId, largestTrack;
+    int verifiedWithHash = 0;
+    final trackSizes = <String, int>{};
+
+    final registeredFiles = <String>{};
 
     if (snapshotsDir.existsSync()) {
       for (var trackEntry in context.remoteMeta.tracks.entries) {
+        int trackTotal = 0;
         for (final entry in trackEntry.value.logs) {
+          registeredFiles.add(entry.fileName);
           final file = File(p.join(snapshotsDir.path, entry.fileName));
-          if (!file.existsSync()) continue;
+          
+          if (file.existsSync()) {
+            final size = file.lengthSync();
+            trackTotal += size;
+            totalBytes += size;
+            
+            if (entry.hash != null) verifiedWithHash++;
 
-          final size = file.lengthSync();
-          totalBytes += size;
-
-          if (size > largestBytes) {
-            largestBytes = size;
-            largestId = entry.id;
-            largestTrack = trackEntry.key;
+            if (size > largestBytes) {
+              largestBytes = size;
+              largestId = entry.id;
+              largestTrack = trackEntry.key;
+            }
           }
+        }
+        trackSizes[trackEntry.key] = trackTotal;
+      }
+    }
+
+    int orphanBytes = 0;
+    int orphanCount = 0;
+    if (snapshotsDir.existsSync()) {
+      for (var f in snapshotsDir.listSync().whereType<File>()) {
+        final name = p.basename(f.path);
+        if (!registeredFiles.contains(name) && !name.startsWith('.tmp_') && name != 'vcs_aliases.json') {
+          orphanBytes += f.lengthSync();
+          orphanCount++;
         }
       }
     }
 
-    print('\n📊 ${"REPOSITORY STATISTICS".black.onCyan}');
+    print('\n📊 ${" REPOSITORY STATISTICS ".black.onCyan}');
     print('═' * 60);
 
     print('${"GENERAL INFO".bold.cyan}');
-    print('${"Project Name:".yellow.padRight(20)} ${context.remoteMeta.projectName.green}');
-    print('${"Active Track:".yellow.padRight(20)} ${context.remoteMeta.activeTrack.magenta.bold}');
-    print('${"Total Tracks:".yellow.padRight(20)} ${context.remoteMeta.tracks.length.toString().white}');
-    print('${"Format Version:".yellow.padRight(20)} v${context.remoteMeta.formatVersion}');
-    print('${"Vault Location:".yellow.padRight(20)} ${context.remoteRepoDir.path.grey}');
+    print('${"Project Name:".yellow.padRight(22)} ${context.remoteMeta.projectName.green}');
+    print('${"Active Track:".yellow.padRight(22)} ${context.remoteMeta.activeTrack.magenta.bold}');
+    print('${"Format Version:".yellow.padRight(22)} v${context.remoteMeta.formatVersion}');
 
     print('\n${"STORAGE SUMMARY".bold.cyan}');
-    print('${"Total Snapshots:".yellow.padRight(20)} ${allLogs.length.toString().green}');
-    print('${"Vault Total Size:".yellow.padRight(20)} ${_formatBytes(totalBytes).green.bold}');
+    final totalLogs = context.remoteMeta.tracks.values.fold(0, (prev, t) => prev + t.logs.length);
+    print('${"Total Snapshots:".yellow.padRight(22)} ${totalLogs.toString().green}');
+    print('${"Integrity Coverage:".yellow.padRight(22)} ${((verifiedWithHash / (totalLogs > 0 ? totalLogs : 1)) * 100).toStringAsFixed(1)}% verified');
+    print('${"Vault Total Size:".yellow.padRight(22)} ${_formatBytes(totalBytes).green.bold}');
     
-    if (allLogs.isNotEmpty) {
-      final avgSize = totalBytes ~/ allLogs.length;
-      print('${"Average Size:".yellow.padRight(20)} ${_formatBytes(avgSize).white}');
-      print(
-        '${"Largest Item:".yellow.padRight(20)} '
-        '${largestId?.green ?? "N/A"} '
-        '(${_formatBytes(largestBytes)}) ${'in'.grey} ${largestTrack?.magenta ?? ""}'
-      );
+    if (totalLogs > 0) {
+      print('${"Average Item Size:".yellow.padRight(22)} ${_formatBytes(totalBytes ~/ totalLogs).white}');
+      print('${"Largest Snapshot:".yellow.padRight(22)} ${largestId?.green ?? "N/A"} (${_formatBytes(largestBytes)})');
+    }
+
+    if (orphanCount > 0) {
+      print('${"Unlinked Garbage:".red.padRight(22)} ${_formatBytes(orphanBytes).red} ($orphanCount files)');
+      print('  ${"ℹ Tip: Run 'vcs doctor' to see details.".grey}');
     }
 
     print('\n${"TRACKS BREAKDOWN".bold.cyan}');
     context.remoteMeta.tracks.forEach((name, state) {
       final isActive = name == context.remoteMeta.activeTrack;
       final prefix = isActive ? ' → '.cyan.bold : '   ';
-      final count = state.logs.length;
-      print('$prefix${name.padRight(17)} ${count.toString().padLeft(3)} snapshots');
+      final size = _formatBytes(trackSizes[name] ?? 0);
+      
+      print('$prefix${name.padRight(18)} ${state.logs.length.toString().padLeft(3)} logs | ${size.padLeft(10)}');
     });
 
     print('\n${"TIMELINE".bold.cyan}');
+    final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
     if (allLogs.isNotEmpty) {
       allLogs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      final newest = allLogs.first;
-      final oldest = allLogs.last;
-
-      print('${"Newest Snapshot:".yellow.padRight(20)} ${newest.id.green} (${_formatDateForList(newest.createdAt)})');
-      print('${"Oldest Snapshot:".yellow.padRight(20)} ${oldest.id.green} (${_formatDateForList(oldest.createdAt)})');
+      print('${"Last Activity:".yellow.padRight(22)} ${_formatDateForList(allLogs.first.createdAt)}');
+      print('${"Vault Creation:".yellow.padRight(22)} ${_formatDateForList(allLogs.last.createdAt)}');
     }
 
     print('═' * 60);
-    print('${"Last sync:".grey} ${_formatDateForList(context.remoteMeta.updatedAt)}');
+    print('${"Vault Location:".grey} ${context.remoteRepoDir.path.grey}');
     print('');
   }
 
@@ -3800,6 +3876,41 @@ class PortableVcs {
     }
   }
 
+  Future<void> timeline({String? track, int limit = 15}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrack = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrack];
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('ℹ️  ${"No snapshots found in track".yellow} "$targetTrack".');
+      return;
+    }
+
+    print('\n⏳ ${" INTERACTIVE TIMELINE ".black.onMagenta} ${"v0.3.5-Exp".grey}');
+    print('Track: ${targetTrack.cyan} | Showing last $limit snapshots');
+    print('═' * 60);
+
+    final logsToShow = trackData.logs.take(limit).toList();
+
+    for (var entry in logsToShow) {
+      final String sId = entry.id.toString();
+      final String shortId = sId.length > 8 ? sId.substring(0, 8) : sId;
+      
+      final date = DateTime.parse(entry.createdAt).toLocal().toString().substring(5, 16);
+      
+      String tagLabel = "";
+      context.remoteMeta.tags.forEach((tag, id) {
+        if (id == sId) tagLabel = ' 🏷️ ${tag.yellow}';
+      });
+
+      print(' ${"•".cyan} ${shortId.grey} | $date | ${entry.message.white.bold}$tagLabel');
+    }
+
+    print('═' * 60 + '\n');
+  }
+
   Future<RemoteStatus> _checkRemoteStatus(String remote, String branch) async {
     try {
       final local = (await Process.run('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
@@ -5335,72 +5446,180 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final driveRoot = p.split(context.remoteRepoDir.path).first.toUpperCase();
-    final driveLetterOnly = driveRoot.replaceAll(':', '');
+    final driveRoot = p.split(context.remoteRepoDir.path).first;
+    final driveLetterOnly = driveRoot.replaceAll(RegExp(r'[^A-Za-z]'), '');
     final drivePath = context.remoteRepoDir.parent.path;
 
-    print('\n💾 ${"SYSTEM STORAGE DIAGNOSTIC".black.onCyan}');
+    print('\n💾 ${" SYSTEM STORAGE DIAGNOSTIC ".black.onCyan}');
     print('${"Target Mount:".yellow} ${driveRoot.bold} (${drivePath.grey})');
-    print('─' * 60);
+    print('═' * 60);
 
     try {
       if (Platform.isWindows) {
-        final psCommand = 
-            '\$disk = Get-Partition -DriveLetter $driveLetterOnly | Get-Disk; '
-            '\$disk | Select-Object @{n="Model";e={\$_.FriendlyName}}, @{n="Status";e={\$_.HealthStatus}} | Format-Table -AutoSize; '
-            'Get-PSDrive -PSProvider FileSystem | Where-Object { \$_.Name -eq "$driveLetterOnly" } | '
-            'Select-Object @{n="Drive";e={\$_.Name}}, @{n="Used(GB)";e={[math]::round(\$_.Used/1GB,2)}}, @{n="Free(GB)";e={[math]::round(\$_.Free/1GB,2)}} | Format-Table -AutoSize';
-
-        final result = await Process.run('powershell', ['-Command', psCommand], runInShell: true);
+        final psHealth = 'Get-Partition -DriveLetter $driveLetterOnly | Get-Disk | Select-Object HealthStatus | ConvertTo-Json';
+        final healthRes = await Process.run('powershell', ['-Command', psHealth], runInShell: true);
         
-        print('🩺 ${"Hardware Integrity (Specific to $driveRoot):".bold}');
-        if (result.exitCode == 0 && result.stdout.toString().trim().isNotEmpty) {
-          print(result.stdout.toString().trim().grey);
+        print('🩺 ${"Hardware Integrity:".bold}');
+        if (healthRes.stdout.toString().contains('Healthy')) {
+          print('   Status: ${"HEALTHY".green} | Device: ${"Verified".blue}');
         } else {
-          print('    ${"Status:".grey} ${"OK (Self-report standard)".green}');
+          print('   Status: ${"UNKNOWN/CAUTION".yellow}');
         }
-      } else {
-        final result = await Process.run('df', ['-h', drivePath], runInShell: true);
-        print('📊 ${"FileSystem Usage:".bold}');
-        print(result.stdout.toString().trim().grey);
       }
-      print('\n⚡ ${"Real-time Latency Test:".bold}');      
+
+      print('\n⚡ ${"IO Performance Test:".bold}');
       final testFile = File(p.join(drivePath, '.vcs_health_test'));
-      final watch = Stopwatch();
-      watch.start();
-
-      await testFile.writeAsString('vcs_diagnostic_data_${DateTime.now().millisecondsSinceEpoch}');
-
+      final watch = Stopwatch()..start();
+      
+      await testFile.writeAsBytes(List.generate(1024 * 1024, (i) => i % 255));
       final writeTime = watch.elapsedMilliseconds;
-      watch.stop();
+      
       watch.reset();
       watch.start();
-
-      await testFile.readAsString();
-
+      await testFile.readAsBytes();
       final readTime = watch.elapsedMilliseconds;
       watch.stop();
 
       if (await testFile.exists()) await testFile.delete();
 
-      final writeStatus = writeTime < 150 ? "OPTIMAL".green : (writeTime < 500 ? "ACCEPTABLE".yellow : "SLOW".red);
-      final readStatus = readTime < 50 ? "OPTIMAL".green : (readTime < 200 ? "ACCEPTABLE".yellow : "SLOW".red);
+      if (Platform.isWindows) {
+        final psUsage = 'Get-PSDrive $driveLetterOnly | Select-Object Used, Free | ConvertTo-Json';
+        final usageRes = await Process.run('powershell', ['-Command', psUsage], runInShell: true);
+        
+        if (usageRes.exitCode == 0) {
+          final data = jsonDecode(usageRes.stdout.toString());
+          final double used = (data['Used'] ?? 0).toDouble();
+          final double free = (data['Free'] ?? 0).toDouble();
+          final double total = used + free;
 
-      print('  ${"Write Speed:".padRight(20)} ${"$writeTime ms".bold.padRight(10)} [$writeStatus]');
-      print('  ${"Read Speed:".padRight(20)} ${"$readTime ms".bold.padRight(10)} [$readStatus]');
+          if (total > 0) {
+            final percent = (used / total * 100).clamp(0, 100).toInt();
+            
+            final barLength = 30;
+            int filled = (percent * barLength / 100).toInt();
+            if (percent > 0 && filled == 0) filled = 1; 
 
-      print('\n📝 ${"Diagnostic Result:".bold}');
-      if (writeTime > 800) {
-        print('  ⚠️  ${"CRITICAL:".red} Drive is responding very slowly.');
-      } else {
-        print('  ✅ ${"HEALTHY:".green} USB device is stable and matched.');
+            final barChars = '█' * filled + '░' * (barLength - filled);
+            final coloredBar = percent > 90 ? barChars.red : (percent > 70 ? barChars.yellow : barChars.green);
+
+            print('\n📊 ${"Storage Usage:".bold}');
+            print('   [$coloredBar] $percent%');
+            print('   Used: ${_formatBytes(used.toInt()).grey} / Total: ${_formatBytes(total.toInt()).grey}');
+          }
+        }
       }
 
+      final wStatus = writeTime < 150 ? "OPTIMAL".green : (writeTime < 500 ? "ACCEPTABLE".yellow : "SLOW".red);
+      final rStatus = readTime < 50 ? "OPTIMAL".green : (readTime < 200 ? "ACCEPTABLE".yellow : "SLOW".red);
+
+      print('\n⏱️  ${"Latency Analysis:".bold}');
+      print('   ${"Write (1MB):".padRight(18)} ${"$writeTime ms".bold.padRight(10)} [$wStatus]');
+      print('   ${"Read (1MB):".padRight(18)} ${"$readTime ms".bold.padRight(10)} [$rStatus]');
+
     } catch (e) {
-      print('❌ ${"Diagnostic Interrupted:".red} $e');
+      print('\n❌ ${"Diagnostic Error:".red} ${e.toString().grey}');
     }
     
-    print('─' * 60 + '\n');
+    print('\n' + '═' * 60 + '\n');
+  }
+
+  Future<void> runBenchmark({bool intensive = false}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final String drivePath = context.remoteRepoDir.path;
+    
+    print('\n🏎️  ${" VCS PERFORMANCE BENCHMARK ".black.onCyan}');
+    print('${"OS:".grey} ${Platform.operatingSystem.toUpperCase()} | ${"Target:".grey} ${drivePath.bold}');
+    print('═' * 60);
+
+    await _showDiskUsage(drivePath);
+
+    final testDir = Directory(p.join(drivePath, '.vcs_bench'));
+    if (!testDir.existsSync()) await testDir.create();
+
+    try {
+      print('\n📂 ${"Task 1: IOPS Test (100 small files)...".bold}');
+      final iopsWatch = Stopwatch()..start();
+      for (int i = 0; i < 100; i++) {
+        final f = File(p.join(testDir.path, 'iops_$i.tmp'));
+        await f.writeAsBytes([i], flush: true);
+      }
+      iopsWatch.stop();
+      final iopsResult = iopsWatch.elapsedMilliseconds;
+      print('   Result: ${iopsResult}ms ${iopsResult < 1000 ? "⚡" : "🐢"}');
+
+      print('\n🔐 ${"Task 2: Encryption Engine (PBKDF2 + AES-GCM)...".bold}');
+      print('   ${"Processing: 1MB mock payload with 120k iterations".grey}');
+      final dummyZip = Uint8List.fromList(List.generate(1024 * 1024, (i) => i % 256));
+      
+      final cryptoWatch = Stopwatch()..start();
+      await _encryptSnapshot(
+        zipBytes: dummyZip,
+        message: "Benchmark test",
+        password: "password-de-prueba-muy-larga-123",
+        author: "VCS-Benchmark"
+      );
+      cryptoWatch.stop();
+      final cryptoResult = cryptoWatch.elapsedMilliseconds;
+      print('   Result: ${cryptoResult}ms');
+
+      final int sizeMB = intensive ? 50 : 10;
+      print('\n📦 ${"Task 3: Sequential Write ($sizeMB MB)...".bold}');
+      final bigData = Uint8List.fromList(List.generate(1024 * 1024 * sizeMB, (i) => i % 256));
+      
+      final seqWatch = Stopwatch()..start();
+      final bigFile = File(p.join(testDir.path, 'large.tmp'));
+      await bigFile.writeAsBytes(bigData, flush: true);
+      seqWatch.stop();
+      
+      final double mbps = (sizeMB / (seqWatch.elapsedMilliseconds / 1000));
+      print('   Result: ${seqWatch.elapsedMilliseconds}ms (${mbps.toStringAsFixed(2)} MB/s)');
+
+      print('\n' + '═' * 60);
+      _displayFinalScore(iopsResult, cryptoResult, mbps);
+
+    } catch (e) {
+      print('\n❌ ${"Benchmark interrupted:".red} $e');
+    } finally {
+      if (testDir.existsSync()) await testDir.delete(recursive: true);
+    }
+  }
+
+  Future<void> _showDiskUsage(String path) async {
+    if (Platform.isWindows) {
+    } else if (Platform.isLinux || Platform.isMacOS) {
+      try {
+        final res = await Process.run('df', ['-h', path]);
+        final lines = res.stdout.toString().split('\n');
+        if (lines.length > 1) {
+          print('📊 ${"Disk Usage (Unix):".bold}\n   ${lines[1].grey}');
+        }
+      } catch (_) {
+        print('📊 ${"Disk Usage:".bold} (Information unavailable)');
+      }
+    }
+  }
+
+  void _displayFinalScore(int iops, int crypto, double mbps) {
+    String grade;
+    String advice;
+
+    if (iops < 800 && mbps > 25) {
+      grade = "GOLD 🏆";
+      advice = "Perfect for large projects and heavy histories.";
+    } else if (iops < 1500 && mbps > 10) {
+      grade = "SILVER 🥈";
+      advice = "Good performance for daily development.";
+    } else {
+      grade = "BRONZE 🥉";
+      advice = "Slow I/O. Expect delays during push/pull.";
+    }
+
+    print(' ${"FINAL RATING:".bold} $grade');
+    print(' ${"Encryption Latency:".grey} ${crypto}ms (Impact of PBKDF2)');
+    print(' ${"Recommendation:".grey} $advice');
+    print('═' * 60 + '\n');
   }
 
   Future<void> info({bool showCharts = false}) async {
@@ -5413,34 +5632,35 @@ class PortableVcs {
     final backupFile = File('${metaFile.path}.bak');
 
     print('\nℹ️  ${" PROJECT ARCHIVE DASHBOARD ".black.onCyan}');
-    print('${"Project Name:".yellow.padRight(20)} ${meta.projectName.bold}');
-    print('${"Repo ID:".yellow.padRight(20)} ${meta.repoId.grey}');
-    print('${"Active Track:".yellow.padRight(20)} ${meta.activeTrack.magenta.bold}');
-    print('${"Last Sync:".yellow.padRight(20)} ${meta.updatedAt.grey}');
+    print('${"Project Name:".yellow.padRight(22)} ${meta.projectName.bold}');
+    print('${"Active Track:".yellow.padRight(22)} ${meta.activeTrack.magenta.bold}');
+    print('${"Vault ID:".yellow.padRight(22)} ${meta.repoId.grey}');
     print('─' * 60);
 
     int totalSnapshots = 0;
-    String largestTrack = 'none';
+    String largestTrackName = 'none';
     int maxSnapshots = 0;
-
-    meta.tracks.forEach((name, state) {
-      final count = state.logs.length;
+    
+    for (var entry in meta.tracks.entries) {
+      final count = entry.value.logs.length;
       totalSnapshots += count;
       if (count > maxSnapshots) {
         maxSnapshots = count;
-        largestTrack = name;
+        largestTrackName = entry.key;
       }
-    });
+    }
 
     double totalSizeMb = 0;
+    int fileCount = 0;
     if (await snapshotsDir.exists()) {
-      final files = snapshotsDir.listSync();
-      final totalBytes = files.fold<int>(0, (sum, file) => sum + (file is File ? file.lengthSync() : 0));
+      final files = snapshotsDir.listSync().whereType<File>();
+      fileCount = files.length;
+      final totalBytes = files.fold<int>(0, (sum, file) => sum + file.lengthSync());
       totalSizeMb = totalBytes / (1024 * 1024);
     }
 
     if (showCharts) {
-      print('📅 ${"Activity (Last 7 Days):".bold}');
+      print('📅 ${"Activity Timeline (Last 7 Days):".bold}');
       final now = DateTime.now();
       final Map<String, int> dailyCounts = {};
 
@@ -5462,57 +5682,49 @@ class PortableVcs {
         }
       }
 
-      final maxDayCount = dailyCounts.values.isEmpty ? 0 : dailyCounts.values.reduce((a, b) => a > b ? a : b);
-      
+      final maxDayCount = dailyCounts.values.fold(0, (a, b) => a > b ? a : b);
       dailyCounts.forEach((date, count) {
-        final barWidth = maxDayCount == 0 ? 0 : (count / maxDayCount * 20).round();
+        final barWidth = maxDayCount == 0 ? 0 : (count / maxDayCount * 25).round();
         final bar = '█' * barWidth;
-        print('  $date | ${count > 0 ? bar.green : ''.grey} ${count > 0 ? count.toString().bold : '0'.grey}');
+        final label = count > 0 ? count.toString().padLeft(2).green : '0'.grey;
+        print('   $date | ${count > 0 ? bar.green : '░'.grey} $label');
       });
-      print('              └' + '─' * 22 + '\n');
+      print('                └' + '─' * 26 + '\n');
     }
+
+    print('📈 ${"Metrics & Health:".bold}');
+    final avgSize = totalSnapshots > 0 ? totalSizeMb / totalSnapshots : 0;
+    final healthStatus = (await backupFile.exists()) ? "SECURE".green : "UNPROTECTED".red;
+
+    print('   ${"Status:".padRight(20)} $healthStatus');
+    print('   ${"Total Snapshots:".padRight(20)} ${totalSnapshots.toString().cyan} ($fileCount files on disk)');
+    print('   ${"Storage Used:".padRight(20)} ${totalSizeMb.toStringAsFixed(2).yellow} MB');
+    print('   ${"Avg Snapshot:".padRight(20)} ${avgSize.toStringAsFixed(2).grey} MB');
 
     if (meta.tags.isNotEmpty) {
-      print('🏷️  ${"Milestones & Tags:".bold}');
-      meta.tags.forEach((tagName, id) {
-        print('  ${tagName.magenta.padRight(20)} ${"→".grey} ${id.green}');
-      });
-      print('');
+      print('\n🏷️  ${"Latest Milestones:".bold}');
+      final sortedTags = meta.tags.entries.toList()..sort((a, b) => b.key.compareTo(a.key));
+      final displayTags = sortedTags.take(3);
+      for (var tag in displayTags) {
+        print('   ${tag.key.magenta.padRight(20)} ${"→".grey} ${tag.value.substring(0, 8).green}...');
+      }
     }
 
-    final lastPush = totalSnapshots > 0 
-        ? _formatDateForList(meta.activeTrackState.logs.first.createdAt)
-        : 'Never';
-
-    print('📈 ${"Activity Summary:".bold}');
-    print('  ${"Total Snapshots:".padRight(20)} ${totalSnapshots.toString().green.bold}');
-    print('  ${"Total Tracks:".padRight(20)} ${meta.tracks.length.toString().green}');
-    print('  ${"Largest Track:".padRight(20)} ${largestTrack.cyan} ($maxSnapshots snapshots)');
-    print('  ${"Last Snapshot:".padRight(20)} $lastPush');
-
-    print('\n📦 ${"Storage Impact:".bold}');
-    print('  ${"Repository Size:".padRight(20)} ${"${totalSizeMb.toStringAsFixed(2)} MB".yellow.bold}');
-    print('  ${"Avg Snapshot Size:".padRight(20)} ${totalSnapshots > 0 ? "${(totalSizeMb / totalSnapshots).toStringAsFixed(2)} MB".grey : "0 MB"}');
-
-    print('\n🔒 ${"Metadata & Security:".bold}');
-    print('  ${"Format Version:".padRight(20)} ${meta.formatVersion.toString().yellow}');
-    print('  ${"Created At:".padRight(20)} ${meta.createdAt.grey}');
-    print('  ${"Updated At:".padRight(20)} ${meta.updatedAt.grey}');
-    print('  ${"Encryption:".padRight(20)} ${"AES-256-GCM".green}');
-    
-    final hasBackup = await backupFile.exists();
-    print('  ${"Mirroring (.bak):".padRight(20)} ${hasBackup ? "ACTIVE".green : "MISSING".red}');
+    print('\n🔒 ${"Infrastructure:".bold}');
+    print('   ${"Format:".padRight(20)} VCS Standard v${meta.formatVersion}');
+    print('   ${"Encryption:".padRight(20)} AES-256-GCM (Hardware Accelerated)');
+    print('   ${"Mirroring:".padRight(20)} ${backupFile.path.split(p.separator).last.grey}');
 
     String remoteUrl = 'Not linked';
     try {
       final gitResult = await Process.run('git', ['remote', 'get-url', 'origin']);
       if (gitResult.exitCode == 0) remoteUrl = gitResult.stdout.toString().trim();
     } catch (_) {}
+    print('   ${"Git Remote:".padRight(20)} ${remoteUrl.blue}');
 
-    print('\n🔗 ${"Git Integration:".bold}');
-    print('  ${"Origin URL:".padRight(20)} ${remoteUrl.blue}');
-
-    print('─' * 60 + '\n');
+    print('\n' + '─' * 60);
+    print('${"Last synchronization:".grey} ${meta.updatedAt}');
+    print('');
   }
 
   Future<void> gitStash({bool pop = false, bool list = false, bool clear = false, String? drop}) async {
@@ -5889,6 +6101,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('max', abbr: 'm', help: 'Search only in the last N snapshots')
       ..addFlag('case-sensitive', abbr: 's', negatable: false, help: 'Perform a case-sensitive search')
     )
+    ..addCommand('timeline', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Track to visualize')
+      ..addOption('limit', abbr: 'n', help: 'Number of snapshots to show', defaultsTo: '15')
+    )
+    ..addCommand('benchmark', ArgParser()
+      ..addFlag('intensive', abbr: 'i', negatable: false, help: 'Run a longer stress test')
+    )
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
@@ -5963,6 +6182,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'clear-history': await app.clearHistory(); break;
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
+      case 'benchmark': await app.runBenchmark(); break;
 
       case 'tag':
         final tagName = command?.rest.firstOrNull;
@@ -5980,6 +6200,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
             );
           }
         }
+        break;
+
+      case 'timeline':
+        await app.timeline(
+          track: command?['track']?.toString(),
+          limit: int.tryParse(command?['limit']?.toString() ?? '15') ?? 15,
+        );
         break;
 
       case 'info':
