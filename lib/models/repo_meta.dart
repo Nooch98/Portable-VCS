@@ -22,6 +22,7 @@ class RepoMeta {
 
   final String activeTrack;
   final Map<String, TrackState> tracks;
+  final Map<String, String> tags;
 
   RepoMeta({
     required this.repoId,
@@ -31,6 +32,7 @@ class RepoMeta {
     required this.formatVersion,
     required this.activeTrack,
     required this.tracks,
+    required this.tags,
   });
 
   TrackState get activeTrackState => tracks[activeTrack]!;
@@ -43,6 +45,8 @@ class RepoMeta {
     final createdAt = json['created_at'] as String;
     final updatedAt = json['updated_at'] as String;
     final formatVersion = (json['format_version'] as num?)?.toInt() ?? 1;
+    
+    final tags = Map<String, String>.from(json['tags'] as Map? ?? {});
 
     if (json.containsKey('tracks')) {
       final tracksJson =
@@ -70,9 +74,10 @@ class RepoMeta {
         projectName: projectName,
         createdAt: createdAt,
         updatedAt: updatedAt,
-        formatVersion: max(formatVersion, 2),
+        formatVersion: max(formatVersion, 3),
         activeTrack: safeActiveTrack,
         tracks: parsedTracks,
+        tags: tags,
       );
     }
 
@@ -89,11 +94,12 @@ class RepoMeta {
       projectName: projectName,
       createdAt: createdAt,
       updatedAt: updatedAt,
-      formatVersion: 2,
+      formatVersion: 3,
       activeTrack: 'main',
       tracks: {
         'main': TrackState(logs: oldLogs),
       },
+      tags: tags,
     );
   }
 
@@ -102,26 +108,29 @@ class RepoMeta {
         'project_name': projectName,
         'created_at': createdAt,
         'updated_at': updatedAt,
-        'format_version': 2,
+        'format_version': 3,
         'active_track': activeTrack,
         'tracks': tracks.map(
           (key, value) => MapEntry(key, value.toJson()),
         ),
+        'tags': tags,
       };
 
   RepoMeta copyWith({
     String? updatedAt,
     String? activeTrack,
     Map<String, TrackState>? tracks,
+    Map<String, String>? tags,
   }) {
     return RepoMeta(
       repoId: repoId,
       projectName: projectName,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
-      formatVersion: 2,
+      formatVersion: 3,
       activeTrack: activeTrack ?? this.activeTrack,
       tracks: tracks ?? this.tracks,
+      tags: tags ?? this.tags,
     );
   }
 }
