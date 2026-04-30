@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.3.4--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.3.5--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -389,19 +389,20 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder (with extraction feedback). |
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
-| | `vcs tag <name>` | Assign a friendly label to a snapshot |
+| | `vcs tag <name>` | Assign a friendly label to a snapshot. |
 | | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
 | | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
-| | `vcs pull --dry-run | Preview changes without applying |
+| | `vcs pull --dry-run` | Preview changes without applying. |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
 | **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
 | | `vcs info` | Show detailed information about the current project and linked vault (includes activity charts). |
 | | `vcs status` | Summary of messages to help create Git/GitHub commits. |
 | | `vcs summary` | Compare tree against latest of the **active track**. |
+| | `vcs timeline` | Show history in a chronological list with limits (`-n`) and track support. |
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
 | | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
-| | `vcs log` | Show history of snapshots.|
+| | `vcs log` | Show history of snapshots. |
 | | `vcs log --graph/-g` | Visual representation of the snapshot timeline. |
 | | `vcs log --full` | Show extended details (IDs, dates, metadata). |
 | | `vcs log --standard` | Show summary with 5-file change preview. |
@@ -413,9 +414,9 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs search <query> --id <snapshot_id>` | Search only inside a specific snapshot ID. |
 | | `vcs search <query> -m/--max <n>` | Limit search to the last N snapshots. |
 | | `vcs search <query> -s/--case-sensitive` | Perform a case-sensitive search. |
-| **Aliases** | `vcs alias --list, -l` | List all custom shortcuts saved in the USB |
-| | `vcs alias --set, -s "name=cmd"` | Create a shortcut (e.g., `alias -s "st=status"`) |
-| | `vcs alias --rm <name>` | Remove a specific alias from the storage |
+| **Aliases** | `vcs alias --list, -l` | List all custom shortcuts saved in the USB. |
+| | `vcs alias --set, -s "name=cmd"` | Create a shortcut (e.g., `alias -s "st=status"`). |
+| | `vcs alias --rm <name>` | Remove a specific alias from the storage. |
 | **Tracks** | `vcs track list` | List all available history tracks. |
 | | `vcs track current` | Show the name of the currently active track. |
 | | `vcs track create <name>` | Create a new independent development lane. |
@@ -429,6 +430,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs stash --list` | Show all currently stashed changes. |
 | | `vcs stash --clear` | Delete all stashes permanently. |
 | **Maintenance**| `vcs update` | **Auto-update:** Check, download latest source from GitHub and recompile. |
+| | `vcs benchmark` | **Performance stress test:** IOPS, Crypto and Transfer speed diagnostics. |
 | | `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
 | | `vcs doctor` | Run repository diagnostics and health checks. |
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
@@ -443,7 +445,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs migrate --to <path>` | Target destination path for the migration. |
 | | `vcs migrate --delete-source` | Remove data from old drive after success. |
 | **General** | `vcs version` | Show tool version, OS information and **check for updates**. |
-| | `vcs changelog` | Show changes of the version |
+| | `vcs changelog` | Show changes of the version. |
 | | `vcs help` | Show this help message. |
 
 # Encryption
