@@ -1,5 +1,31 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.5-Experimental.2': '''
+  ## 🧪 PARALLEL TRACK SYSTEM (SHADOW MODE)
+  I have completely overhauled how `track switch` operates. Instead of overwriting the main project files (which was risky and prone to data loss), the VCS now enables **Parallel Workspaces**.
+
+  ### 1. The Shadow Workspace Logic
+  - **Non-Destructive Switching:** Switching to a track no longer deletes your current work in the `main` directory. 
+  - **Shadow Folder:** I've implemented a dedicated workspace at `.vcs/shadow_[track]`. This allows the `main` track and any experimental track to exist physically at the same time in different folders.
+  - **Session Management:** A new `session.json` is created inside the USB repository. This file acts as a "heartbeat" that tells the VCS exactly which shadow track is active and where its folder is located.
+
+  ### 2. 🛡️ Prevention of Data Corruption
+  - **Isolation:** By using a separate shadow folder, I've ensured that a crash or a forced disconnection during a track switch never corrupts the primary source code.
+  - **Smart Cleanup:** When you return to `main`, the VCS uses the `session.json` to identify and safely remove the shadow folder, keeping the project clean without manual intervention.
+  - **Change Detection:** Before closing a shadow session, the tool checks for unpushed changes. If I find any, it will prompt for an automatic `push` to prevent the accidental deletion of experiments.
+
+  ### 3. ⚠️ Critical: Environment & IDE Sync
+  Since the shadow folder is a fresh extraction of a snapshot:
+  - **Missing Dependencies:** Heavy directories like `node_modules`, `.dart_tool`, or `venv` are not part of the snapshots to keep the repository lightweight.
+  - **The "Red Line" Fix:** If VS Code shows "Target of URI doesn't exist", it's because the IDE is looking for dependencies in the new shadow path. 
+  
+  **Action Required:** You must run the package manager (`dart pub get`, `npm install`, etc.) inside the **new** shadow window to link the dependencies to this parallel folder.
+
+  ### 🛠️ Internal Refinement
+  - **Case-Insensitive Resolution:** Track names are now resolved regardless of casing (e.g., `experimentos` vs `Experimentos`).
+  - **Pathing Stability:** I've updated the logic to ensure the tool always distinguishes between the "Source" (main) and the "Shadow" workspace.
+    ''',
+
     '0.3.5-Experimental.1': '''
   ### 🏎️ PERFORMANCE & VISIBILITY
   - **New Command: `benchmark`:** Test your USB performance with a stress test covering IOPS, sequential write, and AES-256 encryption latency. Includes a hardware rating (Gold/Silver/Bronze).
