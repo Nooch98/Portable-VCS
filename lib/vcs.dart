@@ -30,7 +30,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.5-Experimental.1';
+const String vcsBaseVersion = '0.3.5-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -1272,13 +1272,34 @@ class PortableVcs {
     }
   }
 
-  Future<void> push(String message, {String? author, String? track, String? password}) async {
+  Future<void> push(
+    String message, {
+    String? author,
+    String? track,
+    String? password,
+    String? overrideSourcePath, 
+    bool skipConfirm = false,    
+  }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final targetTrackName = track ?? context.remoteMeta.activeTrack;
-    final trackData = context.remoteMeta.tracks[targetTrackName];
+    Directory workingDir = _cwd; 
+    String targetTrackName = track ?? context.remoteMeta.activeTrack;
 
+    final sessionFile = File(p.join(context.remoteRepoDir.path, 'session.json'));
+    
+    if (overrideSourcePath != null) {
+      workingDir = Directory(overrideSourcePath);
+    } else if (sessionFile.existsSync()) {
+      try {
+        final sessionData = jsonDecode(await sessionFile.readAsString());
+        workingDir = Directory(sessionData['shadow_path']);
+        targetTrackName = track ?? sessionData['active_shadow_track'];
+        if (!skipConfirm) print('🔍 ${"Shadow Session detected:".cyan} Pushing from ${workingDir.path}');
+      } catch (_) {}
+    }
+
+    final trackData = context.remoteMeta.tracks[targetTrackName];
     if (trackData == null) {
       print('❌ Track "$targetTrackName" does not exist.');
       return;
@@ -1291,7 +1312,7 @@ class PortableVcs {
     }
 
     await _withLock(context.remoteRepoDir, () async {
-      final currentFingerprint = await buildFingerprint(_cwd);
+      final currentFingerprint = await buildFingerprint(workingDir);
 
       Map<String, String> lastFingerprint = {};
       if (trackData.logs.isNotEmpty) {
@@ -1306,7 +1327,7 @@ class PortableVcs {
             lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
           }
         } catch (e) {
-          print('⚠️ Warning: Error reading previous snapshot. Comparing against empty state.');
+          print('⚠️ Warning: Error reading previous snapshot.');
         }
       }
 
@@ -1317,30 +1338,29 @@ class PortableVcs {
         return;
       }
 
-      print('\n${'--- Snapshot Preview ---'.cyan}');
-      print('${'Track:'.padRight(12)} $targetTrackName');
-      print('${'Message:'.padRight(12)} $message');
-      if (author != null) print('${'Author:'.padRight(12)} $author');
-      print('');
+      if (!skipConfirm) {
+        print('\n${'--- Snapshot Preview ---'.cyan}');
+        print('${'Source:'.padRight(12)} ${workingDir.path}');
+        print('${'Track:'.padRight(12)} $targetTrackName');
+        print('${'Message:'.padRight(12)} $message');
+        
+        int added = 0, modified = 0, deleted = 0;
+        for (var change in changes) {
+          final tag = change.toTag();
+          if (tag.startsWith('+')) { added++; print('  ${"[+]".green} ${change.path}'); }
+          else if (tag.startsWith('-')) { deleted++; print('  ${"[-]".red} ${change.path}'); }
+          else { modified++; print('  ${"[~]".yellow} ${change.path}'); }
+        }
 
-      int added = 0, modified = 0, deleted = 0;
-      for (var change in changes) {
-        final tag = change.toTag();
-        if (tag.startsWith('+')) { added++; print('  ${"[+]".green} ${change.path}'); }
-        else if (tag.startsWith('-')) { deleted++; print('  ${"[-]".red} ${change.path}'); }
-        else { modified++; print('  ${"[~]".yellow} ${change.path}'); }
-      }
-
-      print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
-      
-      stdout.write('\nDo you want to proceed with the push? (y/N): ');
-      if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') {
-        print('🚫 Push aborted.');
-        return;
+        print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
+        
+        stdout.write('\nDo you want to proceed? (y/N): ');
+        if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
       }
 
       print('📦 Packing and encrypting...');
-      final zipBytes = await _createZipFromCurrentProject();
+      final zipBytes = await _createZipFromCurrentProject(sourcePath: workingDir);
+      
       final encrypted = await _encryptSnapshot(
         zipBytes: zipBytes,
         message: message,
@@ -1357,19 +1377,12 @@ class PortableVcs {
       final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
 
       String? fileHash;
-
       try {
-        print('💾 Writing to drive...');
         await tempFile.writeAsBytes(encrypted, flush: true);
         await tempFile.rename(finalFile.path);
-
-        stdout.write('🛡️  Generating integrity hash... ');
-        fileHash = sha256.convert(encrypted).toString(); 
-        print('DONE'.green);
-        
+        fileHash = sha256.convert(encrypted).toString();
       } catch (e) {
-        print('❌ Critical error writing snapshot: $e');
-        if (tempFile.existsSync()) await tempFile.delete();
+        print('❌ Error writing snapshot: $e');
         return;
       }
 
@@ -1384,23 +1397,20 @@ class PortableVcs {
       );
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-      updatedTracks[targetTrackName] = TrackState(
-        logs: [entry, ...trackData.logs],
-      );
+      updatedTracks[targetTrackName] = TrackState(logs: [entry, ...trackData.logs]);
 
       final updatedMeta = context.remoteMeta.copyWith(
         updatedAt: DateTime.now().toUtc().toIso8601String(),
         tracks: updatedTracks,
       );
 
-      final metaFile = File(p.join(context.remoteRepoDir.path, remoteMetaFileName));
-
+      final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
       await _atomicWriteString(
-        metaFile,
-        const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
+        metaFile, 
+        const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson())
       );
 
-      print('✅ Snapshot saved successfully in track ${targetTrackName.cyan}. ID=$snapshotId');
+      print('✅ Snapshot saved successfully in track ${targetTrackName.cyan}.');
     });
   }
 
@@ -3370,13 +3380,14 @@ class PortableVcs {
     }
   }
 
-  Future<Uint8List> _createZipFromCurrentProject() async {
+  Future<Uint8List> _createZipFromCurrentProject({Directory? sourcePath}) async {
     final archive = Archive();
+    final Directory targetDir = sourcePath ?? _cwd;
 
-    await for (final entity in _cwd.list(recursive: true, followLinks: false)) {
+    await for (final entity in targetDir.list(recursive: true, followLinks: false)) {
       if (entity is! File) continue;
 
-      final rel = _normalizeRelativePath(p.relative(entity.path, from: _cwd.path));
+      final rel = _normalizeRelativePath(p.relative(entity.path, from: targetDir.path));      
       if (await _isIgnoredPath(rel)) continue;
 
       final bytes = await entity.readAsBytes();
@@ -3384,7 +3395,7 @@ class PortableVcs {
     }
 
     final zip = ZipEncoder().encode(archive);
-    return Uint8List.fromList(zip);
+    return Uint8List.fromList(zip!);
   }
 
   Future<Uint8List> _encryptSnapshot({
@@ -4449,6 +4460,56 @@ class PortableVcs {
     return RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(trimmed);
   }
 
+  String _resolveTrackName(String input, RepoContext context) {
+    final cleanInput = input.trim();
+    if (cleanInput == '.') {
+      return context.remoteMeta.activeTrack;
+    }
+    if (context.remoteMeta.tracks.containsKey(cleanInput)) {
+      return cleanInput;
+    }
+    final caseInsensitiveMatch = context.remoteMeta.tracks.keys.firstWhere(
+      (k) => k.toLowerCase() == cleanInput.toLowerCase(),
+      orElse: () => '',
+    );
+    if (caseInsensitiveMatch.isNotEmpty) {
+      return caseInsensitiveMatch;
+    }
+    throw Exception('El track "$input" no existe en este repositorio.');
+  }
+
+  Future<bool> _hasUnsavedChangesInPath(String path, String trackName, RepoContext context) async {
+    final shadowDir = Directory(path);
+    if (!shadowDir.existsSync()) return false;
+
+    final trackData = context.remoteMeta.tracks[trackName];
+    if (trackData == null || trackData.logs.isEmpty) {
+      final entities = await shadowDir.list(recursive: true).toList();
+      return entities.whereType<File>().isNotEmpty;
+    }
+
+    final lastEntry = trackData.logs.first;
+
+    try {
+      final lastSnapshot = await readSnapshot(
+        context, 
+        lastEntry.id, 
+        password: ''
+      );
+
+      if (lastSnapshot == null) return true;
+
+      final currentFingerprint = await buildFingerprint(shadowDir);
+
+      final changes = diffFingerprints(lastSnapshot.fingerprint, currentFingerprint);
+      
+      return changes.isNotEmpty;
+    } catch (e) {
+      print('⚠️ Error checking for changes in shadow workspace: $e');
+      return true;
+    }
+  }
+
   Future<void> _saveRemoteMeta(RepoContext context, RepoMeta meta) async {
     final metaFile = File(p.join(context.remoteRepoDir.path, remoteMetaFileName));
     await metaFile.writeAsString(
@@ -4463,23 +4524,45 @@ class PortableVcs {
 
     final trackNames = context.remoteMeta.tracks.keys.toList()..sort();
 
-    print('\n🎯 ${"Tracks".cyan}');
-    print('═' * 60);
+    print('\n🎯 ${" TRACKS MANAGEMENT ".black.onCyan}');
+    print('═' * 65);
+    
+    print(
+      '${"ID".padRight(5)} '
+      '${"Name".padRight(22)} '
+      '${"Snaps".padRight(10)} '
+      '${"Author".padRight(12)} '
+      '${"Last Date"}'
+    );
+    print('─' * 65);
 
     for (var i = 0; i < trackNames.length; i++) {
       final name = trackNames[i];
       final track = context.remoteMeta.tracks[name]!;
       final isActive = name == context.remoteMeta.activeTrack;
+      
+      String lastAuthor = "---";
+      String lastDate = "---";
+      
+      if (track.logs.isNotEmpty) {
+        final latest = track.logs.first;
+        lastAuthor = latest.author ?? "Unknown";
+        if (lastAuthor.length > 11) lastAuthor = "${lastAuthor.substring(0, 8)}...";
+        lastDate = latest.createdAt.split('T').first; 
+      }
 
-      print(
-        '[${i.toString().padLeft(2, '0')}] '
-        '${name.green}'
-        '${isActive ? " ${"(active)".cyan}" : ""}',
-      );
-      print('     ${"Snapshots:".yellow.padRight(12)} ${track.logs.length.toString().green}');
+      final String idPart = '[${i.toString().padLeft(2, '0')}]'.grey;
+      final String namePart = name.padRight(22).green;
+      final String snapsPart = track.logs.length.toString().padRight(10);
+      final String authorPart = lastAuthor.padRight(12).grey;
+      final String datePart = lastDate.grey;
+      final String activeIndicator = isActive ? " ${"(active)".cyan}" : "";
+      
+      print('$idPart $namePart $snapsPart $authorPart $datePart$activeIndicator');
     }
 
-    print('═' * 60);
+    print('═' * 65);
+    print('💡 ${"Tip:".yellow} Use indices (e.g., "vcs track switch 01") for faster navigation.');
     print('');
   }
 
@@ -4567,81 +4650,114 @@ class PortableVcs {
     print('✅ ${"Track deleted:".green} $trackName');
   }
 
-  Future<void> trackSwitch(String name, {String? password, bool? webRestore}) async {
+  Future<void> trackSwitch(String input, {String? password, bool webRestore = false}) async {
+    const String advisor = '''
+    > [[ NOTE ]]
+    > VCS only manages file integrity. 👉 Remember to initialize your environment (e.g., "pub get", "npm install") in the new window.
+    ''';
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final trackName = name.trim();
+    final sessionFile = File(p.join(context.remoteRepoDir.path, 'session.json'));
+    
+    if (sessionFile.existsSync()) {
+      try {
+        final sessionData = jsonDecode(sessionFile.readAsStringSync());
+        final String shadowTrack = sessionData['active_shadow_track'];
+        final String shadowPath = sessionData['shadow_path'];
 
-    if (!context.remoteMeta.tracks.containsKey(trackName)) {
-      print('❌ Track not found: $trackName');
-      return;
+        final hasChanges = await _hasUnsavedChangesInPath(shadowPath, shadowTrack, context);
+        if (hasChanges) {
+          print('⚠️  ${"Unsaved changes".yellow} found in shadow workspace.');
+          if (!webRestore && confirmAction('Do you want to PUSH changes before switching?')) {
+            await push("Auto-save before switching", overrideSourcePath: shadowPath, track: shadowTrack, skipConfirm: true);
+          }
+        }
+
+        final directory = Directory(shadowPath);
+        if (directory.existsSync()) {
+          try { await directory.delete(recursive: true); } catch (e) {}
+        }
+        await sessionFile.delete();
+      } catch (e) {
+        print('⚠️ Error closing session: $e');
+      }
     }
 
-    if (trackName == context.remoteMeta.activeTrack) {
-      print('ℹ️ Already on track: $trackName');
-      return;
-    }
-
-    final targetTrack = context.remoteMeta.tracks[trackName]!;
+    String targetTrackName = _resolveTrackName(input, context);
 
     final updatedMeta = context.remoteMeta.copyWith(
+      activeTrack: targetTrackName,
       updatedAt: DateTime.now().toUtc().toIso8601String(),
-      activeTrack: trackName,
     );
+    final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+    await _atomicWriteString(metaFile, jsonEncode(updatedMeta.toJson()));
 
-    await _saveRemoteMeta(context, updatedMeta);
-
-    if (targetTrack.logs.isEmpty) {
-      print('✅ Switched to track: $trackName');
-      print('ℹ️ Track is empty. Next push will start its history.');
+    if (targetTrackName == 'main') {
+      print('🏠 ${"Back to main track.".green}');
       return;
     }
 
-    bool proceedWithRestore = false;
-
-    if (webRestore != null) {
-      proceedWithRestore = webRestore;
-    } else {
-      proceedWithRestore = confirmAction(
-        'Track "$trackName" has snapshots. Restore its latest snapshot into the working tree now?'
-      );
-    }
-
-    if (!proceedWithRestore) {
-      print('✅ Switched to track: $trackName');
-      print('ℹ️ Working tree was NOT restored.');
-      return;
-    }
-
-    final String? finalPassword = password ?? askPassword();
+    print('🧪 Preparing shadow workspace for: $targetTrackName');
+    final shadowPath = p.join(Directory.current.path, '.vcs', 'shadow_$targetTrackName');
+    final shadowDir = Directory(shadowPath);
     
-    if (finalPassword == null || finalPassword.isEmpty) {
-      print('✅ Switched to track: $trackName');
-      print('⚠️ Working tree not updated (Password required for decryption).');
-      return;
+    if (!shadowDir.existsSync()) await shadowDir.create(recursive: true);
+
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+    if (trackData != null && trackData.logs.isNotEmpty) {
+      
+      String? effectivePassword = password;
+      if (effectivePassword == null || effectivePassword.isEmpty) {
+        effectivePassword = askPassword();
+      }
+
+      if (effectivePassword == null || effectivePassword.isEmpty) {
+        print('❌ Password required.');
+        return; 
+      }
+
+      print('📥 Extracting last snapshot to LOCAL storage...');
+      
+      final lastSnapshot = await readSnapshot(
+        context, 
+        trackData.logs.first.id, 
+        password: effectivePassword, 
+      );
+
+      if (lastSnapshot != null) {
+        final archive = ZipDecoder().decodeBytes(lastSnapshot.zipBytes);
+        for (final file in archive) {
+          if (file.isFile) {
+            final outFile = File(p.join(shadowPath, file.name));
+            await outFile.create(recursive: true);
+            await outFile.writeAsBytes(file.content as List<int>);
+          }
+        }
+        print('✅ Content restored locally.');
+      } else {
+        print('❌ Wrong password.');
+        return;
+      }
     }
 
-    final latest = targetTrack.logs.first;
+    final newSession = {
+      'active_shadow_track': targetTrackName,
+      'shadow_path': shadowPath,
+      'start_time': DateTime.now().toUtc().toIso8601String(),
+    };
+    await sessionFile.writeAsString(jsonEncode(newSession));
 
-    final refreshedContext = await loadRepoContext();
-    if (refreshedContext == null) return;
-
-    final snapshot = await readSnapshot(
-      refreshedContext,
-      latest.id,
-      password: finalPassword,
-    );
-
-    if (snapshot == null) {
-      print('ℹ️ Switched to track: $trackName (Tree restore failed: Wrong password)');
-      return;
+    print('💻 Opening VS Code instance...');
+    try {
+      await Process.run('code', [shadowPath], runInShell: true);
+    } catch (e) {
+      print('⚠️ Could not launch VS Code. Path: $shadowPath');
     }
 
-    await _restoreSnapshotIntoWorkingTree(refreshedContext, snapshot);
-
-    print('✅ Switched to track: $trackName');
-    print('✅ Restored latest snapshot: ${latest.id}');
+    print('🚀 Shadow workspace ready at: ${shadowPath.cyan}');
+    print({"ℹ️ NOTE".cyan});
+    print({"VCS only manages file integrity. 👉 Remember to initialize your environment (e.g., 'pub get', 'npm install') in the new window.".cyan});
   }
 
   Future<void> launchUI({int port = 8080}) async {
