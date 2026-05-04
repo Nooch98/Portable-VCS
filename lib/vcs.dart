@@ -17,12 +17,14 @@ import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
 import 'package:vcs/models/diff_line.dart';
 import 'package:vcs/models/file_change.dart';
+import 'package:vcs/models/fingerprint_change.dart';
 import 'package:vcs/models/git_check.dart';
 import 'package:vcs/models/ignore_rule.dart';
 import 'package:vcs/models/range.dart';
 import 'package:vcs/models/repo_context.dart';
 import 'package:vcs/models/repo_meta.dart';
 import 'package:vcs/models/snapshot_log_entry.dart';
+import 'package:vcs/models/snapshot_notes.dart';
 import 'package:vcs/models/track_state.dart';
 import 'package:vcs/models/tree_node.dart';
 import 'package:vcs/models/update_cache.dart';
@@ -30,7 +32,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.5-Experimental.2';
+const String vcsBaseVersion = '0.3.6-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -319,7 +321,7 @@ class PortableVcs {
   void showHelp() {
     const String helpMarkdown = '''
 
-    # 🚀 PORTABLE SNAPSHOT VAULT [[ V.\${vcsBaseVersion} ]]
+    # 🚀 PORTABLE SNAPSHOT VAULT [[ ${vcsBaseVersion} ]]
 
     > Offline encrypted snapshot tool for Git-compatible local workflows.
 
@@ -344,6 +346,7 @@ class PortableVcs {
     - `push "message"` Create a snapshot (with preview & confirmation).
       - `-a, --author <name>` Override the author name for this snapshot.
       - `-t, --track <name>` Target a specific track instead of active.
+      - `--amend` Overwrite the last snapshot in the track.
     - `tag <name>` Assign a friendly label to a snapshot.
       - `-i, --id <id>` Target a specific ID (defaults to latest).
       - `-t, --track <name>` Target a snapshot in a specific track.
@@ -353,6 +356,14 @@ class PortableVcs {
     - `revert <id|tag>` Quick restore of a specific version from active track.
     - `restore <id|tag>` Restore a specific snapshot into another folder.
       - `--to <dir>` Destination path for the restored files.
+
+    ## 📝 SNAPSHOT ANNOTATIONS
+    - `note "text"` Add a technical note or comment to a snapshot.
+      - `--id <id>` Target a specific snapshot (defaults to latest).
+      - `-a, --author <name>` Set a custom author for the note.
+      - `-r, --remove` Remove a note (requires `--index`).
+      - `-i, --index <n>` The index of the note to remove (from `log`).
+      - `--all` Remove all notes from the target snapshot.
 
     ## 🔍 INSPECTION & WEB INTERFACE
     - `ui` Launch the Web Dashboard (Split-view diff support).
@@ -371,12 +382,12 @@ class PortableVcs {
     - `diff` Compare latest snapshot vs current live files.
     - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
       - `-t, --tracks <tk1> <tk2>` Compare the last snapshot between two tracks.
-    - `log` Show history of snapshots (includes **🏷️ Tags**).
+    - `log` Show history of snapshots (includes **🏷️ Tags** and **📝 Notes**).
       - `--graph, -g` Visual representation of the snapshot timeline.
       - `--full` Show extended details (IDs, dates, metadata).
       - `--standard` Show summary with 5-file change preview.
       - `--summary` (Default) Show only statistics and message.
-    - `show <id|tag>` Show details of a specific snapshot.
+    - `show <id|tag>` Show details of a specific snapshot (including all notes).
     - `tree [id|tag]` Show visual file tree representation.
     - `verify <id|--all>` Verify cryptographic integrity of snapshots.
 
@@ -415,11 +426,12 @@ class PortableVcs {
     ## ⚙️ GENERAL
     - `help` Show this help message.
     - `version` Show tool version.
-    - `changelog` Show changes of the version
+    - `changelog` Show changes of the version.
 
     ---
 
     ### 💡 PRO TIPS
+    - **Note-taking:** Use `vcs note "Checked on Windows"` to document specific builds without re-pushing.
     - **Human-readable IDs:** Use `vcs tag stable` to avoid typing long IDs in `pull` or `diff`.
     - **Performance Check:** Run `vcs benchmark` if you feel the USB is slow; it helps identify hardware bottlenecks.
     - **Data Resilience:** The `doctor` command can restore metadata from backups if corruption occurs.
@@ -915,6 +927,117 @@ class PortableVcs {
     print('✅ Current folder is now bound to repo_id=${selected.meta.repoId}');
   }
 
+  Future<void> addNote(String text, {String? snapshotId, String? author}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrack = context.remoteMeta.activeTrack;
+    final trackState = context.remoteMeta.tracks[targetTrack];
+    
+    if (trackState == null || trackState.logs.isEmpty) {
+      print('❌ No snapshots found in track $targetTrack');
+      return;
+    }
+
+    final idToFind = snapshotId ?? trackState.logs.first.id;
+
+    final newLogs = trackState.logs.map((entry) {
+      if (entry.id == idToFind) {
+        return entry.copyWithNote(SnapshotNote(
+          text: text,
+          author: author,
+          createdAt: DateTime.now().toUtc().toIso8601String(),
+        ));
+      }
+      return entry;
+    }).toList();
+
+    final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+    updatedTracks[targetTrack] = TrackState(logs: newLogs);
+
+    final updatedMeta = context.remoteMeta.copyWith(
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+      tracks: updatedTracks,
+    );
+
+    final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+    await _atomicWriteString(
+      metaFile, 
+      const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson())
+    );
+
+    print('✅ Note added to snapshot ${idToFind.cyan}.');
+  }
+
+  Future<void> removeNote({String? snapshotId, int? index, bool all = false}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrack = context.remoteMeta.activeTrack;
+    final trackState = context.remoteMeta.tracks[targetTrack];
+    
+    if (trackState == null || trackState.logs.isEmpty) {
+      print('❌ No snapshots found in track $targetTrack');
+      return;
+    }
+
+    final idToFind = snapshotId ?? trackState.logs.first.id;
+    bool found = false;
+
+    final newLogs = trackState.logs.map((entry) {
+      if (entry.id == idToFind) {
+        found = true;
+        if (all) {
+          return entry.copyWithNotes([]);
+        }
+        
+        if (index == null) {
+          print('❌ You must specify a note index or use --all.');
+          return entry;
+        }
+
+        if (index < 0 || index >= entry.notes.length) {
+          print('❌ Invalid note index: $index. Snapshot has ${entry.notes.length} notes.');
+          return entry;
+        }
+
+        final updatedNotes = List<SnapshotNote>.from(entry.notes)..removeAt(index);
+        return SnapshotLogEntry(
+          id: entry.id,
+          message: entry.message,
+          author: entry.author,
+          createdAt: entry.createdAt,
+          fileName: entry.fileName,
+          changeSummary: entry.changeSummary,
+          hash: entry.hash,
+          notes: updatedNotes,
+        );
+      }
+      return entry;
+    }).toList();
+
+    if (!found) {
+      print('❌ Snapshot $idToFind not found.');
+      return;
+    }
+
+    final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+    updatedTracks[targetTrack] = TrackState(logs: newLogs);
+
+    final updatedMeta = context.remoteMeta.copyWith(
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+      tracks: updatedTracks,
+    );
+
+    final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+    await _atomicWriteString(
+      metaFile, 
+      const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson())
+    );
+
+    print('✅ ${all ? "All notes" : "Note"} removed from snapshot ${idToFind.cyan}.');
+  }
+
   Future<void> status({String? password}) async {
     final context = await loadRepoContext();
     if (context == null) return;
@@ -942,7 +1065,7 @@ class PortableVcs {
 
     final lastEntry = trackData.logs.first;
     final String? inputPassword = password ?? askPassword();
-    if (inputPassword == null) return; 
+    if (inputPassword == null) return;
 
     final snapshot = await readSnapshot(
       context,
@@ -961,36 +1084,72 @@ class PortableVcs {
       return;
     }
 
+    Map<String, List<FileChange>> groups = {
+      '🛠️  LOGIC': [],
+      '🎨  ASSETS': [],
+      '⚙️  CONFIG': [],
+      '📄  OTHER': [],
+    };
+
+    for (final change in changes) {
+      final ext = p.extension(change.path).toLowerCase();
+      if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs'].contains(ext)) {
+        groups['🛠️  LOGIC']!.add(change);
+      } else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico'].contains(ext)) {
+        groups['🎨  ASSETS']!.add(change);
+      } else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.md'].contains(ext)) {
+        groups['⚙️  CONFIG']!.add(change);
+      } else {
+        groups['📄  OTHER']!.add(change);
+      }
+    }
+
     print('\n${"Changes not yet pushed:".bold}');
     print('  ${"(use \"vcs push <message>\" to save these changes)".grey}\n');
 
     int added = 0, modified = 0, deleted = 0;
-    changes.sort((a, b) => a.path.compareTo(b.path));
 
-    for (final change in changes) {
-      final tag = change.toTag();
-      if (tag.startsWith('+')) {
-        print('    ${'NEW'.black.onGreen.padRight(7)} ${change.path.green}');
-        added++;
-      } else if (tag.startsWith('-')) {
-        print('    ${'DEL'.black.onRed.padRight(7)} ${change.path.red}');
-        deleted++;
-      } else {
-        print('    ${'MOD'.black.onYellow.padRight(7)} ${change.path.yellow}');
-        modified++;
+    groups.forEach((groupName, groupChanges) {
+      if (groupChanges.isEmpty) return;
+
+      print('  $groupName'.bold.underline);
+      groupChanges.sort((a, b) => a.path.compareTo(b.path));
+
+      for (final change in groupChanges) {
+        String label;
+        String coloredPath;
+
+        switch (change.kind) {
+          case ChangeKind.added:
+            label = 'NEW'.black.onGreen;
+            coloredPath = change.path.green;
+            added++;
+            break;
+          case ChangeKind.modified:
+            label = 'MOD'.black.onYellow;
+            coloredPath = change.path.yellow;
+            modified++;
+            break;
+          case ChangeKind.deleted:
+            label = 'DEL'.black.onRed;
+            coloredPath = change.path.red;
+            deleted++;
+            break;
+        }
+        
+        print('    ${label.padRight(7)} $coloredPath');
       }
-    }
+      print('');
+    });
 
-    print('\n' + '  ' + '─' * 45);
-    stdout.write('  ${"Summary:".cyan} ');
-    
+    print('  ' + '─' * 45);
     List<String> summaryParts = [];
     if (added > 0) summaryParts.add('${added} added'.green);
     if (modified > 0) summaryParts.add('${modified} modified'.yellow);
     if (deleted > 0) summaryParts.add('${deleted} deleted'.red);
-    
-    stdout.write(summaryParts.join(', '));
-    print('\n  ' + '─' * 45 + '\n');
+
+    print('  ${"Summary:".cyan} ${summaryParts.join(', ')}');
+    print('  ' + '─' * 45 + '\n');
   }
 
   Future<void> search(
@@ -1278,7 +1437,8 @@ class PortableVcs {
     String? track,
     String? password,
     String? overrideSourcePath, 
-    bool skipConfirm = false,    
+    bool skipConfirm = false,
+    bool amend = false,
   }) async {
     final context = await loadRepoContext();
     if (context == null) return;
@@ -1305,6 +1465,11 @@ class PortableVcs {
       return;
     }
 
+    if (amend && trackData.logs.isEmpty) {
+      print('❌ Cannot use --amend: Track "$targetTrackName" has no history.');
+      return;
+    }
+
     final finalPassword = password ?? askPassword();
     if (finalPassword == null || finalPassword.isEmpty) {
       print('❌ Password required for encryption.');
@@ -1316,30 +1481,31 @@ class PortableVcs {
 
       Map<String, String> lastFingerprint = {};
       if (trackData.logs.isNotEmpty) {
-        final lastEntry = trackData.logs.first;
+        final baseEntryIndex = (amend && trackData.logs.length > 1) ? 1 : 0;
+        final baseEntry = trackData.logs[baseEntryIndex];
         try {
           final lastSnapshot = await readSnapshot(
             context,
-            lastEntry.id,
+            baseEntry.id,
             password: finalPassword,
           );
           if (lastSnapshot != null) {
             lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
           }
         } catch (e) {
-          print('⚠️ Warning: Error reading previous snapshot.');
+          print('⚠️ Warning: Error reading base snapshot for diff.');
         }
       }
 
       final changes = diffFingerprints(lastFingerprint, currentFingerprint);
 
-      if (changes.isEmpty && trackData.logs.isNotEmpty) {
+      if (changes.isEmpty && trackData.logs.isNotEmpty && !amend) {
         print('ℹ️ No changes to save in track "$targetTrackName".');
         return;
       }
 
       if (!skipConfirm) {
-        print('\n${'--- Snapshot Preview ---'.cyan}');
+        print('\n${(amend ? '--- 🛠️ Amending Last Snapshot ---' : '--- Snapshot Preview ---').cyan}');
         print('${'Source:'.padRight(12)} ${workingDir.path}');
         print('${'Track:'.padRight(12)} $targetTrackName');
         print('${'Message:'.padRight(12)} $message');
@@ -1347,15 +1513,23 @@ class PortableVcs {
         int added = 0, modified = 0, deleted = 0;
         for (var change in changes) {
           final tag = change.toTag();
-          if (tag.startsWith('+')) { added++; print('  ${"[+]".green} ${change.path}'); }
-          else if (tag.startsWith('-')) { deleted++; print('  ${"[-]".red} ${change.path}'); }
-          else { modified++; print('  ${"[~]".yellow} ${change.path}'); }
+          if (tag.startsWith('+')) { added++; print('  ${"[+]".green} ${change.path}'); }
+          else if (tag.startsWith('-')) { deleted++; print('  ${"[-]".red} ${change.path}'); }
+          else { modified++; print('  ${"[~]".yellow} ${change.path}'); }
         }
 
         print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
         
         stdout.write('\nDo you want to proceed? (y/N): ');
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
+      }
+
+      if (amend) {
+        final oldSnapshot = trackData.logs.first;
+        final oldFile = File(p.join(context.remoteRepoDir.path, 'snapshots', oldSnapshot.fileName));
+        if (oldFile.existsSync()) {
+          await oldFile.delete();
+        }
       }
 
       print('📦 Packing and encrypting...');
@@ -1373,13 +1547,11 @@ class PortableVcs {
       final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
       if (!snapshotsDir.existsSync()) await snapshotsDir.create(recursive: true);
 
-      final tempFile = File(p.join(snapshotsDir.path, '.tmp_$snapshotId.vcs'));
       final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
 
       String? fileHash;
       try {
-        await tempFile.writeAsBytes(encrypted, flush: true);
-        await tempFile.rename(finalFile.path);
+        await finalFile.writeAsBytes(encrypted, flush: true);
         fileHash = sha256.convert(encrypted).toString();
       } catch (e) {
         print('❌ Error writing snapshot: $e');
@@ -1397,7 +1569,14 @@ class PortableVcs {
       );
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-      updatedTracks[targetTrackName] = TrackState(logs: [entry, ...trackData.logs]);
+      
+      if (amend) {
+        final newLogs = List<SnapshotLogEntry>.from(trackData.logs);
+        newLogs[0] = entry;
+        updatedTracks[targetTrackName] = TrackState(logs: newLogs);
+      } else {
+        updatedTracks[targetTrackName] = TrackState(logs: [entry, ...trackData.logs]);
+      }
 
       final updatedMeta = context.remoteMeta.copyWith(
         updatedAt: DateTime.now().toUtc().toIso8601String(),
@@ -1410,7 +1589,7 @@ class PortableVcs {
         const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson())
       );
 
-      print('✅ Snapshot saved successfully in track ${targetTrackName.cyan}.');
+      print('✅ Snapshot ${amend ? "amended" : "saved"} successfully in track ${targetTrackName.cyan}.');
     });
   }
 
@@ -1615,6 +1794,17 @@ class PortableVcs {
       for (var j = 0; j < msgLines.length; j++) {
         final label = j == 0 ? "Message:".yellow.padRight(10) : " ".padRight(10);
         print('$subPrefix     $label ${msgLines[j]}');
+      }
+
+      if (entry.notes.isNotEmpty) {
+        for (var n = 0; n < entry.notes.length; n++) {
+          final note = entry.notes[n];
+          final noteAuthor = note.author != null ? ' (@${note.author})' : '';
+          final noteDate = _formatDateForList(note.createdAt);
+          
+          final label = n == 0 ? "Notes:".magenta.padRight(10) : " ".padRight(10);
+          print('$subPrefix     $label ${"📝 ${note.text}".italic}${" $noteDate$noteAuthor".grey}');
+        }
       }
 
       switch (mode) {
@@ -6127,6 +6317,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
     )
+    ..addCommand('note', ArgParser()
+      ..addOption('id', help: 'Target snapshot ID')
+      ..addOption('author', abbr: 'a')
+      ..addFlag('remove', abbr: 'r', negatable: false, help: 'Remove a note')
+      ..addOption('index', abbr: 'i', help: 'Index of the note to remove')
+      ..addFlag('all', negatable: false, help: 'Remove all notes from the snapshot')
+    )
     ..addCommand('tag', ArgParser()
       ..addOption('id', abbr: 'i', help: 'Specific snapshot ID to tag')
       ..addOption('track', abbr: 't', help: 'Track where the snapshot resides')
@@ -6177,8 +6374,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('track', abbr: 't', help: 'Target track to visualize')
     )
     ..addCommand('push', ArgParser()
-      ..addOption('author', abbr: 'a')
-      ..addOption('track', abbr: 't', help: 'Push to a specific track instead of the active one'),
+        ..addOption('author', abbr: 'a')
+        ..addOption('track', abbr: 't', help: 'Push to a specific track instead of the active one')
+        ..addFlag('amend', negatable: false, help: 'Overwrite the last snapshot in the track')
     )
     ..addCommand('revert')
     ..addCommand('restore', ArgParser()..addOption('to'))
@@ -6300,6 +6498,32 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
 
+
+      case 'note':
+        final bool isRemove = command!['remove'] as bool;
+        final bool removeAll = command['all'] as bool;
+        final String? snapshotId = command['id']?.toString();
+
+        if (isRemove || removeAll) {
+          final int? index = command['index'] != null ? int.tryParse(command['index']) : null;
+          await app.removeNote(
+            snapshotId: snapshotId,
+            index: index,
+            all: removeAll,
+          );
+        } else {
+          if (command.rest.isEmpty) {
+            print('❌ You must provide the note text.');
+          } else {
+            await app.addNote(
+              command.rest.join(' '),
+              snapshotId: snapshotId,
+              author: command['author']?.toString(),
+            );
+          }
+        }
+        break;
+
       case 'tag':
         final tagName = command?.rest.firstOrNull;
 
@@ -6404,6 +6628,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
             command.rest.join(' '),
             author: command['author']?.toString(),
             track: command['track']?.toString(),
+            amend: command['amend'] as bool,
           );
         }
         break;
