@@ -385,68 +385,55 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | :--- | :--- | :--- |
 | **Setup** | `vcs setup` | Prepare a USB drive or external storage for Vault use. |
 | | `vcs init` | Initialize the current project and link it to remote storage. |
-| | `vcs list` | List repositories available on the connected USB/storage (includes linked status). |
-| | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder (with extraction feedback). |
+| | `vcs list` | List repositories available on the connected USB/storage. |
+| | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder. |
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
-| | `vcs tag <name>` | Assign a friendly label to a snapshot. |
-| | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
-| | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
-| | `vcs pull --dry-run` | Preview changes without applying. |
-| | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
+| | `vcs push --amend` | **Overwrite the latest snapshot** to fix messages or minor errors. |
+| | `vcs tag <name> [-i id]` | Assign a friendly label to a snapshot (defaults to latest). |
+| | `vcs pull [id\|tag]` | Restore latest, specific ID or tagged snapshot. |
+| | `vcs pull --dry-run` | Preview changes without applying them. |
+| | `vcs revert <id\|tag>` | Quick restore of a specific version from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
-| **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
-| | `vcs info` | Show detailed information about the current project and linked vault (includes activity charts). |
-| | `vcs status` | Summary of messages to help create Git/GitHub commits. |
-| | `vcs summary` | Compare tree against latest of the **active track**. |
-| | `vcs timeline` | Show history in a chronological list with limits (`-n`) and track support. |
-| | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
-| | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
-| | `vcs log` | Show history of snapshots. |
+| **Annotations** | `vcs note "text"` | Add a technical note or comment to a snapshot. |
+| | `vcs note -r -i <n>` | **Remove a specific note** by its index. |
+| | `vcs note --all` | Wipe all notes from a specific snapshot. |
+| | `vcs note --id <id>` | Target a specific snapshot for note operations. |
+| **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** with split-view diff support. |
+| | `vcs status` | Compare tree vs latest with **Domain Grouping** (Logic, Assets, Config). |
+| | `vcs info [--charts]` | Project overview, storage impact and activity histograms. |
+| | `vcs summary` | Summary of messages to help create Git/GitHub commits. |
+| | `vcs timeline` | Chronological list with limits (`-n`) and track support. |
+| | `vcs diff [id1] [id2\|.]` | Compare snapshots or working tree using visual diffs. |
+| | `vcs log` | Show history of snapshots (includes **🏷️ Tags** and **📝 Notes**). |
 | | `vcs log --graph/-g` | Visual representation of the snapshot timeline. |
-| | `vcs log --full` | Show extended details (IDs, dates, metadata). |
-| | `vcs log --standard` | Show summary with 5-file change preview. |
-| | `vcs log --summary` | (Default) Show only statistics and message. |
-| | `vcs show --track/-t <id>` | Displays detailed information about a snapshot in the **active track** or in a **specific track**. |
-| | `vcs tree [id]` | Displays the file tree structure of a snapshot in the **active track** or in a **specific track**. |
-| | `vcs search <query>` | Search text inside encrypted snapshots with **smart context display**. |
-| | `vcs search <query> -t/--track <name>` | Search only within a specific track. |
-| | `vcs search <query> --id <snapshot_id>` | Search only inside a specific snapshot ID. |
-| | `vcs search <query> -m/--max <n>` | Limit search to the last N snapshots. |
-| | `vcs search <query> -s/--case-sensitive` | Perform a case-sensitive search. |
+| | `vcs log --full/--standard` | Detailed view with IDs, metadata or 5-file change preview. |
+| | `vcs show <id\|tag>` | Detailed info of a snapshot, including all its **technical notes**. |
+| | `vcs tree [id\|tag]` | Visual file tree representation of a specific snapshot. |
+| | `vcs search <query>` | Search text inside snapshots with smart context and track filtering. |
 | **Aliases** | `vcs alias --list, -l` | List all custom shortcuts saved in the USB. |
-| | `vcs alias --set, -s "name=cmd"` | Create a shortcut (e.g., `alias -s "st=status"`). |
+| | `vcs alias --set "name=cmd"` | Create a shortcut (e.g., `alias -s "st=status"`). |
 | | `vcs alias --rm <name>` | Remove a specific alias from the storage. |
-| **Tracks** | `vcs track list` | List all available history tracks. |
-| | `vcs track current` | Show the name of the currently active track. |
-| | `vcs track create <name>` | Create a new independent development lane. |
-| | `vcs track switch <name>` | Switch the active track (with optional tree restore). |
-| | `vcs track delete <name>` | Remove an existing non-active track and its history. |
-| **Git Bridge** | `vcs git-diff [id] --branch b` | Preview changes between snapshot and Git branch. |
-| | `vcs git-prepare [id] --branch b` | Restore snapshot into Git tree and stage files. |
-| | `vcs publish [id] --branch b --verify` | Restore, commit, and push to Git safely. |
-| | `vcs stash` | Manage Git stash (save current Git changes). |
-| | `vcs stash --pop` | Restore and remove last stash. |
-| | `vcs stash --list` | Show all currently stashed changes. |
-| | `vcs stash --clear` | Delete all stashes permanently. |
-| **Maintenance**| `vcs update` | **Auto-update:** Check, download latest source from GitHub and recompile. |
-| | `vcs benchmark` | **Performance stress test:** IOPS, Crypto and Transfer speed diagnostics. |
-| | `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
-| | `vcs doctor` | Run repository diagnostics and health checks. |
-| | `vcs stats` | Show size, snapshot count, and storage statistics. |
-| | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
-| | `vcs prune --oldr-than N` | Delete snapshots older than N days. |
-| | `vcs prune --garbage` | Deep clean: Remove orphaned data blobs. |
-| | `vcs prune --id <id>` | Delete a specific snapshot by its ID. | 
-| | `vcs clear-history` | Wipe all snapshots for the **active track**. |
-| | `vcs purge` | Permanently delete the project from the Vault. |
+| **Tracks** | `vcs track list` | List all available development lanes. |
+| | `vcs track current` | Show the name of the active track. |
+| | `vcs track create <name>` | Create a new independent track. |
+| | `vcs track switch <name>` | Switch tracks (with optional `--restore` of the tree). |
+| | `vcs track delete <name>` | Delete an existing non-active track. |
+| **Git Bridge** | `vcs git-prepare [id]` | Restore snapshot into Git tree and stage files. |
+| | `vcs publish [id] --branch b` | Safe commit & push to Git with conflict and secret checks. |
+| | `vcs git-diff [id]` | Compare snapshot against current Git HEAD. |
+| | `vcs stash [--pop\|--list]` | Manage temporary Git changes safely. |
+| **Maintenance**| `vcs update` | **Auto-update:** Download latest source from GitHub and recompile. |
+| | `vcs benchmark [-i]` | Performance stress test: IOPS, Crypto and Transfer speed. |
+| | `vcs verify <id\|--all>` | Run SHA-256 integrity checks on snapshots. |
+| | `vcs doctor` | Run diagnostics, health checks and **meta-recovery**. |
+| | `vcs prune --keep N` | Keep only the newest N snapshots. |
+| | `vcs prune --garbage` | Deep clean: Remove orphaned data blobs from storage. |
 | | `vcs storage-check` | Hardware diagnostic and latency test of the device. |
-| | `vcs migrate` | Move your vault to a new drive. |
-| | `vcs migrate --to <path>` | Target destination path for the migration. |
-| | `vcs migrate --delete-source` | Remove data from old drive after success. |
-| **General** | `vcs version` | Show tool version, OS information and **check for updates**. |
-| | `vcs changelog` | Show changes of the version. |
-| | `vcs help` | Show this help message. |
+| | `vcs migrate --to <path>` | Move your vault to a new drive or NAS. |
+| **General** | `vcs version` | Show tool version and check for updates. |
+| | `vcs changelog` | Show history of changes and new features. |
+| | `vcs help` | Show the interactive help message. |
 
 # Encryption
 Snapshots are encrypted locally before storage.
