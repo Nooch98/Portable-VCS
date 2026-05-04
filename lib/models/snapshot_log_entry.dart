@@ -1,3 +1,5 @@
+import 'package:vcs/models/snapshot_notes.dart';
+
 class SnapshotLogEntry {
   final String id;
   final String message;
@@ -6,6 +8,7 @@ class SnapshotLogEntry {
   final String fileName;
   final List<String> changeSummary;
   final String? hash;
+  final List<SnapshotNote> notes;
 
   SnapshotLogEntry({
     required this.id,
@@ -15,6 +18,7 @@ class SnapshotLogEntry {
     required this.fileName,
     required this.changeSummary,
     this.hash,
+    this.notes = const [],
   });
 
   factory SnapshotLogEntry.fromJson(Map<String, dynamic> json) {
@@ -28,6 +32,9 @@ class SnapshotLogEntry {
           .map((e) => e.toString())
           .toList(),
       hash: json['hash']?.toString(),
+      notes: ((json['notes'] as List?) ?? [])
+          .map((e) => SnapshotNote.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
     );
   }
 
@@ -39,7 +46,25 @@ class SnapshotLogEntry {
         'file_name': fileName,
         'change_summary': changeSummary,
         'hash': hash,
+        'notes': notes.map((e) => e.toJson()).toList(),
       };
 
   bool get hasIntegrityData => hash != null && hash!.isNotEmpty;
+
+  SnapshotLogEntry copyWithNotes(List<SnapshotNote> newNotes) {
+    return SnapshotLogEntry(
+      id: id,
+      message: message,
+      author: author,
+      createdAt: createdAt,
+      fileName: fileName,
+      changeSummary: changeSummary,
+      hash: hash,
+      notes: newNotes,
+    );
+  }
+
+  SnapshotLogEntry copyWithNote(SnapshotNote newNote) {
+    return copyWithNotes([...notes, newNote]);
+  }
 }
