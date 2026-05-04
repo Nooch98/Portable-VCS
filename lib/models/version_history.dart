@@ -1,5 +1,30 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.6-Experimental.1': '''
+  ### 📝 SNAPSHOT ANNOTATIONS (VCS NOTES)
+  I have implemented a **Post-Snapshot Documentation System**. This allows you to enrich your history without changing the core snapshot data.
+
+  - **Technical Journaling:** Add detailed technical notes to any snapshot using `vcs note "text"`. Perfect for documenting bug reproduction steps or build environment details.
+  - **Multi-Note Support:** A single snapshot can have multiple annotations, creating a "thread" of information over time.
+  - **Full CRUD Support:** You can add, list (via `log`), and remove notes (`--remove`, `--all`) by their index.
+  - **Traceability:** Every note automatically records the author and the exact timestamp of creation.
+
+  ### 🔍 ENHANCED VISUAL STATUS
+  The `status` command has been completely redesigned for better readability and file categorization.
+
+  - **Domain Grouping:** Files are now automatically categorized into **Logic** (code), **Assets** (images/icons), and **Configuration** (yaml/json) for faster inspection.
+  - **Action Labels:** Clear, color-coded indicators for `NEW` (added), `MOD` (modified), and `DEL` (deleted) states.
+  - **FileChange Logic:** Internal transition to a robust `enum`-based system for change tracking, ensuring future compatibility with merge operations.
+
+  ### 🛠️ SNAPSHOT REFINEMENT
+  - **New Feature: `--amend`:** You can now fix the last snapshot in the active track. If you forgot a file or made a typo in the message, `push --amend` overwrites the latest entry, keeping the history clean and professional.
+  - **Integrated Log View:** The `log` command now renders notes inline with a new magenta 📝 indicator, including support for the `--graph` view.
+
+  ### 🐞 STABILITY & FIXES
+  - **Atomic Note Management:** Note removal includes safety checks to prevent out-of-bounds errors when targeting specific indices.
+  - **Metadata Robustness:** Updated the `SnapshotLogEntry` model to support recursive JSON serialization of notes.
+    ''',
+    
     '0.3.5-Experimental.2': '''
   ## 🧪 PARALLEL TRACK SYSTEM (SHADOW MODE)
   I have completely overhauled how `track switch` operates. Instead of overwriting the main project files (which was risky and prone to data loss), the VCS now enables **Parallel Workspaces**.
