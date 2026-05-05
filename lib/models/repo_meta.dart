@@ -44,6 +44,7 @@ class RepoMeta {
     final projectName = json['project_name'] as String;
     final createdAt = json['created_at'] as String;
     final updatedAt = json['updated_at'] as String;
+
     final formatVersion = (json['format_version'] as num?)?.toInt() ?? 1;
     
     final tags = Map<String, String>.from(json['tags'] as Map? ?? {});
@@ -74,7 +75,7 @@ class RepoMeta {
         projectName: projectName,
         createdAt: createdAt,
         updatedAt: updatedAt,
-        formatVersion: max(formatVersion, 3),
+        formatVersion: max(formatVersion, 4),
         activeTrack: safeActiveTrack,
         tracks: parsedTracks,
         tags: tags,
@@ -94,7 +95,7 @@ class RepoMeta {
       projectName: projectName,
       createdAt: createdAt,
       updatedAt: updatedAt,
-      formatVersion: 3,
+      formatVersion: 4,
       activeTrack: 'main',
       tracks: {
         'main': TrackState(logs: oldLogs),
@@ -108,7 +109,7 @@ class RepoMeta {
         'project_name': projectName,
         'created_at': createdAt,
         'updated_at': updatedAt,
-        'format_version': 3,
+        'format_version': 4,
         'active_track': activeTrack,
         'tracks': tracks.map(
           (key, value) => MapEntry(key, value.toJson()),
@@ -127,7 +128,7 @@ class RepoMeta {
       projectName: projectName,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
-      formatVersion: 3,
+      formatVersion: 4,
       activeTrack: activeTrack ?? this.activeTrack,
       tracks: tracks ?? this.tracks,
       tags: tags ?? this.tags,
