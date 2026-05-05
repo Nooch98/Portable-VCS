@@ -9,6 +9,7 @@ class SnapshotLogEntry {
   final List<String> changeSummary;
   final String? hash;
   final List<SnapshotNote> notes;
+  final String? parentId;
 
   SnapshotLogEntry({
     required this.id,
@@ -19,6 +20,7 @@ class SnapshotLogEntry {
     required this.changeSummary,
     this.hash,
     this.notes = const [],
+    this.parentId,
   });
 
   factory SnapshotLogEntry.fromJson(Map<String, dynamic> json) {
@@ -35,6 +37,7 @@ class SnapshotLogEntry {
       notes: ((json['notes'] as List?) ?? [])
           .map((e) => SnapshotNote.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      parentId: json['parent_id'] as String?,
     );
   }
 
@@ -47,24 +50,34 @@ class SnapshotLogEntry {
         'change_summary': changeSummary,
         'hash': hash,
         'notes': notes.map((e) => e.toJson()).toList(),
+        'parent_id': parentId,
       };
 
   bool get hasIntegrityData => hash != null && hash!.isNotEmpty;
 
-  SnapshotLogEntry copyWithNotes(List<SnapshotNote> newNotes) {
+  SnapshotLogEntry copyWith({
+    String? message,
+    List<SnapshotNote>? notes,
+    String? parentId,
+  }) {
     return SnapshotLogEntry(
       id: id,
-      message: message,
+      message: message ?? this.message,
       author: author,
       createdAt: createdAt,
       fileName: fileName,
       changeSummary: changeSummary,
       hash: hash,
-      notes: newNotes,
+      notes: notes ?? this.notes,
+      parentId: parentId ?? this.parentId,
     );
   }
 
+  SnapshotLogEntry copyWithNotes(List<SnapshotNote> newNotes) {
+    return copyWith(notes: newNotes);
+  }
+
   SnapshotLogEntry copyWithNote(SnapshotNote newNote) {
-    return copyWithNotes([...notes, newNote]);
+    return copyWith(notes: [...notes, newNote]);
   }
 }
