@@ -1,5 +1,29 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.6-Experimental.2': '''
+  ### 🛡️ ULTRA-ROBUST PERSISTENCE (USB SAFE)
+  I have re-engineered the metadata engine to ensure your repository remains intact even during accidental USB disconnections or hardware failures.
+
+  - **Atomic Multi-Stage Writes:** Every save operation now follows a "Safe-Swap" protocol: `Data -> .tmp file -> Integrity Check -> Rename`. This prevents "Zero-Byte" corruption if the process is interrupted.
+  - **3-Level Backup Rotation (Time Machine):** The system now maintains a circular rotation of metadatos (`meta.json.bak1`, `.bak2`, `.bak3`). If one file is corrupted, you can roll back to three previous stable states.
+  - **Physical Flush:** Forced hardware synchronization (`flush: true`) on every write, ensuring the USB controller actually commits data to the flash memory before finishing.
+
+  ### 🔍 UNIVERSAL SEARCH & NOTES INTEGRATION
+  The `search` command is now smarter and much faster by utilizing a two-phase engine.
+
+  - **Metadata & Note Search:** Instantly find text within snapshot messages and your technical notes without needing to decrypt the entire repository.
+  - **Note Highlights:** Matches found within annotations are displayed with a new yellow highlight and context preview.
+  - **Interactive Deep Search:** After checking metadatos, the tool offers to proceed with a deep, decrypted search inside the files of each snapshot.
+
+  ### 🛠️ REFINED SNAPSHOT MANAGEMENT
+  - **Smart --amend:** The `push --amend` flag has been reinforced. It now automatically migrates existing notes to the new amended snapshot and blocks operations if the snapshot is linked to a Tag to prevent history inconsistency.
+  - **Prune & Note Sync:** Improved the `prune` and `clearHistory` commands to handle the new backup rotation, ensuring that cleaning up old files doesn't leave orphaned `.bak` files.
+
+  ### 🐞 STABILITY & HARDWARE COMPATIBILITY
+  - **Write Fallback:** Implemented a `Copy+Delete` strategy for systems where the `rename` operation is locked by antivirus or OS indexing.
+  - **Integrity Guard:** The engine now aborts any write if the resulting JSON is empty or malformed, acting as a final shield for your project history.
+    ''',
+    
     '0.3.6-Experimental.1': '''
   ### 📝 SNAPSHOT ANNOTATIONS (VCS NOTES)
   I have implemented a **Post-Snapshot Documentation System**. This allows you to enrich your history without changing the core snapshot data.
