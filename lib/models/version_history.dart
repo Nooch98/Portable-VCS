@@ -1,5 +1,35 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.7-Experimental.1': '''
+  ### 🌳 ANCESTRY & LINEAGE SYSTEM (THE GENEALOGY UPDATE)
+  I have transformed the flat snapshot history into a **Directed Acyclic Graph (DAG)**. The VCS now understands the "biological" relationship between every version.
+
+  - **Parent Tracking:** Every snapshot now stores a `parentId` to trace development paths even after pruning.
+  - **Branching Metadata:** Tracks now record `originSnapshotId` and `originTrackName` to mark exact moments of divergence.
+  - **New Command: `ancestry`:** A visual, tree-like representation of your history showing `Parent → Child` connections.
+
+  ### ⚔️ ADVANCED 3-WAY DIFF ENGINE
+  Preparing the ground for future Merges, the `diff` command has been significantly upgraded.
+
+  - **Automatic Common Ancestor Discovery:** The engine automatically walks back the lineage to find the "Common Base" for comparisons.
+  - **Triple-View Analysis:** Beyond simple "A vs B", the system now performs a **3-way analysis** (Base vs Left vs Right).
+  - **Conflict Detection:** Identifies files modified in both branches with divergent results, marked with a `⚠ CONFLICT` warning.
+  - **Status Indicators:** New visual cues: `←` (Left mod), `→` (Right mod), and `=` (Identical changes).
+
+  ### 🕹️ INTERACTIVE UX & NAVIGATION
+  - **Interactive Changelog Explorer:** The new `--list` (or `-l`) flag allows you to browse the entire evolution of the app through a selectable index.
+  - **Markdown-Powered Menus:** The version index is now dynamically rendered using the internal Markdown engine, providing a consistent visual identity with colors and highlights.
+  - **Smart Selection:** Quick-access navigation—just type the version number to jump deep into its technical history.
+
+  ### 🛤️ ENHANCED TRACK MANAGEMENT
+  - **Smart Branching:** The `track create <name>` command now supports the `--from <id>` flag to "fork" from any point.
+  - **Lineage-Safe Pruning:** The `prune` engine now automatically re-links parent-child relationships to maintain genealogy.
+
+  ### 📖 DOCUMENTATION & UX
+  - **Global Legend:** Standardized technical legend for all lineage-related commands.
+  - **Updated Help:** Comprehensive documentation for new branching and ancestry flags.
+    ''',
+    
     '0.3.6-Experimental.2': '''
   ### 🛡️ ULTRA-ROBUST PERSISTENCE (USB SAFE)
   I have re-engineered the metadata engine to ensure your repository remains intact even during accidental USB disconnections or hardware failures.
@@ -107,7 +137,7 @@ class VersionHistory {
   - **Deep Scan:** `doctor` now performs a physical-to-meta cross-check using cryptographic hashes.
   
   ### 🐛 BUG FIXES
-  - **Semantic Versioning:** Fixed a bug in the update engine that incorrectly suggested downgrades. The tool now understands version hierarchy (v2 > v1).  
+  - **Semantic Versioning:** Fixed a bug in the update engine that incorrectly suggested downgrades. The tool now understands version hierarchy (v2 > v1).   
     ''',
 
     '0.3.4-Experimental.1': '''
@@ -133,7 +163,28 @@ class VersionHistory {
     ''',
   };
 
+  static List<String> get allVersions => updates.keys.toList();
+
   static String getMarkdown(String version) {
     return updates[version] ?? 'No changelog details found for version \$version.';
+  }
+
+  static String getAvailableVersionsMarkdown() {
+    final versions = allVersions;
+    String listContent = "";
+    
+    for (var i = 0; i < versions.length; i++) {
+      listContent += "  **[${i + 1}]** ${versions[i]}\n";
+    }
+
+    return '''
+# 📜 VERSION HISTORY INDEX
+
+> Select a version number to explore the evolution of the system.
+
+$listContent
+---
+**Type the number** to view details or **'q'** to quit.
+''';
   }
 }
