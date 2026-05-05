@@ -17,7 +17,6 @@ import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
 import 'package:vcs/models/diff_line.dart';
 import 'package:vcs/models/file_change.dart';
-import 'package:vcs/models/fingerprint_change.dart';
 import 'package:vcs/models/git_check.dart';
 import 'package:vcs/models/ignore_rule.dart';
 import 'package:vcs/models/range.dart';
@@ -32,7 +31,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.6-Experimental.1';
+const String vcsBaseVersion = '0.3.6-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -112,6 +111,8 @@ class PortableVcs {
       return false;
     }
 
+    String detectedRemoteV = "";
+
     try {
       print('🔍 Checking for updates on GitHub ($branch)...');
       final versionResponse = await http.get(Uri.parse(rawVersionUrl));
@@ -122,21 +123,21 @@ class PortableVcs {
         final remoteMatch = versionRegex.firstMatch(remoteContent);
         
         if (remoteMatch != null) {
-          final remoteV = remoteMatch.group(1)!;
+          detectedRemoteV = remoteMatch.group(1)!;
           final localV = vcsBaseVersion;
           
-          if (!isUpdateAvailable(localV, remoteV)) {
-            if (localV == remoteV) {
+          if (!isUpdateAvailable(localV, detectedRemoteV)) {
+            if (localV == detectedRemoteV) {
               print('✅ ${"You are already on the latest version ($localV).".green}');
             } else {
-              print('🚀 ${"Local version ($localV) is ahead of GitHub ($remoteV).".magenta}');
+              print('🚀 ${"Local version ($localV) is ahead of GitHub ($detectedRemoteV).".magenta}');
             }
             
             stdout.write('Force re-download and re-compile? (y/n): ');
             final force = stdin.readLineSync();
             if (force?.toLowerCase() != 'y') return;
           } else {
-            print('🚀 New version detected: ${localV.grey} -> ${remoteV.green.bold}');
+            print('🚀 New version detected: ${localV.grey} -> ${detectedRemoteV.green.bold}');
           }
         } else {
           print('⚠️  Could not parse remote version. Proceeding with update anyway...');
@@ -216,6 +217,14 @@ class PortableVcs {
       try { await tempDir.delete(recursive: true); } catch (_) {}
 
       print('\n🎉 ${"Update successful!".green.bold}');
+
+      if (detectedRemoteV.isNotEmpty) {
+        print('\n📜 ${"CHANGELOG: What\'s new in $detectedRemoteV".cyan.bold}');
+        print('─' * 65);
+        print(VersionHistory.getMarkdown(detectedRemoteV));
+        print('─' * 65);
+      }
+
       if (Platform.isWindows) {
         print('💡 ${"Note:".yellow} A ${".old".cyan} file was created. You can delete it now.');
       }
@@ -1162,12 +1171,6 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final password = askPassword();
-    if (password == null || password.isEmpty) {
-      print('❌ ${"Password required for searching encrypted snapshots.".red}');
-      return;
-    }
-
     final targetTrack = track ?? context.remoteMeta.activeTrack;
     final trackData = context.remoteMeta.tracks[targetTrack];
 
@@ -1176,26 +1179,62 @@ class PortableVcs {
       return;
     }
 
-    List<dynamic> logsToSearch = List.from(trackData.logs);
+    List<SnapshotLogEntry> logsToSearch = List.from(trackData.logs);
     logsToSearch.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     if (snapshotId != null) {
       logsToSearch = logsToSearch.where((l) => l.id.toString() == snapshotId).toList();
-      if (logsToSearch.isEmpty) {
-        print('❌ ${"Snapshot ID not found in track:".red} $snapshotId');
-        return;
-      }
     } else if (limit != null && limit > 0) {
       logsToSearch = logsToSearch.take(limit).toList();
     }
 
+    final String searchQuery = caseSensitive ? query : query.toLowerCase();
+    
+    print('\n🔍 ${" SEARCHING METADATA & NOTES ".black.onCyan}');
+    bool foundInMeta = false;
+
+    for (final entry in logsToSearch) {
+      bool matchInEntry = false;
+      final msg = caseSensitive ? entry.message : entry.message.toLowerCase();
+
+      if (msg.contains(searchQuery)) {
+        print('\n📌 ${"Match in Snapshot Message:".cyan} ${entry.id.green}');
+        print('   > ${entry.message.white.italic}');
+        matchInEntry = true;
+      }
+
+      for (int i = 0; i < entry.notes.length; i++) {
+        final note = entry.notes[i];
+        final noteText = caseSensitive ? note.text : note.text.toLowerCase();
+        
+        if (noteText.contains(searchQuery)) {
+          if (!matchInEntry) {
+            print('\n📌 ${"Match in Notes:".cyan} ${entry.id.green} (${entry.message.grey})');
+            matchInEntry = true;
+          }
+          print('   ${"Note [#$i]".yellow} ${note.author != null ? "[${note.author}]".grey : ""}');
+          _printNoteHighlight(note.text, query, caseSensitive);
+        }
+      }
+      if (matchInEntry) foundInMeta = true;
+    }
+
+    if (!foundInMeta) {
+      print('  ${"No matches found in messages or notes.".grey}');
+    }
+
+    print('\n🚀 ${" PROCEED TO DEEP CONTENT SEARCH? ".black.onYellow}');
+    stdout.write('This will decrypt snapshots. Continue? (y/N): ');
+    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') return;
+
+    final password = askPassword();
+    if (password == null || password.isEmpty) return;
+
     print('\n🔍 ${" DEEP CONTENT SEARCH ".black.onCyan}');
-    print('${"Query:".grey} "${query.white.bold}" | ${"Scope:".grey} ${targetTrack.magenta}');
     print('═' * 60);
 
     int totalMatches = 0;
     int snapshotsWithMatches = 0;
-    final String searchQuery = caseSensitive ? query : query.toLowerCase();
 
     for (final entry in logsToSearch) {
       final String sId = entry.id.toString();
@@ -1253,7 +1292,24 @@ class PortableVcs {
       print('✅ Search finished. Found ${totalMatches.toString().green.bold} occurrences in ${snapshotsWithMatches.toString().cyan} snapshots.');
     } else {
       stdout.write(' ' * 40 + '\r');
-      print('Status: ${"No matches found.".yellow}');
+      print('Status: ${"No matches found in file contents.".yellow}');
+    }
+  }
+
+  void _printNoteHighlight(String text, String query, bool caseSensitive) {
+    final lowerText = caseSensitive ? text : text.toLowerCase();
+    final lowerQuery = caseSensitive ? query : query.toLowerCase();
+    final matchIndex = lowerText.indexOf(lowerQuery);
+
+    if (matchIndex != -1) {
+      final before = text.substring(0, matchIndex);
+      final match = text.substring(matchIndex, matchIndex + query.length);
+      final after = text.substring(matchIndex + query.length);
+
+      String display = "${before}${match.black.onYellow}${after}";
+      if (display.length > 200) display = "${display.substring(0, 197)}...";
+      
+      print('   └─ $display');
     }
   }
 
@@ -1465,9 +1521,25 @@ class PortableVcs {
       return;
     }
 
-    if (amend && trackData.logs.isEmpty) {
-      print('❌ Cannot use --amend: Track "$targetTrackName" has no history.');
-      return;
+    if (amend) {
+      if (trackData.logs.isEmpty) {
+        print('❌ Cannot use --amend: Track "$targetTrackName" has no history.');
+        return;
+      }
+
+      final lastId = trackData.logs.first.id;
+      final hasTags = context.remoteMeta.tags.values.contains(lastId);
+      
+      if (hasTags) {
+        final tagNames = context.remoteMeta.tags.entries
+            .where((e) => e.value == lastId)
+            .map((e) => e.key)
+            .join(', ');
+            
+        print('❌ ${"Cannot amend:".red} Latest snapshot has tags: ${tagNames.magenta}');
+        print('ℹ️ Please remove the tags before amending or create a new snapshot.');
+        return;
+      }
     }
 
     final finalPassword = password ?? askPassword();
@@ -1558,6 +1630,8 @@ class PortableVcs {
         return;
       }
 
+      final List<SnapshotNote> existingNotes = amend ? trackData.logs.first.notes : [];
+
       final entry = SnapshotLogEntry(
         id: snapshotId,
         message: message,
@@ -1566,6 +1640,7 @@ class PortableVcs {
         fileName: '$snapshotId.vcs',
         changeSummary: changes.map((e) => e.toTag()).toList(),
         hash: fileHash,
+        notes: existingNotes,
       );
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
@@ -1584,6 +1659,10 @@ class PortableVcs {
       );
 
       final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+      if (metaFile.existsSync()) {
+        await metaFile.copy(p.join(context.remoteRepoDir.path, 'meta.json.bak'));
+      }
+
       await _atomicWriteString(
         metaFile, 
         const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson())
@@ -1594,12 +1673,41 @@ class PortableVcs {
   }
 
   Future<void> _atomicWriteString(File file, String content) async {
+    if (await file.exists()) {
+      final int size = await file.length();
+      if (size > 0) {
+        final String path = file.path;
+
+        final f3 = File('$path.bak3');
+        final f2 = File('$path.bak2');
+        final f1 = File('$path.bak1');
+
+        if (await f2.exists()) await f2.copy(f3.path);
+        if (await f1.exists()) await f1.copy(f2.path);
+        await file.copy(f1.path);
+
+        await file.copy('$path.bak'); 
+      }
+    }
+
     final temp = File('${file.path}.tmp');
-    await temp.writeAsString(content, flush: true);
-    await temp.rename(file.path);
     
-    final backup = File('${file.path}.bak');
-    await backup.writeAsString(content, flush: true);
+    try {
+      await temp.writeAsString(content, flush: true);
+
+      if (await temp.length() > 0) {
+        try {
+          await temp.rename(file.path);
+        } catch (_) {
+          await temp.copy(file.path);
+          await temp.delete();
+        }
+      } else {
+        throw Exception("Temporal file is empty, aborting write to prevent corruption.");
+      }
+    } catch (e) {
+      print('❌ ${"Critical Error saving metadata:".red} $e');
+    }
   }
 
   String _renderMarkdown(String text) {
