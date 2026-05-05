@@ -219,10 +219,7 @@ class PortableVcs {
       print('\n🎉 ${"Update successful!".green.bold}');
 
       if (detectedRemoteV.isNotEmpty) {
-        print('\n📜 ${"CHANGELOG: What\'s new in $detectedRemoteV".cyan.bold}');
-        print('─' * 65);
-        print(VersionHistory.getMarkdown(detectedRemoteV));
-        print('─' * 65);
+        showChangelog(targetVersion: detectedRemoteV);
       }
 
       if (Platform.isWindows) {
@@ -452,22 +449,23 @@ class PortableVcs {
     print(_renderMarkdown(helpMarkdown));
   }
 
-  void showChangelog() {
-    final String content = VersionHistory.getMarkdown(vcsBaseVersion);
+  void showChangelog({String? targetVersion}) {
+    final String versionToShow = targetVersion ?? vcsBaseVersion;
+    final String content = VersionHistory.getMarkdown(versionToShow);
     
     final String changelogMarkdown = '''
 
-    # 📜 CHANGELOG [[ V.${vcsBaseVersion} ]]
+  # 📜 CHANGELOG [[ V.$versionToShow ]]
 
-    > What's new in this release? Here is a summary of the latest changes.
+  > What's new in this release? Here is a summary of the latest changes.
 
-    ${content}
+  $content
 
-    ---
+  ---
 
-    ### 💡 INFO
-    - You are currently running the **Experimental** branch.
-    - For full history and source code, visit the GitHub repository.
+  ### 💡 INFO
+  - You are currently running the **Experimental** branch.
+  - For full history and source code, visit the GitHub repository.
 
     ''';
 
