@@ -31,7 +31,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.6-Experimental.2';
+const String vcsBaseVersion = '0.3.7-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -343,16 +343,18 @@ class PortableVcs {
     ## 🛤️ TRACKS MANAGEMENT
     - `track list` List all available tracks.
     - `track current` Show the name of the active track.
-    - `track create <name>` Create a new empty track.
+    - `track create <name>` Create a new track.
+      - `-f, --from <id>` Optional: Branch from a specific snapshot ID.
     - `track switch <name>` Switch to another track.
-      - `--restore` Optional: Restore the tree files upon switching.
     - `track delete <name>` Delete an existing non-active track.
+    - `ancestry` Show the genealogical tree of snapshots (Lineage).
+      - `-t, --track <name>` Visualize ancestry of a specific track.
 
     ## 📦 SNAPSHOT WORKFLOW
-    - `push "message"` Create a snapshot (with preview & confirmation).
+    - `push "message"` Create a snapshot (with parent tracking).
       - `-a, --author <name>` Override the author name for this snapshot.
       - `-t, --track <name>` Target a specific track instead of active.
-      - `--amend` Overwrite the last snapshot in the track.
+      - `--amend` Overwrite the last snapshot (preserves lineage).
     - `tag <name>` Assign a friendly label to a snapshot.
       - `-i, --id <id>` Target a specific ID (defaults to latest).
       - `-t, --track <name>` Target a snapshot in a specific track.
@@ -418,7 +420,7 @@ class PortableVcs {
     - `stats` Show global repo metrics and track breakdown.
     - `benchmark` Performance stress test (IOPS, Crypto & Transfer speed).
       - `-i, --intensive` Run a high-load test with larger data buffers.
-    - `prune` Clean up old snapshots:
+    - `prune` Clean up old snapshots (Ancestry-safe):
       - `--id <id>` Delete a specific snapshot by its ID.
       - `--keep N` Keep only the newest N snapshots.
       - `--older-than N` Delete snapshots older than N days.
@@ -433,13 +435,15 @@ class PortableVcs {
     - `help` Show this help message.
     - `version` Show tool version.
     - `changelog` Show changes of the version.
+      - `--list, -l` Display the full version history. Allows selecting a specific version to view its detailed changes.
 
     ---
 
     ### 💡 PRO TIPS
-    - **Note-taking:** Use `vcs note "Checked on Windows"` to document specific builds without re-pushing.
+    - **Ancestry Tracking:** Use `vcs ancestry` to understand the origin of your current track and its relation to others.
+    - **Clean USB:** Run `vcs prune --keep 1` before a final GitHub release to save space while keeping the lineage intact.
+    - **Branching:** Create tracks from specific points using `vcs track create feature-x --from <id>`.
     - **Human-readable IDs:** Use `vcs tag stable` to avoid typing long IDs in `pull` or `diff`.
-    - **Performance Check:** Run `vcs benchmark` if you feel the USB is slow; it helps identify hardware bottlenecks.
     - **Data Resilience:** The `doctor` command can restore metadata from backups if corruption occurs.
     - **USB Aliases:** Aliases are stored in the USB root, so they follow you to any computer.
     - All data is **AES-256 encrypted**. Keep your vault password safe.
@@ -449,12 +453,32 @@ class PortableVcs {
     print(_renderMarkdown(helpMarkdown));
   }
 
-  void showChangelog({String? targetVersion}) {
+  void showChangelog({String? targetVersion, bool interactive = false}) {
+    if (interactive) {
+      final String listMarkdown = VersionHistory.getAvailableVersionsMarkdown();
+      print(_renderMarkdown(listMarkdown));
+      
+      stdout.write('👉 ');
+      final input = stdin.readLineSync()?.trim().toLowerCase();
+
+      if (input == null || input == 'q') return;
+
+      final index = int.tryParse(input);
+      final versions = VersionHistory.allVersions;
+
+      if (index != null && index > 0 && index <= versions.length) {
+        print('\x1B[2J\x1B[0;0H'); 
+        showChangelog(targetVersion: versions[index - 1]);
+      } else {
+        print('❌ Invalid selection.'.red);
+      }
+      return;
+    }
+
     final String versionToShow = targetVersion ?? vcsBaseVersion;
     final String content = VersionHistory.getMarkdown(versionToShow);
     
     final String changelogMarkdown = '''
-
   # 📜 CHANGELOG [[ V.$versionToShow ]]
 
   > What's new in this release? Here is a summary of the latest changes.
@@ -462,12 +486,10 @@ class PortableVcs {
   $content
 
   ---
-
   ### 💡 INFO
   - You are currently running the **Experimental** branch.
-  - For full history and source code, visit the GitHub repository.
-
-    ''';
+  - Type `vcs changelog --list` to see previous versions.
+  ''';
 
     print(_renderMarkdown(changelogMarkdown));
   }
@@ -1417,12 +1439,49 @@ class PortableVcs {
     }
 
     try {
+      bool isThreeWay = args.length == 3;
+      if (args.length == 2 && context.remoteMeta.tracks.containsKey(args[0]) && context.remoteMeta.tracks.containsKey(args[1])) {
+        isThreeWay = true;
+      }
+
+      if (isThreeWay) {
+        final idLeft = resolveId(args[0]);
+        final idRight = resolveId(args.length == 3 ? args[2] : args[1]);
+        String? idBase = args.length == 3 ? resolveId(args[1]) : null;
+
+        if (idLeft == null || idRight == null) return;
+
+        idBase ??= _findCommonAncestor(context, idLeft, idRight);
+
+        if (idBase == null) {
+          print('⚠️ No common ancestor found. Falling back to standard diff.'.yellow);
+        } else {
+          print('🔍 ${"Analyzing 3-way diff...".cyan}');
+          print('📂 ${"Base:".grey} $idBase | ${"Left:".blue} $idLeft | ${"Right:".magenta} $idRight');
+
+          final baseSnap = await readSnapshot(context, idBase, password: finalPassword);
+          final leftSnap = await readSnapshot(context, idLeft, password: finalPassword);
+          final rightSnap = await readSnapshot(context, idRight, password: finalPassword);
+
+          if (baseSnap == null || leftSnap == null || rightSnap == null) return;
+
+          await _print3WayDiff(
+            await _decodeSnapshotFiles(baseSnap),
+            await _decodeSnapshotFiles(leftSnap),
+            await _decodeSnapshotFiles(rightSnap),
+            labels: [idBase, idLeft, idRight],
+          );
+          return;
+        }
+      }
+
       if (args.isEmpty) {
-        if (context.remoteMeta.logs.isEmpty) {
+        final trackLogs = context.remoteMeta.tracks[context.remoteMeta.activeTrack]?.logs ?? [];
+        if (trackLogs.isEmpty) {
           print('ℹ️ No snapshots available in active track.'.yellow);
           return;
         }
-        final latestId = context.remoteMeta.logs.first.id;
+        final latestId = trackLogs.first.id;
         final snapshot = await readSnapshot(context, latestId, password: finalPassword);
         if (snapshot == null) return;
 
@@ -1431,7 +1490,6 @@ class PortableVcs {
         leftLabel = 'snapshot:$latestId (latest)';
         rightLabel = 'working-tree (live)';
       } 
-
       else if (args.length == 1) {
         final id = resolveId(args[0]);
         if (id == null) return;
@@ -1444,23 +1502,19 @@ class PortableVcs {
         leftLabel = 'snapshot:$id';
         rightLabel = 'working-tree (live)';
       } 
-
       else if (args.length == 2) {
-        final String argLeft = args[0];
-        final String argRight = args[1];
-
-        final idLeft = resolveId(argLeft);
+        final idLeft = resolveId(args[0]);
         if (idLeft == null) return;
         final leftSnapshot = await readSnapshot(context, idLeft, password: finalPassword);
         if (leftSnapshot == null) return;
         leftFiles = await _decodeSnapshotFiles(leftSnapshot);
         leftLabel = 'snapshot:$idLeft';
 
-        if (argRight == '.') {
+        if (args[1] == '.') {
           rightFiles = await _readCurrentProjectFiles();
           rightLabel = 'working-tree (live)';
         } else {
-          final idRight = resolveId(argRight);
+          final idRight = resolveId(args[1]);
           if (idRight == null) return;
           final rightSnapshot = await readSnapshot(context, idRight, password: finalPassword);
           if (rightSnapshot == null) return;
@@ -1470,6 +1524,7 @@ class PortableVcs {
       } 
       else {
         print('❌ Usage: vcs diff [id_or_track_1] [id_or_track_2 | .]'.red);
+        print('   Or for 3-way: vcs diff [id1] [base_id] [id2]');
         return;
       }
 
@@ -1483,6 +1538,78 @@ class PortableVcs {
     } catch (e) {
       print('❌ Error during diff: $e');
     }
+  }
+
+  Future<void> _print3WayDiff(
+    Map<String, Uint8List> base, 
+    Map<String, Uint8List> left, 
+    Map<String, Uint8List> right,
+    {required List<String> labels}
+  ) async {
+    final allPaths = {...base.keys, ...left.keys, ...right.keys}.toList()..sort();
+    
+    print('\n${"--- 3-WAY ANALYSIS REPORT ---".bold.cyan}');
+    
+    for (final path in allPaths) {
+      final inBase = base.containsKey(path);
+      final inLeft = left.containsKey(path);
+      final inRight = right.containsKey(path);
+
+      final contentBase = inBase ? base[path] : null;
+      final contentLeft = inLeft ? left[path] : null;
+      final contentRight = inRight ? right[path] : null;
+
+      final changedLeft = _bytesEquals(contentBase, contentLeft) == false;
+      final changedRight = _bytesEquals(contentBase, contentRight) == false;
+
+      if (changedLeft && changedRight) {
+        if (_bytesEquals(contentLeft, contentRight)) {
+          print(' ${"=".grey} $path (Modified identically in both)');
+        } else {
+          print(' ${"⚠".red.bold} $path (CONFLICT: Modified in both with different results)');
+        }
+      } else if (changedLeft) {
+        print(' ${"←".blue} $path (Modified in ${labels[1]} only)');
+      } else if (changedRight) {
+        print(' ${"→".magenta} $path (Modified in ${labels[2]} only)');
+      }
+    }
+    print('\n${"------------------------------".cyan}');
+  }
+
+  bool _bytesEquals(Uint8List? a, Uint8List? b) {
+    if (a == null || b == null) return a == b;
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  String? _findCommonAncestor(RepoContext context, String id1, String id2) {
+    final history1 = <String>{};
+
+    final allLogs = <String, SnapshotLogEntry>{};
+    for (var track in context.remoteMeta.tracks.values) {
+      for (var log in track.logs) {
+        allLogs[log.id] = log;
+      }
+    }
+
+    String? current = id1;
+    while (current != null) {
+      history1.add(current);
+      current = allLogs[current]?.parentId;
+    }
+
+    current = id2;
+    while (current != null) {
+      if (history1.contains(current)) return current;
+      current = allLogs[current]?.parentId;
+    }
+
+    return null;
   }
 
   Future<void> push(
@@ -1594,6 +1721,17 @@ class PortableVcs {
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
       }
 
+      String? parentId;
+      if (amend) {
+        parentId = trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId;
+      } else {
+        if (trackData.logs.isNotEmpty) {
+          parentId = trackData.logs.first.id;
+        } else {
+          parentId = trackData.originSnapshotId;
+        }
+      }
+
       if (amend) {
         final oldSnapshot = trackData.logs.first;
         final oldFile = File(p.join(context.remoteRepoDir.path, 'snapshots', oldSnapshot.fileName));
@@ -1639,6 +1777,7 @@ class PortableVcs {
         changeSummary: changes.map((e) => e.toTag()).toList(),
         hash: fileHash,
         notes: existingNotes,
+        parentId: parentId,
       );
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
@@ -1646,9 +1785,17 @@ class PortableVcs {
       if (amend) {
         final newLogs = List<SnapshotLogEntry>.from(trackData.logs);
         newLogs[0] = entry;
-        updatedTracks[targetTrackName] = TrackState(logs: newLogs);
+        updatedTracks[targetTrackName] = TrackState(
+          logs: newLogs,
+          originSnapshotId: trackData.originSnapshotId,
+          originTrackName: trackData.originTrackName,
+        );
       } else {
-        updatedTracks[targetTrackName] = TrackState(logs: [entry, ...trackData.logs]);
+        updatedTracks[targetTrackName] = TrackState(
+          logs: [entry, ...trackData.logs],
+          originSnapshotId: trackData.originSnapshotId,
+          originTrackName: trackData.originTrackName,
+        );
       }
 
       final updatedMeta = context.remoteMeta.copyWith(
@@ -1706,6 +1853,76 @@ class PortableVcs {
     } catch (e) {
       print('❌ ${"Critical Error saving metadata:".red} $e');
     }
+  }
+
+  Future<void> showAncestry({String? track}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrack = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrack];
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('ℹ️ No history found for track "$targetTrack".');
+      return;
+    }
+
+    print('\n${"--- Lineage & Ancestry ---".cyan.bold}');
+    print('${"Track:".padRight(12)} ${targetTrack.yellow}');
+    print('${"---".grey}');
+
+    final allSnapshots = <String, SnapshotLogEntry>{};
+    for (var t in context.remoteMeta.tracks.values) {
+      for (var log in t.logs) {
+        allSnapshots[log.id] = log;
+      }
+    }
+
+    String? currentId = trackData.logs.first.id;
+    int depth = 0;
+
+    while (currentId != null) {
+      final entry = allSnapshots[currentId];
+      
+      if (entry == null) {
+        print('  ${"⋮".grey} [Missing Link: $currentId]');
+        break;
+      }
+
+      if (depth == 0) {
+        print('  ${"●".green} ${"HEAD".green.bold} ${entry.id.magenta} | ${entry.message.white.bold}');
+      } else {
+        print('  ${"○".yellow}      ${entry.id.magenta} | ${entry.message}');
+      }
+
+      print('         ${entry.createdAt.grey} by ${entry.author ?? "Unknown"}');
+
+      currentId = entry.parentId;
+      depth++;
+
+      if (currentId != null) {
+        print('  ${"│".grey}');
+        print('  ${"↓".grey}');
+      } else {
+        print('  ${"┴".cyan}');
+        print('  ${"ROOT".cyan.bold}');
+      }
+
+      if (depth > 1000) {
+        print('  ${"⚠".red} Max depth reached.');
+        break;
+      }
+    }
+
+    print('\n${"--- End of Lineage ---".cyan.bold}');
+
+    print('\n${" Legend:".bold}');
+    print(' ${"● HEAD".green} : Current point in the track.');
+    print(' ${"○".yellow}      : Previous snapshot in time.');
+    print(' ${"│ ↓".grey}    : Lineage connection (Parent → Child).');
+    print(' ${"┴ ROOT".cyan} : Origin of the track history.');
+    print(' ${"ID".magenta}      : Unique snapshot identifier.');
+    print('');
   }
 
   String _renderMarkdown(String text) {
@@ -2532,22 +2749,26 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    final referencedFiles = <String>{};
-    for (final track in context.remoteMeta.tracks.values) {
-      for (final entry in track.logs) {
-        referencedFiles.add(entry.fileName);
-      }
-    }
-
     final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
-    final toDeleteFiles = <File>[];
     final activeTrackName = context.remoteMeta.activeTrack;
-    final logs = List<SnapshotLogEntry>.from(context.remoteMeta.tracks[activeTrackName]?.logs ?? []);
+    final trackData = context.remoteMeta.tracks[activeTrackName];
+    
+    if (trackData == null) return;
+    final logs = List<SnapshotLogEntry>.from(trackData.logs);
+
+    final toDeleteFiles = <File>[];
+    final toDeleteFromLogs = <SnapshotLogEntry>[];
 
     if (garbage && snapshotsDir.existsSync()) {
       print('🔍 ${"Scanning for garbage files...".grey}');
+      final referencedFiles = <String>{};
+      for (final t in context.remoteMeta.tracks.values) {
+        for (final entry in t.logs) {
+          referencedFiles.add(entry.fileName);
+        }
+      }
+
       final physicalFiles = snapshotsDir.listSync().whereType<File>();
-      
       for (final file in physicalFiles) {
         final name = p.basename(file.path);
         if (name.startsWith('.tmp_') || !referencedFiles.contains(name)) {
@@ -2556,54 +2777,40 @@ class PortableVcs {
       }
     }
 
-    final toDeleteFromLogs = <SnapshotLogEntry>[];
-
     if (snapshotId != null) {
-      print('🎯 ${"Targeting specific snapshot ID: $snapshotId".cyan}');
       try {
         final targetEntry = logs.firstWhere((e) => e.id == snapshotId);
         toDeleteFromLogs.add(targetEntry);
-        
-        final f = File(p.join(snapshotsDir.path, targetEntry.fileName));
-        if (f.existsSync()) toDeleteFiles.add(f);
       } catch (_) {
-        print('❌ ${"Error:".red} Snapshot ID $snapshotId not found in active track.');
+        print('❌ Snapshot ID $snapshotId not found in active track.');
         return;
       }
-    } 
+    } else if (keep != null || olderThanDays != null) {
+      final now = DateTime.now().toUtc();
+      final toDeleteIds = <String>{};
 
-    else if (keep != null || olderThanDays != null) {
-      if (logs.isEmpty) {
-        print('ℹ️ No snapshots in active track to prune by history.');
-      } else {
-        final now = DateTime.now().toUtc();
-        final toDeleteIds = <String>{};
-
-        if (olderThanDays != null) {
-          for (final entry in logs) {
-            final created = DateTime.tryParse(entry.createdAt)?.toUtc();
-            if (created != null && now.difference(created).inDays > olderThanDays) {
-              toDeleteIds.add(entry.id);
-            }
+      if (olderThanDays != null) {
+        for (final entry in logs) {
+          final created = DateTime.tryParse(entry.createdAt)?.toUtc();
+          if (created != null && now.difference(created).inDays > olderThanDays) {
+            toDeleteIds.add(entry.id);
           }
         }
+      }
 
-        if (keep != null && keep >= 0 && logs.length > keep) {
-          for (var i = keep; i < logs.length; i++) {
-            toDeleteIds.add(logs[i].id);
-          }
+      if (keep != null && keep >= 0 && logs.length > keep) {
+        for (var i = keep; i < logs.length; i++) {
+          toDeleteIds.add(logs[i].id);
         }
+      }
 
-        if (toDeleteIds.length >= logs.length && logs.isNotEmpty) {
-          toDeleteIds.remove(logs.first.id);
-        }
+      if (toDeleteIds.length >= logs.length && logs.isNotEmpty) {
+        toDeleteIds.remove(logs.first.id);
+      }
 
-        for (var entry in logs) {
-          if (toDeleteIds.contains(entry.id)) {
-            toDeleteFromLogs.add(entry);
-            final f = File(p.join(snapshotsDir.path, entry.fileName));
-            if (f.existsSync()) toDeleteFiles.add(f);
-          }
+      for (var entry in logs) {
+        if (toDeleteIds.contains(entry.id)) {
+          toDeleteFromLogs.add(entry);
         }
       }
     }
@@ -2613,35 +2820,55 @@ class PortableVcs {
       return;
     }
 
-    print('\n${"PREPARING CLEANUP:".bold}');
+    for (var entry in toDeleteFromLogs) {
+      final f = File(p.join(snapshotsDir.path, entry.fileName));
+      if (f.existsSync()) toDeleteFiles.add(f);
+    }
+
+    print('\n${"PREPARING CLEANUP (Ancestry-Safe):".bold.cyan}');
     if (toDeleteFromLogs.isNotEmpty) {
-      print('📦 Snapshots to remove from history: ${toDeleteFromLogs.length}');
-      for (var entry in toDeleteFromLogs) {
-        print('   - ${entry.id.grey} (${entry.message})');
-      }
+      print('📦 Snapshots to remove: ${toDeleteFromLogs.length}');
     }
     if (toDeleteFiles.isNotEmpty) {
       print('🗑️  Physical files to delete: ${toDeleteFiles.length}');
     }
 
-    stdout.write('\nProceed with deletion? (y/N): ');
+    stdout.write('\nProceed? (y/N): ');
     if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') return;
 
     await _withLock(context.remoteRepoDir, () async {
       for (final file in toDeleteFiles) {
-        try {
-          if (await file.exists()) await file.delete();
-        } catch (e) {
-          print('⚠️ Could not delete ${file.path}: $e');
-        }
+        try { if (await file.exists()) await file.delete(); } catch (_) {}
       }
 
       if (toDeleteFromLogs.isNotEmpty) {
         final toDeleteIds = toDeleteFromLogs.map((e) => e.id).toSet();
-        final remaining = logs.where((e) => !toDeleteIds.contains(e.id)).toList();
+
+        final deadNodesParents = { for (var e in toDeleteFromLogs) e.id : e.parentId };
+
+        List<SnapshotLogEntry> repairedLogs = [];
+        
+        for (var entry in logs) {
+          if (toDeleteIds.contains(entry.id)) continue;
+
+          var currentParentId = entry.parentId;
+          while (deadNodesParents.containsKey(currentParentId)) {
+            currentParentId = deadNodesParents[currentParentId];
+          }
+
+          if (currentParentId != entry.parentId) {
+            repairedLogs.add(entry.copyWith(parentId: currentParentId));
+          } else {
+            repairedLogs.add(entry);
+          }
+        }
 
         final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-        updatedTracks[activeTrackName] = TrackState(logs: remaining);
+        updatedTracks[activeTrackName] = TrackState(
+          logs: repairedLogs,
+          originSnapshotId: trackData.originSnapshotId,
+          originTrackName: trackData.originTrackName,
+        );
 
         final updatedMeta = context.remoteMeta.copyWith(
           updatedAt: DateTime.now().toUtc().toIso8601String(),
@@ -2649,15 +2876,13 @@ class PortableVcs {
         );
 
         await _atomicWriteString(
-          File(p.join(context.remoteRepoDir.path, remoteMetaFileName)),
+          File(p.join(context.remoteRepoDir.path, 'meta.json')),
           const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
         );
       }
 
       print('\n✅ ${"Cleanup complete!".green.bold}');
-      if (toDeleteFiles.isNotEmpty) {
-        print('🗑️  Freed storage for ${toDeleteFiles.length} files.');
-      }
+      print('ℹ️  Ancestry links have been repaired to skip deleted nodes.');
     });
   }
 
@@ -4877,14 +5102,16 @@ class PortableVcs {
     print('');
   }
 
-  Future<void> trackCreate(String name) async {
+  Future<void> trackCreate(String name, {String? fromSnapshot}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
     final trackName = name.trim();
+    final activeTrackName = context.remoteMeta.activeTrack;
+    final activeTrack = context.remoteMeta.tracks[activeTrackName];
 
     if (!_isValidTrackName(trackName)) {
-      print('❌ ${"Invalid track name.".red} Use only letters, numbers, "_" and "-".');
+      print('❌ ${"Invalid track name.".red} Use only alphanumeric, "_" or "-".');
       return;
     }
 
@@ -4893,8 +5120,19 @@ class PortableVcs {
       return;
     }
 
+    String? originId = fromSnapshot;
+
+    if (originId == null && activeTrack != null && activeTrack.logs.isNotEmpty) {
+      originId = activeTrack.logs.first.id;
+    }
+
     final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-    updatedTracks[trackName] = TrackState(logs: []);
+
+    updatedTracks[trackName] = TrackState(
+      logs: [], 
+      originSnapshotId: originId,
+      originTrackName: activeTrackName,
+    );
 
     final updatedMeta = context.remoteMeta.copyWith(
       updatedAt: DateTime.now().toUtc().toIso8601String(),
@@ -4904,6 +5142,11 @@ class PortableVcs {
     await _saveRemoteMeta(context, updatedMeta);
 
     print('✅ ${"Track created:".green} $trackName');
+    if (originId != null) {
+      print('ℹ️  ${"Origin:".grey} Branching from $activeTrackName at $originId');
+    } else {
+      print('ℹ️  ${"Origin:".grey} Empty track (Root).');
+    }
   }
 
   Future<void> trackDelete(String name) async {
@@ -6419,7 +6662,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('init')
     ..addCommand('status')
     ..addCommand('update')
-    ..addCommand('changelog')
+    ..addCommand('changelog', ArgParser()..addFlag('list', abbr: 'l', negatable: false))
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
     )
@@ -6503,7 +6746,8 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('track', ArgParser()
       ..addCommand('list')
       ..addCommand('current')
-      ..addCommand('create')
+      ..addCommand('create', ArgParser()
+        ..addOption('from', abbr: 'f', help: 'Snapshot ID to branch from'))
       ..addCommand('switch')
       ..addCommand('delete'),
     )
@@ -6527,6 +6771,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     )
     ..addCommand('benchmark', ArgParser()
       ..addFlag('intensive', abbr: 'i', negatable: false, help: 'Run a longer stress test')
+    )
+    ..addCommand('ancestry', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Track to inspect (defaults to active track)')
     )
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
@@ -6593,7 +6840,6 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'init': await app.init(); break;
       case 'status': await app.status(); break;
       case 'update': await app.update(); break;
-      case 'changelog': app.showChangelog(); break;
       case 'version': app.showVersion(); break;
       case 'ui': await app.launchUI(); break;
       case 'list': await app.listRepos(); break;
@@ -6604,6 +6850,10 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
 
+      case 'changelog':
+        final isList = command?['list'] == true;
+        app.showChangelog(interactive: isList);
+        break;
 
       case 'note':
         final bool isRemove = command!['remove'] as bool;
@@ -6653,6 +6903,11 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
           track: command?['track']?.toString(),
           limit: int.tryParse(command?['limit']?.toString() ?? '15') ?? 15,
         );
+        break;
+
+      case 'ancestry':
+        final track = result.command?['track'] as String?;
+        await app.showAncestry(track: track);
         break;
 
       case 'info':
@@ -6796,8 +7051,14 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
             case 'list': await app.trackList(); break;
             case 'current': await app.trackCurrent(); break;
             case 'create': 
-              if (sub.rest.isEmpty) print('❌ Track name required.');
-              else await app.trackCreate(sub.rest.first); 
+              if (sub.rest.isEmpty) {
+                print('❌ Track name required.');
+              } else {
+                final trackName = sub.rest.first;
+                final fromSnapshot = sub['from'] as String?; 
+                
+                await app.trackCreate(trackName, fromSnapshot: fromSnapshot); 
+              }
               break;
             case 'switch': 
               if (sub.rest.isEmpty) print('❌ Track name required.');
