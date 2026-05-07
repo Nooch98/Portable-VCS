@@ -31,7 +31,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.7-Experimental.1';
+const String vcsBaseVersion = '0.3.7-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -417,6 +417,7 @@ class PortableVcs {
     ## 🛠️ MAINTENANCE
     - `update` Download latest source from GitHub and recompile.
     - `doctor` Run repository diagnostics, health checks and **meta-recovery**.
+      - `--rebuild, -r` Physically scan the .vcs files to reconstruct the meta.json if it is lost.
     - `stats` Show global repo metrics and track breakdown.
     - `benchmark` Performance stress test (IOPS, Crypto & Transfer speed).
       - `-i, --intensive` Run a high-load test with larger data buffers.
@@ -1628,7 +1629,7 @@ class PortableVcs {
     String targetTrackName = track ?? context.remoteMeta.activeTrack;
 
     final sessionFile = File(p.join(context.remoteRepoDir.path, 'session.json'));
-    
+
     if (overrideSourcePath != null) {
       workingDir = Directory(overrideSourcePath);
     } else if (sessionFile.existsSync()) {
@@ -1725,11 +1726,7 @@ class PortableVcs {
       if (amend) {
         parentId = trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId;
       } else {
-        if (trackData.logs.isNotEmpty) {
-          parentId = trackData.logs.first.id;
-        } else {
-          parentId = trackData.originSnapshotId;
-        }
+        parentId = trackData.logs.isNotEmpty ? trackData.logs.first.id : trackData.originSnapshotId;
       }
 
       if (amend) {
@@ -1749,6 +1746,8 @@ class PortableVcs {
         author: author,
         fingerprint: currentFingerprint,
         password: finalPassword,
+        trackName: targetTrackName,
+        parentId: parentId,
       );
 
       final snapshotId = DateTime.now().millisecondsSinceEpoch.toString();
@@ -2428,7 +2427,7 @@ class PortableVcs {
     print('');
   }
 
-  Future<void> doctor() async {
+  Future<void> doctor({bool rebuildMode = false}) async {
     print('\n🩺 ${"Repository diagnostics".cyan}');
     print('═' * 60);
 
@@ -2519,15 +2518,81 @@ class PortableVcs {
         } else {
           final metaFile = File(p.join(remoteRepoDir.path, remoteMetaFileName));
           final backupFile = File('${metaFile.path}.bak');
+          final snapshotsDir = Directory(p.join(remoteRepoDir.path, 'snapshots'));
           
           RepoMeta? meta;
           bool restoredFromBackup = false;
+          bool rebuildSuccess = false;
 
-          if (!metaFile.existsSync()) {
-            if (backupFile.existsSync()) {
-              print('  ${"🔧".magenta} Main metadata missing. Attempting rescue from backup...');
+          if (!metaFile.existsSync() || rebuildMode) {
+            if (rebuildMode) {
+              print('  ${"🔧".magenta} Recovery Mode: Physical scan of ${snapshotsDir.path}...');
+              
+              if (snapshotsDir.existsSync()) {
+                final files = snapshotsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.vcs'));
+                Map<String, List<SnapshotLogEntry>> recoveredTracks = {};
+
+                for (var file in files) {
+                  final content = await file.readAsString();
+                  if (content.contains('---VCS_DATA_START---')) {
+                    final headerLine = content.split('\n').first;
+                    final trackMatch = RegExp(r'Track: (.*?) \|').firstMatch(headerLine);
+                    final parentMatch = RegExp(r'Parent: (.*)').firstMatch(headerLine);
+
+                    if (trackMatch != null) {
+                      final trackName = trackMatch.group(1)!;
+                      final parentId = parentMatch?.group(1);
+                      final snapshotId = p.basenameWithoutExtension(file.path);
+
+                      final entry = SnapshotLogEntry(
+                        id: snapshotId,
+                        message: "[Recovered by Doctor]",
+                        author: "System",
+                        createdAt: DateTime.now().toUtc().toIso8601String(),
+                        fileName: p.basename(file.path),
+                        hash: (await sha256.bind(file.openRead()).first).toString(),
+                        parentId: parentId == "null" ? null : parentId,
+                        changeSummary: ["[Reconstructed]"],
+                      );
+
+                      recoveredTracks.putIfAbsent(trackName, () => []).add(entry);
+                    }
+                  }
+                }
+
+                if (recoveredTracks.isNotEmpty) {
+                  final inferredProjectName = p.basename(remoteRepoDir.path);
+                  final now = DateTime.now().toUtc().toIso8601String();
+                  final finalTracks = recoveredTracks.map((name, logs) {
+                    logs.sort((a, b) => b.id.compareTo(a.id)); 
+                    return MapEntry(name, TrackState(
+                      logs: logs,
+                      originTrackName: name == 'main' ? null : 'main',
+                    ));
+                  });
+
+                  meta = RepoMeta(
+                    repoId: repoId,
+                    projectName: inferredProjectName, 
+                    createdAt: now,
+                    updatedAt: now,
+                    formatVersion: 4,
+                    activeTrack: "main",
+                    tracks: finalTracks,
+                    tags: {},
+                  );
+                  
+                  await metaFile.writeAsString(
+                    const JsonEncoder.withIndent('  ').convert(meta.toJson()), 
+                    flush: true
+                  );
+                  rebuildSuccess = true;
+                }
+              }
+            } else if (backupFile.existsSync()) {
+              print('  ${"🔧".magenta} Main metadata missing. Restoring from backup...');
               meta = RepoMeta.fromJson(jsonDecode(await backupFile.readAsString()));
-              await metaFile.writeAsString(await backupFile.readAsString(), flush: true);
+              await metaFile.writeAsString(jsonEncode(meta), flush: true);
               restoredFromBackup = true;
             }
           } else {
@@ -2535,98 +2600,71 @@ class PortableVcs {
               meta = RepoMeta.fromJson(jsonDecode(await metaFile.readAsString()));
             } catch (e) {
               if (backupFile.existsSync()) {
-                print('  ${"🔧".magenta} Main metadata corrupt. Attempting rescue from backup...');
+                print('  ${"🔧".magenta} Primary metadata corrupt. Rescuing from backup...');
                 meta = RepoMeta.fromJson(jsonDecode(await backupFile.readAsString()));
-                await metaFile.writeAsString(await backupFile.readAsString(), flush: true);
+                await metaFile.writeAsString(jsonEncode(meta), flush: true);
                 restoredFromBackup = true;
               }
             }
           }
 
           if (meta == null) {
-            check(false, 'Metadata availability', details: 'Critical: Meta file and backup are missing or corrupt.');
+            check(false, 'Metadata availability', details: 'Critical: Meta, backup and rebuild failed.');
           } else {
-            check(true, restoredFromBackup ? 'Metadata restored from backup' : 'Metadata sync', 
-              details: restoredFromBackup ? 'Disaster recovery successful.' : 'Primary meta file is healthy.');
+            String metaLabel = 'Metadata healthy';
+            if (rebuildSuccess) metaLabel = 'Metadata rebuilt from physical files';
+            if (restoredFromBackup) metaLabel = 'Metadata restored from backup';
+            
+            check(true, metaLabel, details: '${meta.tracks.length} tracks registered.');
 
             final Map<String, String?> expectedHashes = {};
-            int totalSnapshots = 0;
-
             for (var track in meta.tracks.values) {
               for (var entry in track.logs) {
                 expectedHashes[entry.fileName] = entry.hash;
-                totalSnapshots++;
               }
             }
 
-            check(true, 'Track Consistency', 
-              details: '$totalSnapshots snapshots across ${meta.tracks.length} tracks.');
-
-            final snapshotsDir = Directory(p.join(remoteRepoDir.path, 'snapshots'));
             if (snapshotsDir.existsSync()) {
               final List<File> physicalFiles = snapshotsDir.listSync().whereType<File>().toList();
-              
               int corruptCount = 0;
               int verifiedCount = 0;
-              int legacyCount = 0;
 
               for (var file in physicalFiles) {
                 final name = p.basename(file.path);
-                if (name.startsWith('.tmp_') || name == 'vcs_aliases.json') continue;
+                if (name.startsWith('.tmp_') || !name.endsWith('.vcs')) continue;
 
                 if (expectedHashes.containsKey(name)) {
                   final savedHash = expectedHashes[name];
                   if (savedHash != null) {
-                    final bytes = await file.readAsBytes();
-                    final currentHash = sha256.convert(bytes).toString();
-                    
+                    final currentHash = (await sha256.bind(file.openRead()).first).toString();
                     if (currentHash != savedHash) {
                       corruptCount++;
                       print('  ${"❌".red} Integrity fail: ${name.grey} (Hash mismatch)');
                     } else {
                       verifiedCount++;
                     }
-                  } else {
-                    legacyCount++;
                   }
                 }
               }
 
-              if (corruptCount > 0) {
-                check(false, 'Data Content Health', details: 'Found $corruptCount corrupted snapshot files!');
-              } else {
-                String healthDetails = 'Verified $verifiedCount files.';
-                if (legacyCount > 0) healthDetails += ' ($legacyCount legacy files skipped check).';
-                check(true, 'Data Content Health', details: healthDetails);
-              }
-
-              final tempFiles = physicalFiles.where((f) => p.basename(f.path).startsWith('.tmp_')).toList();
-              check(tempFiles.isEmpty, 'Clean environment', 
-                details: tempFiles.isEmpty ? null : 'Found ${tempFiles.length} interrupted transaction files.');
+              check(corruptCount == 0, 'Data Content Health', 
+                details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount files.');
 
               final orphans = physicalFiles.where((f) {
                 final name = p.basename(f.path);
-                return !expectedHashes.containsKey(name) && !name.startsWith('.tmp_') && name != 'vcs_aliases.json';
+                return !expectedHashes.containsKey(name) && name.endsWith('.vcs');
               }).toList();
 
               if (orphans.isNotEmpty) {
-                check(false, 'Storage optimization', 
-                  details: 'Found ${orphans.length} orphan files (garbage).');
-                
-                print('      ${"Potential garbage files:".grey}');
-                for (var o in orphans) {
-                  final size = (o.lengthSync() / 1024).toStringAsFixed(1);
-                  final name = p.basename(o.path);
-                  print('      - ${name.grey} ($size KB)');
-                }
+                check(false, 'Storage optimization', details: 'Found ${orphans.length} unlinked (orphan) snapshots.');
               } else {
-                check(true, 'Storage optimized', details: 'No unlinked snapshots found.');
+                check(true, 'Storage optimized', details: 'All physical files are linked to metadata.');
               }
             }
           }
         }
       } catch (e) {
-        check(false, 'Critical Error', details: e.toString());
+        check(false, 'Critical Diagnosis Error', details: e.toString());
       }
     }
 
@@ -2638,9 +2676,9 @@ class PortableVcs {
     if (warnCount == 0) {
       print('\n✨ ${"Everything looks perfect. Your portable vault is healthy.".green.bold}');
     } else {
-      print('\n⚠️  ${"Diagnostics found issues. Review the warnings above.".yellow.bold}');
+      print('\n⚠️  ${"Diagnostics found issues. Review the logs above.".yellow.bold}');
+      if (rebuildMode) print('ℹ️  ${"Recovery attempted. Check if your tracks are back.".blue}');
     }
-    print('');
   }
 
   Future<void> stats() async {
@@ -2953,12 +2991,22 @@ class PortableVcs {
 
     if (entry.hash != null) {
       stdout.write('🛡️  Verifying snapshot integrity... ');
-      final bytes = await snapshotFile.readAsBytes();
-      final currentHash = sha256.convert(bytes).toString();
+
+      final fileBytes = await snapshotFile.readAsBytes();
+      final fileString = utf8.decode(fileBytes, allowMalformed: true);
+      
+      String currentHash;
+      if (fileString.contains('---VCS_DATA_START---')) {
+        final parts = fileString.split('---VCS_DATA_START---');
+        final jsonData = parts[1].trim();
+        currentHash = sha256.convert(utf8.encode(jsonData)).toString();
+      } else {
+        currentHash = sha256.convert(fileBytes).toString();
+      }
 
       if (currentHash != entry.hash) {
         print('\n\n❌ ${'INTEGRITY CHECK FAILED'.red.bold}');
-        print('The file on the USB has been corrupted or tampered with.');
+        print('The encrypted blob has been corrupted or tampered with.');
         print('Expected: ${entry.hash?.grey}');
         print('Actual:   ${currentHash.red}');
         print('\n🚫 Pull aborted to prevent restoring corrupted data.');
@@ -3004,7 +3052,6 @@ class PortableVcs {
     try {
       final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
       if (snapshot == null) {
-        print('❌ Failed to read or decrypt snapshot data. Check your password.');
         return;
       }
 
@@ -3923,27 +3970,21 @@ class PortableVcs {
     required Uint8List zipBytes,
     required String message,
     required String password,
+    required String trackName,
+    String? parentId,
     Map<String, String>? fingerprint,
     String? author,
   }) async {
     final random = Random.secure();
-    final salt = Uint8List.fromList(
-      List<int>.generate(16, (_) => random.nextInt(256)),
-    );
-    final nonce = Uint8List.fromList(
-      List<int>.generate(12, (_) => random.nextInt(256)),
-    );
+    final salt = Uint8List.fromList(List<int>.generate(16, (_) => random.nextInt(256)));
+    final nonce = Uint8List.fromList(List<int>.generate(12, (_) => random.nextInt(256)));
 
     final algorithm = crypto_alg.Pbkdf2(
       macAlgorithm: crypto_alg.Hmac.sha256(),
       iterations: 120000,
       bits: 256,
     );
-
-    final secretKey = await algorithm.deriveKeyFromPassword(
-      password: password,
-      nonce: salt,
-    );
+    final secretKey = await algorithm.deriveKeyFromPassword(password: password, nonce: salt);
 
     final payload = {
       'format_version': 1,
@@ -3956,12 +3997,7 @@ class PortableVcs {
 
     final plainBytes = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
     final aes = crypto_alg.AesGcm.with256bits();
-
-    final secretBox = await aes.encrypt(
-      plainBytes,
-      secretKey: secretKey,
-      nonce: nonce,
-    );
+    final secretBox = await aes.encrypt(plainBytes, secretKey: secretKey, nonce: nonce);
 
     final wrapper = {
       'alg': 'AES-256-GCM',
@@ -3973,7 +4009,18 @@ class PortableVcs {
       'mac_b64': base64Encode(secretBox.mac.bytes),
     };
 
-    return Uint8List.fromList(utf8.encode(jsonEncode(wrapper)));
+    final recoveryHeader = {
+      'vcs_recovery': '0.3.7',
+      'track': trackName,
+      'parent': parentId,
+      'author': author,
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    final fullContent = 
+        jsonEncode(recoveryHeader) + "\n---VCS_DATA_START---\n" + jsonEncode(wrapper);
+
+    return Uint8List.fromList(utf8.encode(fullContent));
   }
 
   Future<DecryptedSnapshot?> readSnapshot(
@@ -4020,7 +4067,16 @@ class PortableVcs {
     }
 
     try {
-      final raw = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final fileContent = await file.readAsString();
+      Map<String, dynamic> raw;
+
+      if (fileContent.contains('---VCS_DATA_START---')) {
+        final parts = fileContent.split('---VCS_DATA_START---');
+        final jsonString = parts.sublist(1).join('---VCS_DATA_START---').trim();
+        raw = jsonDecode(jsonString) as Map<String, dynamic>;
+      } else {
+        raw = jsonDecode(fileContent.trim()) as Map<String, dynamic>;
+      }
 
       final salt = base64Decode(raw['salt_b64'] as String);
       final nonce = base64Decode(raw['nonce_b64'] as String);
@@ -6213,7 +6269,9 @@ class PortableVcs {
         zipBytes: dummyZip,
         message: "Benchmark test",
         password: "password-de-prueba-muy-larga-123",
-        author: "VCS-Benchmark"
+        author: "VCS-Benchmark",
+        trackName: "benchmark-track",
+        parentId: "bench-origin",
       );
       cryptoWatch.stop();
       final cryptoResult = cryptoWatch.elapsedMilliseconds;
@@ -6702,7 +6760,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addFlag('dry-run', negatable: false, help: 'Preview changes without modifying files'),
     )
     ..addCommand('list')
-    ..addCommand('doctor')
+    ..addCommand('doctor', ArgParser()
+      ..addFlag('rebuild', abbr: 'r', negatable: false, help: 'Physically scan the .vcs files to reconstruct the meta.json if it is lost.',)
+    )
     ..addCommand('stats')
     ..addCommand('summary', ArgParser()
       ..addOption('track', abbr: 't', help: 'Get summary from a specific track')
@@ -6843,12 +6903,16 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'version': app.showVersion(); break;
       case 'ui': await app.launchUI(); break;
       case 'list': await app.listRepos(); break;
-      case 'doctor': await app.doctor(); break;
       case 'stats': await app.stats(); break;
       case 'clear-history': await app.clearHistory(); break;
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'doctor':
+        final rebuild = result.command?['rebuild'] == true;
+        await app.doctor(rebuildMode: rebuild);
+        break;
 
       case 'changelog':
         final isList = command?['list'] == true;
