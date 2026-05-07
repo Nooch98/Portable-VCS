@@ -1,5 +1,23 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.7-Experimental.2': '''
+  ### 🩺 THE DOCTOR'S UPGRADE (HARDWARE RESILIENCE)
+  I have transformed the `doctor` command from a simple metadata checker into a **Full Recovery & Integrity Engine**. This update focuses on surviving physical hardware failure and data corruption.
+
+  - **Integrity Deep Scan (SHA-256)**: The system now performs a physical-to-metadata cross-check. It reads every encrypted blob on the USB and verifies its SHA-256 hash against the index to detect "bit-rot" or drive failure.
+  - **Recovery Mode (`--rebuild`)**: A new disaster recovery tool. If your `meta.json` is lost or corrupted, the VCS can now scan the USB drive physically and "resurrect" the repository by reading the new plain-text headers.
+  - **Redundant Flat Headers**: Every `.vcs` file now stores its `trackName` and `parentId` in a non-encrypted header. This allows the system to be self-describing even without a central database.
+
+  ### 🏗️ MODEL REFINEMENT & STABILITY
+  - **Format Version 4**: Updated the `RepoMeta` schema to support more robust tracking and future-proof the recovery logic.
+  - **Enhanced Snapshot Logs**: Added `changeSummary` requirements to the `SnapshotLogEntry` model to ensure traceability of reconstructed data.
+  - **Strict Validation**: The engine now enforces required parameters during reconstruction to prevent "orphan" snapshots that could break the lineage tree.
+
+  ### 🐞 FIXES & UX
+  - **Parameter Guard**: Fixed a missing argument bug in the snapshot creation logic that caused failures in recovery scenarios.
+  - **Improved Diagnostics**: The `doctor` report now clearly distinguishes between Local Project, Drive Identity, and Remote Repository Integrity.
+    ''',
+    
     '0.3.7-Experimental.1': '''
   ### 🌳 ANCESTRY & LINEAGE SYSTEM (THE GENEALOGY UPDATE)
   I have transformed the flat snapshot history into a **Directed Acyclic Graph (DAG)**. The VCS now understands the "biological" relationship between every version.
