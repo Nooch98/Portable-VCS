@@ -2991,22 +2991,12 @@ class PortableVcs {
 
     if (entry.hash != null) {
       stdout.write('🛡️  Verifying snapshot integrity... ');
-
-      final fileBytes = await snapshotFile.readAsBytes();
-      final fileString = utf8.decode(fileBytes, allowMalformed: true);
-      
-      String currentHash;
-      if (fileString.contains('---VCS_DATA_START---')) {
-        final parts = fileString.split('---VCS_DATA_START---');
-        final jsonData = parts[1].trim();
-        currentHash = sha256.convert(utf8.encode(jsonData)).toString();
-      } else {
-        currentHash = sha256.convert(fileBytes).toString();
-      }
+      final bytes = await snapshotFile.readAsBytes();
+      final currentHash = sha256.convert(bytes).toString();
 
       if (currentHash != entry.hash) {
         print('\n\n❌ ${'INTEGRITY CHECK FAILED'.red.bold}');
-        print('The encrypted blob has been corrupted or tampered with.');
+        print('The file on the USB has been corrupted or tampered with.');
         print('Expected: ${entry.hash?.grey}');
         print('Actual:   ${currentHash.red}');
         print('\n🚫 Pull aborted to prevent restoring corrupted data.');
@@ -3052,6 +3042,7 @@ class PortableVcs {
     try {
       final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
       if (snapshot == null) {
+        print('❌ Failed to read or decrypt snapshot data. Check your password.');
         return;
       }
 
