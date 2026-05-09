@@ -19,6 +19,7 @@ import 'package:vcs/models/diff_line.dart';
 import 'package:vcs/models/file_change.dart';
 import 'package:vcs/models/git_check.dart';
 import 'package:vcs/models/ignore_rule.dart';
+import 'package:vcs/models/merge_report.dart';
 import 'package:vcs/models/range.dart';
 import 'package:vcs/models/repo_context.dart';
 import 'package:vcs/models/repo_meta.dart';
@@ -31,7 +32,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.7-Experimental.2';
+const String vcsBaseVersion = '0.3.8-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -1078,6 +1079,18 @@ class PortableVcs {
     print('\n🔍 ${"WORKING TREE STATUS".black.onCyan}');
     print('${"On track:".yellow} ${targetTrackName.magenta.bold}');
 
+    if (trackData != null && trackData.logs.isNotEmpty) {
+    final lastEntry = trackData.logs.first;
+    final physicalFile = File(p.join(context.remoteRepoDir.path, 'snapshots', lastEntry.fileName));
+    
+    if (!physicalFile.existsSync()) {
+      print('\n🚨 ${"CRITICAL ERROR: REMOTE DESYNC".white.onRed}');
+      print('  The last snapshot (${lastEntry.id.yellow}) is missing physically.');
+      print('  ${"Please run 'vcs doctor --rebuild' to attempt recovery.".red}');
+      return;
+    }
+  }
+
     final current = await buildFingerprint(_cwd);
 
     if (trackData == null || trackData.logs.isEmpty) {
@@ -1839,16 +1852,23 @@ class PortableVcs {
     try {
       await temp.writeAsString(content, flush: true);
 
-      if (await temp.length() > 0) {
-        try {
-          await temp.rename(file.path);
-        } catch (_) {
-          await temp.copy(file.path);
-          await temp.delete();
+      final tempsize  = await temp.length();
+      if (tempsize > 0) {
+        if (await file.exists()) {
+          final oldSize = await file.length();
+          if (tempsize < oldSize * 0.5 && oldSize > 1024) {
+            print('⚠ ${"Warning: New metadata is 50% smaller than previous. Possible data loss?".yellow}');
+          }
         }
-      } else {
-        throw Exception("Temporal file is empty, aborting write to prevent corruption.");
       }
+
+      try {
+        await temp.rename(file.path);
+      } catch (_) {
+        await temp.copy(file.path);
+        await temp.delete();
+      }
+
     } catch (e) {
       print('❌ ${"Critical Error saving metadata:".red} $e');
     }
@@ -2527,7 +2547,6 @@ class PortableVcs {
           if (!metaFile.existsSync() || rebuildMode) {
             if (rebuildMode) {
               print('  ${"🔧".magenta} Recovery Mode: Physical scan of ${snapshotsDir.path}...');
-              
               if (snapshotsDir.existsSync()) {
                 final files = snapshotsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.vcs'));
                 Map<String, List<SnapshotLogEntry>> recoveredTracks = {};
@@ -2554,7 +2573,6 @@ class PortableVcs {
                         parentId: parentId == "null" ? null : parentId,
                         changeSummary: ["[Reconstructed]"],
                       );
-
                       recoveredTracks.putIfAbsent(trackName, () => []).add(entry);
                     }
                   }
@@ -2565,10 +2583,7 @@ class PortableVcs {
                   final now = DateTime.now().toUtc().toIso8601String();
                   final finalTracks = recoveredTracks.map((name, logs) {
                     logs.sort((a, b) => b.id.compareTo(a.id)); 
-                    return MapEntry(name, TrackState(
-                      logs: logs,
-                      originTrackName: name == 'main' ? null : 'main',
-                    ));
+                    return MapEntry(name, TrackState(logs: logs, originTrackName: name == 'main' ? null : 'main'));
                   });
 
                   meta = RepoMeta(
@@ -2581,11 +2596,7 @@ class PortableVcs {
                     tracks: finalTracks,
                     tags: {},
                   );
-                  
-                  await metaFile.writeAsString(
-                    const JsonEncoder.withIndent('  ').convert(meta.toJson()), 
-                    flush: true
-                  );
+                  await metaFile.writeAsString(const JsonEncoder.withIndent('  ').convert(meta.toJson()), flush: true);
                   rebuildSuccess = true;
                 }
               }
@@ -2614,18 +2625,20 @@ class PortableVcs {
             String metaLabel = 'Metadata healthy';
             if (rebuildSuccess) metaLabel = 'Metadata rebuilt from physical files';
             if (restoredFromBackup) metaLabel = 'Metadata restored from backup';
-            
             check(true, metaLabel, details: '${meta.tracks.length} tracks registered.');
 
             final Map<String, String?> expectedHashes = {};
+            final allLogIds = <String>{};
             for (var track in meta.tracks.values) {
               for (var entry in track.logs) {
                 expectedHashes[entry.fileName] = entry.hash;
+                allLogIds.add(entry.id);
               }
             }
 
             if (snapshotsDir.existsSync()) {
               final List<File> physicalFiles = snapshotsDir.listSync().whereType<File>().toList();
+              final physicalFileNames = physicalFiles.map((f) => p.basename(f.path)).toSet();
               int corruptCount = 0;
               int verifiedCount = 0;
 
@@ -2648,7 +2661,26 @@ class PortableVcs {
               }
 
               check(corruptCount == 0, 'Data Content Health', 
-                details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount files.');
+                details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount snapshots.');
+
+              if (meta.tags.isNotEmpty) {
+                int abandonedTags = 0;
+                meta.tags.forEach((tagName, targetId) {
+                  final expectedFile = '$targetId.vcs';
+                  final inLogs = allLogIds.contains(targetId);
+                  final inDisk = physicalFileNames.contains(expectedFile);
+
+                  if (!inLogs || !inDisk) {
+                    abandonedTags++;
+                    String reason = !inLogs ? 'Missing in tracks' : 'Physical file missing';
+                    print('  ${"⚠".yellow} Tag ${tagName.cyan} is abandoned ($reason)');
+                  }
+                });
+                check(abandonedTags == 0, 'Tags consistency', 
+                  details: abandonedTags > 0 
+                    ? 'Found $abandonedTags abandoned tags. Clean with "prune --garbage".' 
+                    : 'All ${meta.tags.length} tags are valid.');
+              }
 
               final orphans = physicalFiles.where((f) {
                 final name = p.basename(f.path);
@@ -2658,7 +2690,7 @@ class PortableVcs {
               if (orphans.isNotEmpty) {
                 check(false, 'Storage optimization', details: 'Found ${orphans.length} unlinked (orphan) snapshots.');
               } else {
-                check(true, 'Storage optimized', details: 'All physical files are linked to metadata.');
+                check(true, 'Storage optimized', details: 'No orphan files detected.');
               }
             }
           }
@@ -2756,6 +2788,15 @@ class PortableVcs {
       print('  ${"ℹ Tip: Run 'vcs doctor' to see details.".grey}');
     }
 
+    print('\n${"TAGS & MILESTONES".bold.cyan}');
+    if (context.remoteMeta.tags.isEmpty) {
+      print('  ${"No tags defined.".grey}');
+    } else {
+      context.remoteMeta.tags.forEach((tagName, targetId) {
+        print('  ${"🏷️  ${tagName.padRight(15)}".yellow} → ${targetId.grey}');
+      });
+    }
+
     print('\n${"TRACKS BREAKDOWN".bold.cyan}');
     context.remoteMeta.tracks.forEach((name, state) {
       final isActive = name == context.remoteMeta.activeTrack;
@@ -2764,6 +2805,15 @@ class PortableVcs {
       
       print('$prefix${name.padRight(18)} ${state.logs.length.toString().padLeft(3)} logs | ${size.padLeft(10)}');
     });
+
+    print('\n${"HEALTH STATUS".bold.cyan}');
+    bool isHealthy = orphanCount == 0 && (verifiedWithHash == totalLogs);
+    if (isHealthy) {
+      print('  ${"Perfectly Synchronized".green}');
+    } else {
+      if (orphanCount > 0) print('  ${"⚠ Found $orphanCount orphan files".yellow}');
+      if (verifiedWithHash < totalLogs) print('  ${"⚠ Some snapshots lack integrity hashes".yellow}');
+    }
 
     print('\n${"TIMELINE".bold.cyan}');
     final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
@@ -2796,23 +2846,28 @@ class PortableVcs {
 
     final toDeleteFiles = <File>[];
     final toDeleteFromLogs = <SnapshotLogEntry>[];
+    final tagsToClean = <String>[];
+    final allTrackLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
+    final allReferencedIds = allTrackLogs.map((e) => e.id).toSet();
+    final allReferencedFiles = allTrackLogs.map((e) => e.fileName).toSet();
 
-    if (garbage && snapshotsDir.existsSync()) {
-      print('🔍 ${"Scanning for garbage files...".grey}');
-      final referencedFiles = <String>{};
-      for (final t in context.remoteMeta.tracks.values) {
-        for (final entry in t.logs) {
-          referencedFiles.add(entry.fileName);
+    if (garbage) {
+      if (snapshotsDir.existsSync()) {
+        print('🔍 ${"Scanning for garbage files...".grey}');
+        final physicalFiles = snapshotsDir.listSync().whereType<File>();
+        for (final file in physicalFiles) {
+          final name = p.basename(file.path);
+          if (name.startsWith('.tmp_') || !allReferencedFiles.contains(name)) {
+            toDeleteFiles.add(file);
+          }
         }
       }
 
-      final physicalFiles = snapshotsDir.listSync().whereType<File>();
-      for (final file in physicalFiles) {
-        final name = p.basename(file.path);
-        if (name.startsWith('.tmp_') || !referencedFiles.contains(name)) {
-          toDeleteFiles.add(file);
+      context.remoteMeta.tags.forEach((tagName, targetId) {
+        if (!allReferencedIds.contains(targetId)) {
+          tagsToClean.add(tagName);
         }
-      }
+      });
     }
 
     if (snapshotId != null) {
@@ -2853,23 +2908,24 @@ class PortableVcs {
       }
     }
 
-    if (toDeleteFiles.isEmpty && toDeleteFromLogs.isEmpty) {
+    for (var entry in toDeleteFromLogs) {
+      final f = File(p.join(snapshotsDir.path, entry.fileName));
+      if (f.existsSync()) {
+        if (!toDeleteFiles.any((file) => file.path == f.path)) {
+          toDeleteFiles.add(f);
+        }
+      }
+    }
+
+    if (toDeleteFiles.isEmpty && toDeleteFromLogs.isEmpty && tagsToClean.isEmpty) {
       print('✨ ${"Everything is clean. Nothing to prune.".green}');
       return;
     }
 
-    for (var entry in toDeleteFromLogs) {
-      final f = File(p.join(snapshotsDir.path, entry.fileName));
-      if (f.existsSync()) toDeleteFiles.add(f);
-    }
-
-    print('\n${"PREPARING CLEANUP (Ancestry-Safe):".bold.cyan}');
-    if (toDeleteFromLogs.isNotEmpty) {
-      print('📦 Snapshots to remove: ${toDeleteFromLogs.length}');
-    }
-    if (toDeleteFiles.isNotEmpty) {
-      print('🗑️  Physical files to delete: ${toDeleteFiles.length}');
-    }
+    print('\n${"PREPARING CLEANUP:".bold.cyan}');
+    if (toDeleteFromLogs.isNotEmpty) print('📦 Snapshots to remove: ${toDeleteFromLogs.length}');
+    if (toDeleteFiles.isNotEmpty) print('🗑️  Physical files to delete: ${toDeleteFiles.length}');
+    if (tagsToClean.isNotEmpty) print('🏷️  Orphan tags to remove: ${tagsToClean.length}');
 
     stdout.write('\nProceed? (y/N): ');
     if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') return;
@@ -2879,48 +2935,44 @@ class PortableVcs {
         try { if (await file.exists()) await file.delete(); } catch (_) {}
       }
 
+      final updatedTags = Map<String, String>.from(context.remoteMeta.tags);
+      final toDeleteIds = toDeleteFromLogs.map((e) => e.id).toSet();
+
+      updatedTags.removeWhere((name, id) => tagsToClean.contains(name) || toDeleteIds.contains(id));
+
+      List<SnapshotLogEntry> repairedLogs = List.from(logs);
       if (toDeleteFromLogs.isNotEmpty) {
-        final toDeleteIds = toDeleteFromLogs.map((e) => e.id).toSet();
-
         final deadNodesParents = { for (var e in toDeleteFromLogs) e.id : e.parentId };
-
-        List<SnapshotLogEntry> repairedLogs = [];
-        
+        repairedLogs = [];
         for (var entry in logs) {
           if (toDeleteIds.contains(entry.id)) continue;
-
           var currentParentId = entry.parentId;
           while (deadNodesParents.containsKey(currentParentId)) {
             currentParentId = deadNodesParents[currentParentId];
           }
-
-          if (currentParentId != entry.parentId) {
-            repairedLogs.add(entry.copyWith(parentId: currentParentId));
-          } else {
-            repairedLogs.add(entry);
-          }
+          repairedLogs.add(entry.copyWith(parentId: currentParentId));
         }
-
-        final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-        updatedTracks[activeTrackName] = TrackState(
-          logs: repairedLogs,
-          originSnapshotId: trackData.originSnapshotId,
-          originTrackName: trackData.originTrackName,
-        );
-
-        final updatedMeta = context.remoteMeta.copyWith(
-          updatedAt: DateTime.now().toUtc().toIso8601String(),
-          tracks: updatedTracks,
-        );
-
-        await _atomicWriteString(
-          File(p.join(context.remoteRepoDir.path, 'meta.json')),
-          const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
-        );
       }
 
+      final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+      updatedTracks[activeTrackName] = TrackState(
+        logs: repairedLogs,
+        originSnapshotId: trackData.originSnapshotId,
+        originTrackName: trackData.originTrackName,
+      );
+
+      final updatedMeta = context.remoteMeta.copyWith(
+        updatedAt: DateTime.now().toUtc().toIso8601String(),
+        tracks: updatedTracks,
+        tags: updatedTags,
+      );
+
+      await _atomicWriteString(
+        File(p.join(context.remoteRepoDir.path, 'meta.json')),
+        const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()),
+      );
+
       print('\n✅ ${"Cleanup complete!".green.bold}');
-      print('ℹ️  Ancestry links have been repaired to skip deleted nodes.');
     });
   }
 
@@ -3549,6 +3601,243 @@ class PortableVcs {
     }
 
     return files;
+  }
+
+  MergeReport analyzeMerge({
+    required Map<String, String> baseFingerprint,
+    required Map<String, String> localFingerprint,
+    required Map<String, String> remoteFingerprint,
+    required String baseId,
+    required String targetId,
+  }) {
+    final localChanges = diffFingerprints(baseFingerprint, localFingerprint);
+    final remoteChanges = diffFingerprints(baseFingerprint, remoteFingerprint);
+
+    final localMap = {for (var c in localChanges) c.path: c.kind};
+    final remoteMap = {for (var c in remoteChanges) c.path: c.kind};
+
+    final conflicts = <MergeConflict>[];
+    final safeFiles = <String>[];
+
+    final allChangedPaths = {...localMap.keys, ...remoteMap.keys};
+
+    for (final path in allChangedPaths) {
+      final hasLocalChange = localMap.containsKey(path);
+      final hasRemoteChange = remoteMap.containsKey(path);
+
+      if (hasLocalChange && hasRemoteChange) {
+        if (localFingerprint[path] == remoteFingerprint[path]) {
+          safeFiles.add(path);
+        } else {
+          conflicts.add(MergeConflict(
+            filePath: path,
+            conflictedScopes: [],
+          ));
+        }
+      } 
+      else {
+        safeFiles.add(path);
+      }
+    }
+
+    return MergeReport(
+      baseSnapshotId: baseId,
+      targetSnapshotId: targetId,
+      safeFiles: safeFiles,
+      conflicts: conflicts,
+    );
+  }
+
+  Future<void> mergeCheck(String targetTrackName, {String? password}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final currentTrack = context.remoteMeta.activeTrack;
+    
+    if (currentTrack == targetTrackName) {
+      print('ℹ️  You are already on track "$targetTrackName". Nothing to merge.');
+      return;
+    }
+
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null || finalPassword.isEmpty) {
+      print('❌ Password required for merge analysis.');
+      return;
+    }
+
+    print('🔍 Analyzing merge: ${currentTrack.cyan} ← ${targetTrackName.yellow}');
+
+    final baseSnapshotId = findCommonAncestor(
+      context.remoteMeta, 
+      currentTrack, 
+      targetTrackName
+    );
+
+    if (baseSnapshotId == null) {
+      print('❌ ${'No common ancestor found'.red}. Tracks have diverged completely.');
+      return;
+    }
+
+    final localSnapshotId = context.remoteMeta.tracks[currentTrack]!.logs.first.id;
+    final remoteSnapshotId = context.remoteMeta.tracks[targetTrackName]!.logs.first.id;
+
+    final baseFingerprint = await _getSnapshotFingerprint(context, baseSnapshotId, finalPassword);
+    final localFingerprint = await _getSnapshotFingerprint(context, localSnapshotId, finalPassword);
+    final remoteFingerprint = await _getSnapshotFingerprint(context, remoteSnapshotId, finalPassword);
+
+    final report = analyzeMerge(
+      baseFingerprint: baseFingerprint,
+      localFingerprint: localFingerprint,
+      remoteFingerprint: remoteFingerprint,
+      baseId: baseSnapshotId,
+      targetId: remoteSnapshotId,
+    );
+
+    await _displayMergeReport(context, report, targetTrackName, finalPassword);
+  }
+
+  String? findCommonAncestor(RepoMeta meta, String trackA, String trackB) {
+    final dataA = meta.tracks[trackA];
+    final dataB = meta.tracks[trackB];
+    if (dataA == null || dataB == null) return null;
+    final historyA = dataA.logs.map((e) => e.id).toSet();
+
+    for (final entryB in dataB.logs) {
+      if (historyA.contains(entryB.id)) {
+        return entryB.id;
+      }
+    }
+
+    return null;
+  }
+
+  Future<Map<String, String>> _getSnapshotFingerprint(
+    RepoContext context, 
+    String id, 
+    String password
+  ) async {
+    SnapshotLogEntry? entry;
+    for (final track in context.remoteMeta.tracks.values) {
+      for (final log in track.logs) {
+        if (log.id == id) {
+          entry = log;
+          break;
+        }
+      }
+      if (entry != null) break;
+    }
+
+    if (entry == null) return {};
+
+    final snap = await readSnapshotByMeta(
+      remoteRepoDir: context.remoteRepoDir, 
+      remoteMeta: context.remoteMeta, 
+      snapshotId: id, 
+      password: password,
+      silent: true
+    );
+
+    return snap?.fingerprint ?? {};
+  }
+
+  Future<void> _displayMergeReport(
+    RepoContext context, 
+    MergeReport report, 
+    String targetTrack, 
+    String password,
+  ) async {
+    print('\n════════════════════════════════════════════════════════════');
+    print(' 🛡️  PRE-MERGE ANALYSIS REPORT (Read-Only)');
+    print('════════════════════════════════════════════════════════════\n');
+
+    print('${'Common Base:'.padRight(15)} ${report.baseSnapshotId.grey}');
+    print('${'Merging:'.padRight(15)} ${targetTrack.yellow}');
+    
+    if (report.hasConflicts) {
+      print('\n${'⚠️  CONFLICTS DETECTED:'.red.bold} ${report.conflicts.length} files overlap');
+      
+      for (final conflict in report.conflicts) {
+        print('\n  ${'×'.red} ${conflict.filePath.white.bold}');
+        
+        if (conflict.filePath.endsWith('.dart') || 
+            conflict.filePath.endsWith('.js') || 
+            conflict.filePath.endsWith('.ts')) {
+          
+          final scopes = await _detectConflictingScopes(context, report, conflict.filePath, password);
+          
+          if (scopes.isNotEmpty) {
+            print('      ${"Potential collision in:".grey}');
+            for (final s in scopes) {
+              print('      ${"•".yellow} ${s}');
+            }
+          } else {
+            print('      ${"•".grey} Non-structural or global change detected.');
+          }
+        } else {
+          print('      ${"•".grey} Binary or data file conflict.');
+        }
+      }
+    } else {
+      print('\n${'✅ CLEAN MERGE:'.green.bold} All changes can be auto-applied.');
+    }
+
+    print('\n${'Summary Stats:'.white.underline}');
+    print('  ${'•'.green} ${report.safeFiles.length.toString().padLeft(3)} files can be auto-merged.');
+    print('  ${'•'.red} ${report.conflicts.length.toString().padLeft(3)} files require manual resolution.');
+    
+    print('\n${'ℹ️  PREVIEW MODE:'.cyan} No changes have been written to disk.');
+    print('To complete the merge after checking, use: ${'vcs merge apply <track>'.bold}');
+    print('════════════════════════════════════════════════════════════\n');
+  }
+
+  Future<List<String>> _detectConflictingScopes(
+    RepoContext context, 
+    MergeReport report, 
+    String path, 
+    String password,
+  ) async {
+    final scopes = <String>{};
+    final regex = RegExp(r'(class|void|Future|static|async|get|set)\s+([a-zA-Z0-9_]+)');
+
+    try {
+      final remoteSnap = await readSnapshotByMeta(
+        remoteRepoDir: context.remoteRepoDir,
+        remoteMeta: context.remoteMeta,
+        snapshotId: report.targetSnapshotId,
+        password: password,
+        silent: true,
+      );
+
+      if (remoteSnap != null) {
+        final remoteFiles = await _decodeSnapshotFiles(remoteSnap);
+        final remoteFileData = remoteFiles[path];
+
+        if (remoteFileData != null) {
+          final remoteContent = utf8.decode(remoteFileData, allowMalformed: true);
+          
+          final localFile = File(path);
+          String localContent = '';
+          if (await localFile.exists()) {
+            localContent = await localFile.readAsString();
+          }
+
+          for (final content in [localContent, remoteContent]) {
+            final matches = regex.allMatches(content);
+            for (final m in matches) {
+              final type = m.group(1);
+              final name = m.group(2);
+              if (name != null) {
+                scopes.add('$type $name');
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      return [];
+    }
+
+    return scopes.take(5).toList();
   }
 
   List<FileChange> diffFingerprints(
@@ -5168,15 +5457,19 @@ class PortableVcs {
     }
 
     String? originId = fromSnapshot;
+    SnapshotLogEntry? initialEntry;
 
     if (originId == null && activeTrack != null && activeTrack.logs.isNotEmpty) {
-      originId = activeTrack.logs.first.id;
+      initialEntry = activeTrack.logs.first;
+      originId = initialEntry.id;
+    } else if (originId != null) {
+      initialEntry = _findEntryInAllTracks(context.remoteMeta, originId);
     }
 
     final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
 
     updatedTracks[trackName] = TrackState(
-      logs: [], 
+      logs: initialEntry != null ? [initialEntry] : [], 
       originSnapshotId: originId,
       originTrackName: activeTrackName,
     );
@@ -5189,11 +5482,21 @@ class PortableVcs {
     await _saveRemoteMeta(context, updatedMeta);
 
     print('✅ ${"Track created:".green} $trackName');
-    if (originId != null) {
-      print('ℹ️  ${"Origin:".grey} Branching from $activeTrackName at $originId');
+    if (initialEntry != null) {
+      print('ℹ️  ${"Origin:".grey} Branching from $activeTrackName at ${initialEntry.id.substring(0, 8)}...');
+      print('ℹ️  ${"Status:".grey} Track initialized with ${initialEntry.message}');
     } else {
       print('ℹ️  ${"Origin:".grey} Empty track (Root).');
     }
+  }
+
+  SnapshotLogEntry? _findEntryInAllTracks(RepoMeta meta, String id) {
+    for (final track in meta.tracks.values) {
+      for (final entry in track.logs) {
+        if (entry.id == id) return entry;
+      }
+    }
+    return null;
   }
 
   Future<void> trackDelete(String name) async {
@@ -6802,6 +7105,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addCommand('switch')
       ..addCommand('delete'),
     )
+    ..addCommand('merge-check', ArgParser()
+        ..addOption('password', abbr: 'p', help: 'Repository password')
+    )
     ..addCommand('version')
     ..addCommand('ui')
     ..addCommand('stash', ArgParser()
@@ -6899,6 +7205,17 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'merge-check':
+        final targetTrack = result.command?.rest.firstOrNull;
+        if (targetTrack == null) {
+          print('❌ ${"Missing track name.".red} Usage: vcs merge-check <track-name>');
+          return;
+        }
+        
+        final pass = result.command?['password'];
+        await app.mergeCheck(targetTrack, password: pass);
+        break;
 
       case 'doctor':
         final rebuild = result.command?['rebuild'] == true;
