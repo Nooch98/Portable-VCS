@@ -1,5 +1,26 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.8-Experimental.1': '''
+  ### 🛡️ HARDWARE ARMORED & MERGE READY
+  This update introduces a critical layer of safety for both metadata persistence and multi-track operations, ensuring the VCS remains stable during complex workflows.
+
+  - **Merge Check (Read-Only)**: A new preventive engine for track fusion. Before performing a merge, the system executes a non-destructive "dry-run" that verifies the physical existence of the common ancestor and the integrity of the target snapshots.
+  - **Triple-Layer Backup Rotation**: I have upgraded the metadata engine with a **3-stage circular backup system** (`.bak1`, `.bak2`, `.bak3`). This allows for deep recovery even if a write operation is corrupted during a critical update.
+  - **Smart Guard**: The writing engine now includes a **Relative Size Validator**. If the new metadata is significantly smaller than the previous version (detected truncation), the system aborts the write and alerts the user to prevent massive data loss.
+
+  ### 🏷️ TAG & REPO HYGIENE
+  - **Global Orphan Tag Detection**: The `doctor` and `prune --garbage` commands now perform cross-track analysis to identify and remove labels pointing to non-existent or deleted snapshots.
+  - **Integrity-Aware Status**: The `status` command now performs a "Physical Heartbeat" check. If the last snapshot of your active track is missing from the USB, you'll receive a critical alert before attempting new changes.
+
+  ### 📊 DIAGNOSTICS & UX
+  - **Enhanced Repo Stats**: Added a new **"Health & Tags"** section to the `stats` command, providing a quick overview of milestone distribution and repository synchronization health.
+  - **Physical Desync Alerts**: Improved error reporting when the local project and the remote vault are out of sync due to external file deletion.
+
+  ### 🐞 FIXES & REFINEMENTS
+  - **Prune Logic Fix**: Resolved a bug where orphan tags were not being cleaned unless a snapshot was also being deleted.
+  - **Safe-Rename Fallback**: Reinforced the write process to handle OS-level file locks more gracefully during the rename phase.
+    ''',
+
     '0.3.7-Experimental.2': '''
   ### 🩺 THE DOCTOR'S UPGRADE (HARDWARE RESILIENCE)
   I have transformed the `doctor` command from a simple metadata checker into a **Full Recovery & Integrity Engine**. This update focuses on surviving physical hardware failure and data corruption.
