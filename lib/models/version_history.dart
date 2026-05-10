@@ -1,5 +1,27 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.8-Experimental.2': '''
+  ### 🪝 THE AUTOMATION ENGINE (NEW ECOSYSTEM)
+  This update introduces a fully-featured Hooks System, transforming the VCS from a storage tool into an automated development environment.
+
+  - **Modular Hook Architecture**: Implementation of a new dedicated `HookManager` that handles the lifecycle of automation scripts.
+  - **Universal Script Support**: Native integration for `.ps1` (PowerShell), `.bat`/`.cmd` (Windows Batch), and `.sh` (Bash). The system intelligently selects the appropriate runner for each environment.
+  - **Dynamic Auto-Run Suite**: Integration of a "Pre-Push" execution engine. The system automatically scans for scripts marked as `auto` and runs them in sequence before any data is encrypted or saved.
+  - **Smart Resolver Logic**: Added a file-discovery engine that locates hooks regardless of their extension, allowing for a seamless cross-platform workflow (e.g., creating a hook on Windows and running it on Linux).
+
+  ### ⌨️ NEW COMMAND: `vcs hook`
+  - **Full CRUD for Automation**: Added `create`, `edit`, and `exec` commands to manage your automation scripts directly from the CLI.
+  - **Execution Control**: Introduction of "Modes" (`auto` vs `man`). 
+    - `auto`: The hook runs automatically during the `push` process.
+    - `man`: The hook only runs when explicitly called via `vcs hook exec`.
+  - **Integrated IDE Link**: Built-in logic to open hook scripts in **VS Code** (priority) or system default editors like **Notepad/Nano**.
+
+  ### 🛡️ INTEGRITY & PORTABILITY
+  - **Execution Bypass Policy**: Implemented automatic PowerShell execution policy handling (`-ExecutionPolicy Bypass`) to ensure hooks run on guest machines without manual configuration.
+  - **Push Guard**: The `push` command now acts as a gatekeeper; if any automatic hook returns a failure (exit code != 0), the snapshot process is aborted to protect the repository from corrupted or broken code.
+  - **Verbose Console Feedback**: Designed a new terminal output for hooks that includes real-time status, script output, and color-coded success/failure indicators.
+    ''',
+
     '0.3.8-Experimental.1': '''
   ### 🛡️ HARDWARE ARMORED & MERGE READY
   This update introduces a critical layer of safety for both metadata persistence and multi-track operations, ensuring the VCS remains stable during complex workflows.
