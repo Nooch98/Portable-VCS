@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.3.7--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.3.8--experimental.2-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -247,6 +247,35 @@ The UI is designed to be lightweight and portable, requiring no external depende
 #### Tip: Session Passwords
 When prompted for a password in the Web UI, it is used only for the duration of the current command's execution and is never stored on disk or in the server logs, keeping your AES-256 encryption keys completely secure.
 
+# Automation & Hooks (Local CI/CD)
+Portable VCS now includes an automation engine that allows you to run custom scripts before every `push`. This acts as a **Local Continuous Integration (CI)**, ensuring you don't save snapshots with compilation errors or failing tests.
+
+### How it works
+The system is **language-agnostic**. You can write your hooks using:
+* **Windows:** `.ps1` (PowerShell), `.bat`, `.cmd`.
+* **Linux/macOS:** `.sh` (Bash).
+
+### Execution Modes
+1. **`auto`**: The hook runs automatically every time you perform a `vcs push`. If the hook fails (exit code != 0), the push is aborted.
+2. **`man` (Manual)**: The hook only runs when you explicitly invoke it.
+
+### Hook Commands
+| Command | Description |
+| :--- | :--- |
+| `vcs hook create <name>` | Create a new script in the USB repository folder. |
+| `vcs hook edit <name>` | Open the script in VS Code or Notepad to edit code or toggle the mode (`auto/man`). |
+| `vcs hook exec <name>` | Manually run a specific hook to test its functionality. |
+
+### Example: Automatic Build Hook
+You can create a hook named `build_test` to ensure your project is always valid before being saved:
+
+1. Create the hook: `vcs hook create build_test --config auto`
+2. Edit the script to include your test command (e.g., `dart analyze` or `flutter test`).
+3. When running `vcs push "message"`, you will see:
+   
+https://github.com/user-attachments/assets/4766a2ca-5eb7-49b6-9d4a-ea5fe006bcfc
+
+
 # Core Features
 
 ### Snapshot System
@@ -392,7 +421,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs tag <name>` | Assign a friendly label to a snapshot |
 | | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
 | | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
-| | `vcs pull --dry-run | Preview changes without applying |
+| | `vcs pull --dry-run` | Preview changes without applying |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
 | **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
@@ -419,7 +448,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | **Tracks** | `vcs track list` | List all available history tracks. |
 | | `vcs track current` | Show the name of the currently active track. |
 | | `vcs track create <name>` | Create a new independent development lane. |
-| | `vcs track create -f/--from <id> | Optional: Branch from a specific snapshot ID. |
+| | `vcs track create -f/--from <id>` | Optional: Branch from a specific snapshot ID. |
 | | `vcs track switch <name>` | Switch the active track (with optional tree restore). |
 | | `vcs track delete <name>` | Remove an existing non-active track and its history. |
 | | `vcs ancestry` | Show the genealogical tree of snapshots (Lineage). |
@@ -434,7 +463,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | **Maintenance**| `vcs update` | **Auto-update:** Check, download latest source from GitHub and recompile. |
 | | `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
 | | `vcs doctor` | Run repository diagnostics and health checks. |
-| | `vcs doctor --rebuild/-r | Physically scan the .vcs files to reconstruct the meta.json if it is lost. |
+| | `vcs doctor --rebuild/-r` | Physically scan the .vcs files to reconstruct the meta.json if it is lost. |
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
 | | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
 | | `vcs prune --oldr-than N` | Delete snapshots older than N days. |
@@ -446,6 +475,9 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs migrate` | Move your vault to a new drive. |
 | | `vcs migrate --to <path>` | Target destination path for the migration. |
 | | `vcs migrate --delete-source` | Remove data from old drive after success. |
+| **Automation** | `vcs hook create <name> [-c/--config auto\|man]` | Create a new automation script (.ps1, .bat, .sh). |
+| | `vcs hook edit <name> [-c/--config auto\|man]` | Edit hook code or toggle execution mode. |
+| | `vcs hook exec <name>` | Run a specific hook manually. |
 | **General** | `vcs version` | Show tool version, OS information and **check for updates**. |
 | | `vcs changelog` | Show changes of the version |
 | | `vcs changelog --list/-l` | Display the full version history. Allows selecting a specific version to view its detailed changes. |
