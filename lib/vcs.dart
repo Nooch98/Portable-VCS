@@ -32,7 +32,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.8-Experimental.1';
+const String vcsBaseVersion = '0.3.8-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -366,6 +366,13 @@ class PortableVcs {
     - `restore <id|tag>` Restore a specific snapshot into another folder.
       - `--to <dir>` Destination path for the restored files.
 
+    ## 🪝 AUTOMATION & HOOKS
+    - `hook create <name>` Create a new automation script (.ps1, .bat, .sh).
+      - `-c, --config <auto|man>` Set execution mode (default: man).
+    - `hook edit <name>` Open a hook in the editor to modify code or config.
+      - `-c, --config <auto|man>` Update the execution mode.
+    - `hook exec <name>` Manually run a specific hook.
+
     ## 📝 SNAPSHOT ANNOTATIONS
     - `note "text"` Add a technical note or comment to a snapshot.
       - `--id <id>` Target a specific snapshot (defaults to latest).
@@ -442,6 +449,7 @@ class PortableVcs {
     ---
 
     ### 💡 PRO TIPS
+    - **Custom Hooks:** Automate tasks like `dart compile` or `flutter test` before every push by setting hooks to `auto`.
     - **Ancestry Tracking:** Use `vcs ancestry` to understand the origin of your current track and its relation to others.
     - **Clean USB:** Run `vcs prune --keep 1` before a final GitHub release to save space while keeping the lineage intact.
     - **Branching:** Create tracks from specific points using `vcs track create feature-x --from <id>`.
@@ -1733,6 +1741,10 @@ class PortableVcs {
         
         stdout.write('\nDo you want to proceed? (y/N): ');
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
+      }
+
+      if (!(await HookManager.runAutoHooks(context))) {
+        return; 
       }
 
       String? parentId;
@@ -6971,6 +6983,184 @@ class PortableVcs {
   }
 }
 
+class HookManager {
+  static Future<void> handleCommand(List<String> args, dynamic context) async {
+    if (context == null) return;
+    
+    if (args.length < 2) {
+      print('Usage: vcs hook <create|edit|exec> <name> [-c auto|man]');
+      return;
+    }
+
+    final String action = args[0].toLowerCase();
+    final String hookName = args[1];
+    
+    String mode = 'man';
+    int configIdx = args.indexWhere((arg) => arg == '-c' || arg == '--config');
+    if (configIdx != -1 && configIdx + 1 < args.length) {
+      mode = (args[configIdx + 1].toLowerCase() == 'auto') ? 'auto' : 'man';
+    }
+
+    final String hooksPath = p.join(context.remoteRepoDir.path, 'hooks');
+    final hooksDir = Directory(hooksPath);
+
+    if (!hooksDir.existsSync()) hooksDir.createSync(recursive: true);
+
+    final configFile = File(p.join(hooksPath, 'hooks.json'));
+    final ext = Platform.isWindows ? '.ps1' : '.sh';
+    final scriptFile = File(p.join(hooksPath, '$hookName$ext'));
+
+    Map<String, dynamic> configMap = {};
+    if (configFile.existsSync()) {
+      try {
+        configMap = jsonDecode(configFile.readAsStringSync());
+      } catch (_) {}
+    }
+
+    switch (action) {
+      case 'create':
+      case 'edit':
+        configMap[hookName] = {'mode': mode};
+        configFile.writeAsStringSync(JsonEncoder.withIndent('  ').convert(configMap));
+
+        if (action == 'create' && !scriptFile.existsSync()) {
+          final template = Platform.isWindows 
+              ? '# PowerShell Hook\nWrite-Host "Running $hookName..."\n' 
+              : '#!/bin/bash\necho "Running $hookName..."\n';
+          scriptFile.writeAsStringSync(template);
+          if (!Platform.isWindows) await Process.run('chmod', ['+x', scriptFile.path]);
+        }
+        
+        print('✅ Hook "$hookName" set to [$mode]. Opening editor...');
+        await _openSystemEditor(scriptFile.path);
+        break;
+
+      case 'exec':
+        if (!scriptFile.existsSync()) {
+          print('❌ Error: Script file not found: ${scriptFile.path}');
+          return;
+        }
+        await _executeHook(scriptFile, isManual: true);
+        break;
+    }
+  }
+
+  static Future<bool> runAutoHooks(dynamic context) async {
+    if (context == null) return true;
+
+    final String hooksPath = p.join(context.remoteRepoDir.path, 'hooks');
+    final configFile = File(p.join(hooksPath, 'hooks.json'));
+    
+    if (!configFile.existsSync()) return true;
+
+    try {
+      final Map<String, dynamic> config = jsonDecode(await configFile.readAsString());
+      
+      final autoHookNames = config.entries
+          .where((e) => e.value['mode'] == 'auto')
+          .map((e) => e.key)
+          .toList();
+
+      for (final name in autoHookNames) {
+        final scriptFile = _findExistingScript(hooksPath, name);
+        
+        if (scriptFile.existsSync()) {
+          print('🪝  ${"Executing auto hook:".cyan} ${name.bold}...');
+          
+          final success = await _executeHook(scriptFile, isManual: false);
+          if (!success) {
+            print('❌ ${"Push aborted:".red} Hook "$name" failed.');
+            return false;
+          }
+        }
+      }
+    } catch (e) {
+      print('⚠️  ${"Warning:".yellow} Could not process hooks.json');
+    }
+
+    return true;
+  }
+
+  static File _findExistingScript(String hooksPath, String name) {
+    final extensions = ['.ps1', '.bat', '.sh', '.cmd'];
+    
+    for (var ext in extensions) {
+      final file = File(p.join(hooksPath, '$name$ext'));
+      if (file.existsSync()) {
+        return file;
+      }
+    }
+
+    final defaultExt = Platform.isWindows ? '.ps1' : '.sh';
+    return File(p.join(hooksPath, '$name$defaultExt'));
+  }
+
+  static Future<bool> _executeHook(File script, {required bool isManual}) async {
+    final absolutePath = p.normalize(script.absolute.path);
+    
+    String executable;
+    List<String> procArgs;
+
+    if (Platform.isWindows) {
+      executable = 'powershell.exe';
+      procArgs = [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', absolutePath
+      ];
+    } else {
+      executable = 'bash';
+      procArgs = [absolutePath];
+    }
+
+    final result = await Process.run(executable, procArgs, runInShell: true);
+
+    if (result.stdout.toString().trim().isNotEmpty) print(result.stdout);
+    if (result.stderr.toString().trim().isNotEmpty) {
+      print('❌ Hook Error Output:');
+      print(result.stderr);
+    }
+
+    if (result.exitCode == 0) {
+      if (isManual) print('✅ Success.');
+      return true;
+    } else {
+      print('⚠️ Hook failed (Exit: ${result.exitCode})');
+      return false;
+    }
+  }
+
+  static Future<void> _openSystemEditor(String filePath) async {
+    final file = File(filePath);
+    final absolutePath = p.normalize(file.absolute.path);
+
+    if (!await file.exists()) {
+      print('❌ VCS Error: The file does not exist at path: $absolutePath');
+      return;
+    }
+
+    if (Platform.isWindows) {
+      try {
+        final result = await Process.run('code', [absolutePath], runInShell: true);
+        
+        if (result.exitCode != 0) {
+          throw Exception('VS Code not found');
+        }
+      } catch (e) {
+        await Process.run('notepad.exe', [absolutePath]);
+      }
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [absolutePath]);
+    } else {
+      try {
+        await Process.run('xdg-open', [absolutePath]);
+      } catch (_) {
+        await Process.start('nano', [absolutePath], mode: ProcessStartMode.inheritStdio);
+      }
+    }
+  }
+}
+
 extension ColorConsole on String {
   String get green => '\x1B[32m$this\x1B[0m';
   String get yellow => '\x1B[33m$this\x1B[0m';
@@ -7132,6 +7322,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('ancestry', ArgParser()
       ..addOption('track', abbr: 't', help: 'Track to inspect (defaults to active track)')
     )
+    ..addCommand('hook', ArgParser()
+      ..addOption('config', abbr: 'c', help: 'Set hook mode: auto or man')
+    )
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
@@ -7205,6 +7398,23 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'hook':
+        if (context == null) {
+          print('❌ ${"Error:".red} USB storage context not found. Cannot manage hooks.');
+          return;
+        }
+        List<String> hookArgs = [...command!.rest];
+        if (command.options.contains('config') && command['config'] != null) {
+          hookArgs.addAll(['-c', command['config']]);
+        }
+
+        if (hookArgs.isEmpty) {
+          print('❌ Usage: vcs hook <create|edit|exec> <name> [-c auto|man]');
+        } else {
+          await HookManager.handleCommand(hookArgs, context);
+        }
+        break;
 
       case 'merge-check':
         final targetTrack = result.command?.rest.firstOrNull;
