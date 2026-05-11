@@ -429,6 +429,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs status` | Summary of messages to help create Git/GitHub commits. |
 | | `vcs summary` | Compare tree against latest of the **active track**. |
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
+| | `vcs diff [id] [-f]` | Compare snapshots or tree. `-f` enables **Delta-Index**. |
 | | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
 | | `vcs log` | Show history of snapshots.|
 | | `vcs log --graph/-g` | Visual representation of the snapshot timeline. |
@@ -442,6 +443,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs search <query> --id <snapshot_id>` | Search only inside a specific snapshot ID. |
 | | `vcs search <query> -m/--max <n>` | Limit search to the last N snapshots. |
 | | `vcs search <query> -s/--case-sensitive` | Perform a case-sensitive search. |
+| | `vcs search <query> [--file q]` | Search text with **3-Phase Engine** (Metadata/Index/Deep). |
 | **Aliases** | `vcs alias --list, -l` | List all custom shortcuts saved in the USB |
 | | `vcs alias --set, -s "name=cmd"` | Create a shortcut (e.g., `alias -s "st=status"`) |
 | | `vcs alias --rm <name>` | Remove a specific alias from the storage |
