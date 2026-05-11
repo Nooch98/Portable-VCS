@@ -1,5 +1,33 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.9-Experimental.1': '''
+  ### ⚡ THE DELTA-INDEX ENGINE (NATIVE SEARCH ACCELERATION)
+  This version introduces a new indexing layer, enabling near-instant file discovery by eliminating unnecessary decryption cycles.
+
+  - **High-Speed Snapshot Indexing**: Introduction of the `delta-index` system. Every snapshot now generates a lightweight map of its contents, allowing the VCS to verify file existence without accessing encrypted blobs.
+  - **3-Phase Hybrid Search**: A new architecture designed for maximum efficiency:
+    1. **Metadata Phase**: Instant scans of snapshot messages and technical notes.
+    2. **Index Phase**: Rapid file-name matching using pre-computed indices.
+    3. **Deep Content Phase**: On-demand decryption for high-precision text searching.
+  - **Legacy-Aware Compatibility**: Native support for older snapshots. The system automatically detects snapshots without indices and switches to an adaptive scan mode.
+
+  ### 🔍 INTELLIGENT SEARCH & UX
+  - **Context-Aware Outputs**: The engine now distinguishes between file-level and content-level queries, providing clean file lists for path searches and detailed snippets for text searches.
+  - **Optimized Decryption Bypass**: Implemented a "Smart Filter" that prevents password prompts or decryption if the index doesn't match the search criteria.
+  - **Dynamic IO Management**: Optimized terminal output with a non-intrusive progress overlay that maintains console cleanliness.
+
+  ### 🩺 COMMAND EVOLUTION & SYSTEM HEALTH
+  - **Doctor & Verify (Index-Linked)**: The integrity engine now verifies the `delta-index` health. `vcs doctor` can now detect missing or corrupted indices and offers to rebuild them from the encrypted sources.
+  - **Enhanced Status (Pre-Index Analysis)**: The `status` command is now faster and more precise, utilizing the new indexing logic to categorize changes into Logic, Assets, and Config with zero latency.
+  - **Prune & Garbage Collection**: The `prune` engine now includes **Index Sync**. When a snapshot is deleted, its associated delta-index is automatically purged to prevent storage bloat.
+  - **Advanced Stats**: Updated the `stats` dashboard to include "Indexing Coverage," showing the percentage of the repository that has been optimized for high-speed search.
+
+  ### 🛠️ CORE REFINEMENTS
+  - **Universal Path Normalization**: Native support for cross-platform pathing, ensuring consistent results across Windows, Linux, and macOS.
+  - **Automated Lifecycle**: Every `push` now triggers an atomic index generation, ensuring your search database is always up to date.
+  - **Security-on-Demand**: Refined authentication flow so the password prompt only triggers when deep decryption is strictly required.
+    ''',
+
     '0.3.8-Experimental.2': '''
   ### 🪝 THE AUTOMATION ENGINE (NEW ECOSYSTEM)
   This update introduces a fully-featured Hooks System, transforming the VCS from a storage tool into an automated development environment.
