@@ -34,7 +34,7 @@ import 'package:vcs/models/version_history.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.9-Experimental.1';
+const String vcsBaseVersion = '0.3.9-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -327,7 +327,7 @@ class PortableVcs {
     print('═' * 55 + '\n');
   }
 
-  void showHelp() {
+   void showHelp() {
     const String helpMarkdown = '''
 
     # 🚀 PORTABLE SNAPSHOT VAULT [[ ${vcsBaseVersion} ]]
@@ -465,7 +465,7 @@ class PortableVcs {
     ''';
 
     print(_renderMarkdown(helpMarkdown));
-  } 
+  }
 
   void showChangelog({String? targetVersion, bool interactive = false}) {
     if (interactive) {
@@ -1780,14 +1780,14 @@ class PortableVcs {
     String? author,
     String? track,
     String? password,
-    String? overrideSourcePath, 
+    String? overrideSourcePath,
     bool skipConfirm = false,
     bool amend = false,
   }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    Directory workingDir = _cwd; 
+    Directory workingDir = _cwd;
     String targetTrackName = track ?? context.remoteMeta.activeTrack;
 
     final sessionFile = File(p.join(context.remoteRepoDir.path, 'session.json'));
@@ -1799,7 +1799,9 @@ class PortableVcs {
         final sessionData = jsonDecode(await sessionFile.readAsString());
         workingDir = Directory(sessionData['shadow_path']);
         targetTrackName = track ?? sessionData['active_shadow_track'];
-        if (!skipConfirm) print('🔍 ${"Shadow Session detected:".cyan} Pushing from ${workingDir.path}');
+        if (!skipConfirm) {
+          print('🔍 ${"Shadow Session detected:".cyan} Pushing from ${workingDir.path}');
+        }
       } catch (_) {}
     }
 
@@ -1811,21 +1813,20 @@ class PortableVcs {
 
     if (amend) {
       if (trackData.logs.isEmpty) {
-        print('❌ Cannot use --amend: Track "$targetTrackName" has no history.');
+        print('❌ ${"Cannot use --amend:".red} Track "$targetTrackName" has no history.');
         return;
       }
 
       final lastId = trackData.logs.first.id;
-      final hasTags = context.remoteMeta.tags.values.contains(lastId);
-      
-      if (hasTags) {
-        final tagNames = context.remoteMeta.tags.entries
-            .where((e) => e.value == lastId)
-            .map((e) => e.key)
-            .join(', ');
-            
-        print('❌ ${"Cannot amend:".red} Latest snapshot has tags: ${tagNames.magenta}');
-        print('ℹ️ Please remove the tags before amending or create a new snapshot.');
+      final tagsLinked = context.remoteMeta.tags.entries
+          .where((e) => e.value == lastId)
+          .map((e) => e.key)
+          .toList();
+
+      if (tagsLinked.isNotEmpty) {
+        print('❌ ${"Amend Blocked:".red} Latest snapshot is immutable because it is tagged.');
+        print('🏷️  Tags found: ${tagsLinked.join(', ').magenta}');
+        print('💡 Tip: Remove the tags or create a new snapshot instead.');
         return;
       }
     }
@@ -1869,24 +1870,35 @@ class PortableVcs {
         print('${'Source:'.padRight(12)} ${workingDir.path}');
         print('${'Track:'.padRight(12)} $targetTrackName');
         print('${'Message:'.padRight(12)} $message');
-        
+
         int added = 0, modified = 0, deleted = 0;
+
         for (var change in changes) {
-          final tag = change.toTag();
-          if (tag.startsWith('+')) { added++; print('  ${"[+]".green} ${change.path}'); }
-          else if (tag.startsWith('-')) { deleted++; print('  ${"[-]".red} ${change.path}'); }
-          else { modified++; print('  ${"[~]".yellow} ${change.path}'); }
+          switch (change.kind) {
+            case ChangeKind.added:
+              added++;
+              print('  ${"[+]".green} ${change.path}');
+              break;
+            case ChangeKind.modified:
+              modified++;
+              print('  ${"[~]".yellow} ${change.path}');
+              break;
+            case ChangeKind.deleted:
+              deleted++;
+              print('  ${"[-]".red} ${change.path}');
+              break;
+          }
         }
 
         print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
-        
+
         stdout.write('\nDo you want to proceed? (y/N): ');
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
       }
 
       if (!(await HookManager.runAutoHooks(context))) {
         print('❌ Push aborted by automation hook.');
-        return; 
+        return;
       }
 
       String? parentId;
@@ -1899,14 +1911,24 @@ class PortableVcs {
       if (amend) {
         final oldSnapshot = trackData.logs.first;
         final oldFile = File(p.join(context.remoteRepoDir.path, 'snapshots', oldSnapshot.fileName));
+        
         if (oldFile.existsSync()) {
           await oldFile.delete();
+        }
+
+        try {
+          await IndexService.deleteSnapshotIndex(
+            remoteRepoDir: context.remoteRepoDir,
+            snapshotId: oldSnapshot.id,
+          );
+        } catch (e) {
+          // No critic error
         }
       }
 
       print('📦 Packing and encrypting...');
       final zipBytes = await _createZipFromCurrentProject(sourcePath: workingDir);
-      
+
       final encrypted = await _encryptSnapshot(
         zipBytes: zipBytes,
         message: message,
@@ -1947,7 +1969,7 @@ class PortableVcs {
       );
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-      
+
       if (amend) {
         final newLogs = List<SnapshotLogEntry>.from(trackData.logs);
         newLogs[0] = entry;
@@ -1975,9 +1997,7 @@ class PortableVcs {
       }
 
       await _atomicWriteString(
-        metaFile, 
-        const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson())
-      );
+          metaFile, const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()));
 
       print('🧠 Indexing snapshot files...');
       try {
@@ -2112,7 +2132,62 @@ class PortableVcs {
   String _renderMarkdown(String text) {
     if (text.isEmpty) return text;
 
-    String rendered = text.replaceAllMapped(RegExp(r'```[a-z]*\n([\s\S]*?)```'), (m) {
+    String rendered = text;
+
+    rendered = rendered.replaceAllMapped(RegExp(r'((?:^[ \t]*\|.*\|[ \t]*(?:\n|$))+)'), (Match tableMatch) {
+      List<String> rows = tableMatch.group(0)!.trim().split('\n');
+      if (rows.length < 2) return tableMatch.group(0)!;
+
+      List<List<String>> data = rows
+          .where((r) => !RegExp(r'^[ \t]*\|?[\s\-:|]+\|?[ \t]*$').hasMatch(r))
+          .map((r) {
+            String rowContent = r.trim();
+            if (rowContent.startsWith('|')) rowContent = rowContent.substring(1);
+            if (rowContent.endsWith('|')) rowContent = rowContent.substring(0, rowContent.length - 1);
+            return rowContent.split('|').map((c) => c.trim()).toList();
+          }).toList();
+
+      if (data.isEmpty) return "";
+
+      int realLength(String s) => s.replaceAll(RegExp(r'\x1B\[[0-9;]*m'), '').length;
+      int cols = data.map((e) => e.length).reduce((a, b) => a > b ? a : b);
+      
+      List<List<String>> renderedData = data.map((row) {
+        return List.generate(cols, (i) {
+          if (i >= row.length) return "";
+          String c = row[i];
+          c = _renderBadges(c);
+          c = c.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
+          c = c.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
+          return c;
+        });
+      }).toList();
+
+      List<int> widths = List.filled(cols, 0);
+      for (var row in renderedData) {
+        for (var i = 0; i < cols; i++) {
+          int len = realLength(row[i]);
+          if (len > widths[i]) widths[i] = len;
+        }
+      }
+
+      String tableOut = "\n";
+      for (var i = 0; i < renderedData.length; i++) {
+        String line = "  ┃ ";
+        for (var j = 0; j < cols; j++) {
+          String cell = renderedData[i][j];
+          int padding = widths[j] - realLength(cell);
+          line += cell + (" " * padding) + (j == cols - 1 ? " ┃" : " │ ");
+        }
+        tableOut += (i == 0) ? line.bold.cyan + "\n" : line + "\n";
+        if (i == 0) {
+          tableOut += "  ┣━" + widths.map((w) => "━" * w).join("━┿━") + "━┫\n";
+        }
+      }
+      return tableOut;
+    });
+
+    rendered = rendered.replaceAllMapped(RegExp(r'```[a-z]*\n([\s\S]*?)```'), (m) {
       final content = m.group(1)?.trim() ?? "";
       return content.split('\n').map((l) => '    ┃ '.italic + l).join('\n');
     });
@@ -2125,13 +2200,18 @@ class PortableVcs {
       String processed = line;
       String trimmed = line.trim();
 
+      if (line.contains('┃') || line.contains('┣') || line.contains('│')) {
+        result.add(line);
+        continue;
+      }
+
       processed = processed.replaceAllMapped(
         RegExp(r'!\[.*?\]\(https:\/\/img\.shields\.io\/badge\/(.*?)-(.*?)-(.*?)(?:\?.*?)?\)'), 
         (m) {
           String label = (m.group(1) ?? "").replaceAll('--', '-').replaceAll('_', ' ');
           String message = (m.group(2) ?? "").replaceAll('--', '-').replaceAll('_', ' ');
           String color = (m.group(3) ?? "blue").split('?')[0].toUpperCase();
-          return _renderBadge('[[ $color: $label $message ]]');
+          return '[[ $color: $label $message ]]';
         }
       );
 
@@ -2142,11 +2222,11 @@ class PortableVcs {
           final icons = {'NOTE': 'ℹ', 'TIP': '💡', 'IMPORTANT': '📢', 'WARNING': '⚠️', 'CAUTION': '🛑'};
           final head = '  ${icons[activeAdmonition]} $activeAdmonition';
           
-          if (activeAdmonition == 'IMPORTANT') result.add(head.cyan.bold);
-          else if (activeAdmonition == 'WARNING') result.add(head.yellow.bold);
-          else if (activeAdmonition == 'CAUTION') result.add(head.red.bold);
-          else if (activeAdmonition == 'TIP') result.add(head.green.bold);
-          else result.add(head.blue.bold);
+          if (activeAdmonition == 'IMPORTANT') result.add(head.bold.cyan);
+          else if (activeAdmonition == 'WARNING') result.add(head.bold.yellow);
+          else if (activeAdmonition == 'CAUTION') result.add(head.bold.red);
+          else if (activeAdmonition == 'TIP') result.add(head.bold.green);
+          else result.add(head.bold.blue);
           continue;
         }
       }
@@ -2154,6 +2234,16 @@ class PortableVcs {
       if (trimmed.startsWith('>')) {
         String content = trimmed.replaceFirst('>', '').trimLeft();
         if (content.isNotEmpty) {
+          String restore = "";
+          if (activeAdmonition == 'IMPORTANT') restore = "\x1B[36m";
+          else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') restore = "\x1B[33m";
+          else if (activeAdmonition == 'TIP') restore = "\x1B[32m";
+          else if (activeAdmonition == 'NOTE') restore = "\x1B[34m";
+          
+          content = _renderBadges(content, restore);
+          content = content.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green + restore);
+          content = content.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold + restore);
+
           if (activeAdmonition == 'IMPORTANT') result.add('    ${content.cyan}');
           else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') result.add('    ${content.yellow}');
           else if (activeAdmonition == 'TIP') result.add('    ${content.green}');
@@ -2166,40 +2256,36 @@ class PortableVcs {
       if (trimmed.isNotEmpty) activeAdmonition = null;
 
       if (trimmed.startsWith('# ')) {
-        String content = trimmed.replaceFirst('# ', '');
-        int bStart = content.indexOf('[[');
-        if (bStart != -1) {
-          processed = '  ' + content.substring(0, bStart).cyan.bold.underline + ' ' + _renderBadge(content.substring(bStart));
-        } else {
-          processed = '  ' + content.cyan.bold.underline;
-        }
+        processed = '\n  ' + _renderBadges(trimmed.replaceFirst('# ', ''), "\x1B[36m\x1B[1m").bold.cyan.underline + '\n';
       } 
       else if (trimmed.startsWith('## ')) {
-        processed = '\n  ' + trimmed.replaceFirst('## ', '').bold + '\n  ' + ('─' * 45).italic;
+        processed = '\n  ' + _renderBadges(trimmed.replaceFirst('## ', ''), "\x1B[1m").bold + '\n  ' + ('─' * 45).grey;
       } 
       else if (trimmed.startsWith('### ')) {
-        processed = '    ' + trimmed.replaceFirst('### ', '').yellow.bold;
+        processed = '\n    ' + _renderBadges(trimmed.replaceFirst('### ', ''), "\x1B[33m\x1B[1m").bold.yellow;
       }
-
-      if (trimmed.startsWith('• ') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-        processed = processed.replaceFirst(RegExp(r'^[•\-\*] '), '  • '.cyan);
+      else if (RegExp(r'^[•\-\*] ').hasMatch(trimmed)) {
+        String listContent = trimmed.substring(2);
+        listContent = _renderBadges(listContent);
+        listContent = listContent.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
+        listContent = listContent.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
+        processed = '  • '.cyan + listContent;
       }
-      
-      final numListMatch = RegExp(r'^(\d+)\.\s+(.*)').firstMatch(trimmed);
-      if (numListMatch != null) {
-        String num = numListMatch.group(1)!;
-        String content = numListMatch.group(2)!;
-        processed = '  ${num.cyan.bold}. $content';
+      else {
+        final numListMatch = RegExp(r'^(\d+)\.\s+(.*)').firstMatch(trimmed);
+        if (numListMatch != null) {
+          String content = _renderBadges(numListMatch.group(2)!);
+          content = content.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
+          processed = '  ${numListMatch.group(1)!.bold.cyan}. $content';
+        } else if (trimmed == '---' || trimmed == '***' || trimmed == '___') {
+          processed = '\n  ' + ('━' * 50).grey.italic + '\n';
+        } else {
+          processed = _renderBadges(processed);
+          processed = processed.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
+          processed = processed.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
+          processed = processed.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => m.group(1)!.blue.underline);
+        }
       }
-
-      if (trimmed == '---' || trimmed == '***' || trimmed == '___') {
-        processed = '  ' + ('━' * 50).italic;
-      }
-
-      processed = processed.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
-      processed = processed.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
-      processed = processed.replaceAllMapped(RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]'), (m) => _renderBadge(m.group(0)!));
-      processed = processed.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => m.group(1)!.blue.underline);
 
       result.add(processed);
     }
@@ -2207,22 +2293,55 @@ class PortableVcs {
     return result.join('\n');
   }
 
-  String _renderBadge(String rawBadge) {
-    final match = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]').firstMatch(rawBadge);
-    if (match == null) return rawBadge;
-    
-    final colorKey = (match.group(1) ?? 'CYAN').toUpperCase();
-    final label = (match.group(2) ?? "").trim();
-    final badgeText = ' $label '.bold;
+  String _renderBadges(String text, [String? contextColor]) {
+    final regExp = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]');
 
-    switch (colorKey) {
-      case 'RED': case 'CRITICAL': case 'ORANGE': return badgeText.white.onRed;
-      case 'GREEN': case 'SUCCESS': return badgeText.black.onGreen;
-      case 'YELLOW': return badgeText.black.onYellow;
-      case 'BLUE': return badgeText.white.onBlue;
-      case 'MAGENTA': return badgeText.white.onMagenta;
-      default: return badgeText.black.onCyan;
-    }
+    return text.splitMapJoin(
+      regExp,
+      onMatch: (Match m) {
+        final key = (m.group(1) ?? 'CYAN').toUpperCase();
+        final label = (m.group(2) ?? "").trim();
+
+        String icon = "";
+        if (['RED', 'CRITICAL', 'CAUTION'].contains(key)) icon = "✘ ";
+        else if (['GREEN', 'SUCCESS', 'TIP'].contains(key)) icon = "✔ ";
+        else if (['YELLOW', 'WARNING'].contains(key)) icon = "⚠️ ";
+        else if (['MAGENTA', 'TAG'].contains(key)) icon = "🏷️ ";
+        else if (['BLUE', 'INFO', 'NOTE'].contains(key)) icon = "ℹ️ ";
+        else if (['CYAN', 'SYSTEM'].contains(key)) icon = "⚙️ ";
+
+        final badgeText = ' $icon$label '.bold;
+
+        final Map<String, List<String>> themes = {
+          'RED':      [badgeText.onRed,     badgeText.white],
+          'CRITICAL': [badgeText.onRed,     badgeText.white],
+          'CAUTION':  [badgeText.onRed,     badgeText.white],
+          'ORANGE':   [badgeText.onRed,     badgeText.white],
+          'GREEN':    [badgeText.onGreen,   badgeText.black],
+          'SUCCESS':  [badgeText.onGreen,   badgeText.black],
+          'TIP':      [badgeText.onGreen,   badgeText.black],
+          'YELLOW':   [badgeText.onYellow,  badgeText.black],
+          'WARNING':  [badgeText.onYellow,  badgeText.black],
+          'BLUE':     [badgeText.onBlue,    badgeText.white],
+          'INFO':     [badgeText.onBlue,    badgeText.white],
+          'NOTE':     [badgeText.onBlue,    badgeText.white],
+          'MAGENTA':  [badgeText.onMagenta, badgeText.white],
+          'FEATURE':  [badgeText.onMagenta, badgeText.white],
+          'TAG':      [badgeText.onMagenta, badgeText.white],
+          'WHITE':    [badgeText.onWhite,   badgeText.black],
+          'LIGHT':    [badgeText.onWhite,   badgeText.black],
+          'BLACK':    [badgeText.onBlack,   badgeText.white],
+          'DARK':     [badgeText.onBlack,   badgeText.white],
+          'CYAN':     [badgeText.onCyan,    badgeText.black],
+          'SYSTEM':   [badgeText.onCyan,    badgeText.black],
+        };
+
+        final theme = themes[key] ?? [badgeText.onCyan, badgeText.black];
+        String resetAndRestore = (contextColor != null) ? "\x1B[0m$contextColor" : "\x1B[0m";
+        return theme[0].replaceAll(badgeText, theme[1]) + resetAndRestore;
+      },
+      onNonMatch: (String nonMatch) => nonMatch,
+    );
   }
 
   Future<void> log({
@@ -3193,13 +3312,18 @@ class PortableVcs {
     }
 
     for (var entry in toDeleteFromLogs) {
-      final f = File(p.join(snapshotsDir.path, entry.fileName));
-      if (f.existsSync()) {
-        if (!toDeleteFiles.any((file) => file.path == f.path)) toDeleteFiles.add(f);
+      final snapshotFile = File(p.join(snapshotsDir.path, entry.fileName));
+      if (snapshotFile.existsSync()) {
+        if (!toDeleteFiles.any((file) => file.path == snapshotFile.path)) {
+          toDeleteFiles.add(snapshotFile);
+        }
       }
-      final idx = File(p.join(indexDir.path, '${entry.id}.json'));
-      if (idx.existsSync()) {
-        if (!toDeleteFiles.any((file) => file.path == idx.path)) toDeleteFiles.add(idx);
+
+      final indexFile = File(p.join(indexDir.path, '${entry.id}.json'));
+      if (indexFile.existsSync()) {
+        if (!toDeleteFiles.any((file) => file.path == indexFile.path)) {
+          toDeleteFiles.add(indexFile);
+        }
       }
     }
 
@@ -3834,18 +3958,21 @@ class PortableVcs {
 
   Future<Map<String, String>> buildFingerprint(Directory dir) async {
     final out = <String, String>{};
-
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
-      if (entity is! File) continue;
+      if (entity is! File || !entity.existsSync()) continue;
 
       final rel = _normalizeRelativePath(p.relative(entity.path, from: dir.path));
+      
       if (await _isIgnoredPath(rel)) continue;
 
       try {
+        final stat = await entity.stat();
+        if (stat.size == 0 && rel.endsWith('.old')) continue;
+
         final bytes = await entity.readAsBytes();
         out[rel] = hash.sha256.convert(bytes).toString();
       } catch (e) {
-        print("⚠️ Could not read '$rel': $e");
+        continue; 
       }
     }
 
@@ -5371,14 +5498,30 @@ class PortableVcs {
       return;
     }
 
-    final password = askPassword();
-    if (password == null) return;
+    List<String> paths = [];
 
-    final snapshot = await readSnapshot(context, targetId, password: password);
-    if (snapshot == null) return;
+    final cachedIndex = await IndexService.loadSnapshotIndex(context.remoteRepoDir, targetId);
+    
+    if (cachedIndex != null) {
+      print('⚡ ${"Fast-loading tree from index...".grey}');
+      paths = cachedIndex.keys.toList()..sort();
+    } else {
+      print('🔒 ${"Index not found. Decryption required...".yellow}');
+      final password = askPassword();
+      if (password == null) return;
 
-    final files = await _decodeSnapshotFiles(snapshot);
-    final paths = files.keys.toList()..sort();
+      final snapshot = await readSnapshot(context, targetId, password: password);
+      if (snapshot == null) return;
+
+      final files = await _decodeSnapshotFiles(snapshot);
+      paths = files.keys.toList()..sort();
+      
+      await IndexService.saveSnapshotIndex(
+        remoteRepoDir: context.remoteRepoDir, 
+        snapshotId: targetId, 
+        fileMap: Map<String, String>.from(snapshot.fingerprint)
+      );
+    }
 
     final treeStats = TreeStats();
 
@@ -5387,6 +5530,7 @@ class PortableVcs {
     print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green} (${entry.message.grey})');
     print('${"Track:".yellow.padRight(12)} ${targetTrackName.magenta.bold}');
     print('${"Created:".yellow.padRight(12)} ${_formatDateForList(entry.createdAt)}');
+    if (cachedIndex != null) print('${"Source:".yellow.padRight(12)} ${"Delta-Index (Instant)".cyan}');
     print('═' * 60);
 
     if (paths.isEmpty) {
@@ -5394,7 +5538,6 @@ class PortableVcs {
     } else {
       final root = _buildTree(paths);
       print('${context.remoteMeta.projectName.blue.bold}/'); 
-
       _printTreeNode(root, prefix: '', stats: treeStats);
     }
 
@@ -5439,9 +5582,7 @@ class PortableVcs {
   }) {
     final entries = node.children.values.toList()
       ..sort((a, b) {
-        if (a.isFile != b.isFile) {
-          return a.isFile ? 1 : -1;
-        }
+        if (a.isFile != b.isFile) return a.isFile ? 1 : -1;
         return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       });
 
@@ -5452,11 +5593,7 @@ class PortableVcs {
 
       if (child.isFile) {
         stats.files++;
-        String icon = '📄';
-        if (child.name.endsWith('.dart')) icon = '🎯';
-        if (child.name.endsWith('.json') || child.name.endsWith('.yaml')) icon = '⚙️';
-        if (child.name.endsWith('.md')) icon = '📝';
-        
+        final icon = _getFileIcon(child.name);
         print('$prefix$branch$icon ${child.name.green}');
       } else {
         stats.directories++;
@@ -5467,6 +5604,25 @@ class PortableVcs {
           stats: stats,
         );
       }
+    }
+  }
+
+  String _getFileIcon(String fileName) {
+    final ext = p.extension(fileName).toLowerCase();
+    switch (ext) {
+      case '.dart': return '🎯';
+      case '.json':
+      case '.yaml':
+      case '.toml': return '⚙️';
+      case '.md':   return '📝';
+      case '.txt':  return '📄';
+      case '.exe':
+      case '.sh':
+      case '.bat':  return '⚡';
+      case '.jpg':
+      case '.png':
+      case '.svg':  return '🖼️';
+      default:      return '📄';
     }
   }
 
@@ -7266,6 +7422,7 @@ extension ColorConsole on String {
   String get magenta => '\x1B[35m$this\x1B[0m';
   String get white => '\x1B[37m$this\x1B[0m';
   String get grey => '\x1B[90m$this\x1B[0m';
+  String get gray    => '\x1B[90m$this\x1B[0m';
   String get bold => '\x1B[1m$this\x1B[0m';
   String get italic => '\x1B[3m$this\x1B[0m';
   String get underline => '\x1B[4m$this\x1B[0m';
