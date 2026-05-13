@@ -44,4 +44,18 @@ class IndexService {
       return null;
     }
   }
+
+  static Future<void> deleteSnapshotIndex({
+    required Directory remoteRepoDir,
+    required String snapshotId,
+  }) async {
+    try {
+      final indexFile = File(p.join(remoteRepoDir.path, 'index', '$snapshotId.json'));
+      if (indexFile.existsSync()) {
+        await indexFile.delete();
+      }
+    } catch (e) {
+      print('⚠️ Non-critical: Could not delete index for $snapshotId: $e');
+    }
+  }
 }
