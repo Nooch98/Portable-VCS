@@ -1,5 +1,59 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.3.9-Experimental.2': '''
+  # 📦 THE STABILITY & UI REFINEMENT
+
+  This update cycle focuses on data integrity, high-precision file tracking, and the expansion of the Hooks ecosystem. UI components are in active development.
+
+  > [!IMPORTANT]
+  > **Internal Release Guard**: As per current protocol, releases are not launched automatically; manual verification of `lib/vcs.dart` is mandatory.
+
+  ---
+  ## 🎨 UI & RENDERING ENGINE (BETA) [[ WARNING: IN-PROGRESS ]]
+  
+  * **Experimental Table Support**: Added initial support for Markdown tables.
+    [[ WARNING: BUG ]] The column alignment is not yet perfect and may shift with complex ANSI styles.
+  * **Parser Limitations**: The Markdown parser is in early stages.
+    [[ RED: KNOWN-ISSUE ]] The syntax separator `|:--- |` is currently not filtered and will appear in the output.
+  * **Context Color Recovery**: Initial implementation of `restoreColor` logic to prevent color bleeding after badges.
+
+  ---
+  ## ⚙️ CORE & SYNCHRONIZATION [[ TAG: INTEGRITY ]]
+
+  * **Precision Delta Tracking**: Fixed a bug in the `push` engine.
+    The system now performs a physical-to-memory cross-check using `listSync` and `existsSync`.
+    [[ RED: FIX ]] Deletions are now correctly flagged as [[ CRITICAL: DELETED ]] instead of Modified.
+  * **File Crawler**: New `buildFingerprint` function to handle OS-level locks (e.g., `vcs.exe.old`).
+    [[ SYSTEM: OS-LOCK-HANDLING ]] Prevents corrupted fingerprints in snapshot metadata.
+  * **Enhanced Push Preview**: Redesigned pre-confirmation UI using `enum`-based counting logic for a 100% parity check.
+
+  ---
+  ## 🪝 PRO-GRADE HOOK TEMPLATES [[ TAG: AUTOMATION ]]
+  
+  Introducing a suite of automation scripts in `templates/hooks/` to standardize repository health:
+
+  | Hook Name | Protection | Target |
+  |:--- |:--- |:--- |
+  | `check_tools` | TODO Scanner | `\bTODO \b` |
+  | `check_cleanup` | Conflict Guard | `<<<<<<<` |
+  | `forbidden_files` | Security Guard | `.env`, `.log` |
+  | `secrets_detects` | Credential Shield | API Keys / Tokens |
+
+  ---
+  ## 🐞 FIXES & REFINEMENTS
+
+  > [!WARNING]
+  > **Windows Environments**: It is recommended to close any processes using the executable before performing a deep prune due to file-lock constraints.
+
+  * **Path Normalization**: Reinforced `_normalizeRelativePath` logic.
+    [[ SUCCESS: FIXED ]] Resolved mixed-slash issues: [[ WHITE: / ]] vs [[ WHITE: \\ ]].
+  * **Performance**: `tree` and `ancestry` commands now utilize the `delta-index` for faster metadata traversal.
+  * **Summary Logic**: Fixed synchronization between log deletion reports and console preview.
+  * **prune logic**: Now prune removes the delta-indexes corresponding to the deleted snapshots
+  * **push --amend**: Now the --amend flag takes into account the delta-index, avoiding duplication.
+  * **tree**: Now tree uses the delta-index if available to display the repository map
+  ''',
+
     '0.3.9-Experimental.1': '''
   ### ⚡ THE DELTA-INDEX ENGINE (NATIVE SEARCH ACCELERATION)
   This version introduces a new indexing layer, enabling near-instant file discovery by eliminating unnecessary decryption cycles.
