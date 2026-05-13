@@ -89,7 +89,7 @@ class HookManager {
           
           final success = await _executeHook(scriptFile, isManual: false);
           if (!success) {
-            print('❌ ${"Push aborted:".red} Hook "$name" failed.');
+            print('\n❌ ${"Push aborted:".red} Hook "$name" failed.');
             return false;
           }
         }
@@ -133,19 +133,20 @@ class HookManager {
       procArgs = [absolutePath];
     }
 
-    final result = await Process.run(executable, procArgs, runInShell: true);
+    final process = await Process.start(
+      executable, 
+      procArgs, 
+      runInShell: true, 
+      mode: ProcessStartMode.inheritStdio
+    );
 
-    if (result.stdout.toString().trim().isNotEmpty) print(result.stdout);
-    if (result.stderr.toString().trim().isNotEmpty) {
-      print('❌ Hook Error Output:');
-      print(result.stderr);
-    }
+    final exitCode = await process.exitCode;
 
-    if (result.exitCode == 0) {
-      if (isManual) print('✅ Success.');
+    if (exitCode == 0) {
+      if (isManual) print('\n✅ Success.');
       return true;
     } else {
-      print('⚠️ Hook failed (Exit: ${result.exitCode})');
+      print('\n⚠️ Hook failed (Exit: $exitCode)');
       return false;
     }
   }
