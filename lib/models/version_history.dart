@@ -5,9 +5,6 @@ class VersionHistory {
 
   This update cycle focuses on data integrity, high-precision file tracking, and the expansion of the Hooks ecosystem. UI components are in active development.
 
-  > [!IMPORTANT]
-  > **Internal Release Guard**: As per current protocol, releases are not launched automatically; manual verification of `lib/vcs.dart` is mandatory.
-
   ---
   ## 🎨 UI & RENDERING ENGINE (BETA) [[ WARNING: IN-PROGRESS ]]
   
