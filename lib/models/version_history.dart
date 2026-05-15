@@ -1,30 +1,162 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.0-Experimental.1': '''
+  # 🌐 THE PORTABILITY & SMART OPENER RELEASE
+
+  This major experimental update breaks the directory dependency chain. VCS now features intelligent cross-directory execution, dynamic hardware target mapping, and advanced index scoping.
+  ---
+
+  ## 📂 SMART NAVIGATION & PORTABILITY [[ TAG: ZERO-CONFIG ]]
+
+  • **New Command: `vcs open`**: A smart, context-unbound opener tool. Can be executed from any terminal path without requiring a local initialized repository.
+  • **New Command: `vcs adopt`**: Introduced an interactive recovery and linking engine. Scan your connected Vault, view available remote repositories, and instantly regenerate a matching `.vcs/local_meta.json` in any folder to gain immediate workspace control.
+  • **Optimized Windows Execution**: Designed using decoupled `cmd /c start ""` wrappers for seamless OS-level path resolution.
+
+  ---
+
+  ## 🔍 INDEXING & INSPECTION ENGINE [[ TAG: NEW-CORE ]]
+
+  • **New Command: `vcs di`**: Implementation of the **Delta-Index Viewer**. Allows for near-instant inspection of any snapshot's file structure without requiring decryption of the data blobs.
+    - **High-Precision Filtering**: Includes native support for the `--ext` flag to isolate specific file families (e.g., `.dart`, `.json`) in large repositories.
+  • **Partial Context Bootstrapping**: Modified `loadRepoContext(silent: true)` to grant read access to the USB sub-systems even if local metadata is missing. This is the foundation that allows `open`, `adopt` and `list` to work globally.
+
+  ---
+
+  ## 🎨 RENDERING ENGINE REFINEMENTS [[ TAG: UI-TWEAKS ]]
+
+  • **Native Syntax Highlighting**: Integrated the `highlight` Abstract Syntax Tree (AST) engine natively inside `_renderMarkdown`. The formatter now natively and independently supports structured code blocks in **Python**, **Dart**, **Go**, **JSON**, **JavaScript**, **TypeScript**, **Rust**, **C++** and **HTML**, applying full color mapping using direct ANSI palettes.
+
+    ### Python
+
+    ```python
+    def vault_status(connected: bool):
+        # Technical health check snapshot preview
+        if not connected:
+            print("❌ Vault offline")
+            return 500
+        
+        assets = ["core.vcs", "meta.json"]
+        for index, file in enumerate(assets):
+            print(f"[{index}] Encrypting: {file}")
+        return 200
+    ```
+
+    ### Dart
+
+    ```dart
+    void main() async {
+      final String version = "0.4.0";
+      print("Booting version: \$version");
+      await loadRepoContext(silent: true);
+    }
+    ```
+
+    ### Go
+
+    ```go
+    package main
+    import "fmt"
+
+    func main() {
+        fmt.Println("VCS Core: Path resolver initiated.")
+    }
+    ```
+
+    ### JSON
+
+    ```json
+    {
+      "status": "success",
+      "vault": "core.vcs",
+      "encrypted": true,
+      "files_count": 42
+    }
+    ```
+
+    ### JavaScript
+
+    ```javascript
+    const path = require('path');
+
+    function resolveVcsPath(target) {
+        console.log(`Resolving route: \${target}`);
+        return path.join(__dirname, '.vcs', target);
+    }
+    ```
+
+    ### TypeScript
+
+    ```typescript
+    interface VcsConfig {
+        readonly path: string;
+        isLogged: boolean;
+    }
+    ```
+
+    ### Rust
+
+    ```rust
+    fn main() {
+        let is_valid: bool = true;
+        if is_valid {
+            println!("Formatting alignment test passed.");
+        }
+    }
+    ```
+
+    ### C++
+
+    ```cpp
+    #include <iostream>
+
+    void checkSystem() {
+        std::cout << "Engine verification initiated." << std::endl;
+    }
+    ```
+
+    ### HTML
+
+    ```html
+    <div class="terminal-table">
+      <span class="border-cyan">┃</span>
+      <p class="cell-text">Value</p>
+    </div>
+    ```
+
+  • **Table Layout Optimization**: Refined the cell padding and boundary rendering for Markdown tables to improve visual readability across different terminal sizes.
+    [[ WARNING: WORK-IN-PROGRESS ]] Column alignment is more stable but still experimental; complex nested ANSI styles may cause minor shifts.
+  • **Path & Route Highlighting**: Enhanced the inline formatter to automatically detect, isolate, and apply distinct visual weight to system paths and file routes.
+  • **Formatting & Indent Fixes**: Patched the parsing loops in `_renderMarkdown` to capture original leading spaces, preventing the engine from destroying native alignment in nested lists or subcommand options.
+  ''',
+
     '0.3.9-Experimental.2': '''
   # 📦 THE STABILITY & UI REFINEMENT
 
   This update cycle focuses on data integrity, high-precision file tracking, and the expansion of the Hooks ecosystem. UI components are in active development.
 
   ---
+
   ## 🎨 UI & RENDERING ENGINE (BETA) [[ WARNING: IN-PROGRESS ]]
   
-  * **Experimental Table Support**: Added initial support for Markdown tables.
+  • **Experimental Table Support**: Added initial support for Markdown tables.
     [[ WARNING: BUG ]] The column alignment is not yet perfect and may shift with complex ANSI styles.
-  * **Parser Limitations**: The Markdown parser is in early stages.
+  • **Parser Limitations**: The Markdown parser is in early stages.
     [[ RED: KNOWN-ISSUE ]] The syntax separator `|:--- |` is currently not filtered and will appear in the output.
-  * **Context Color Recovery**: Initial implementation of `restoreColor` logic to prevent color bleeding after badges.
+  • **Context Color Recovery**: Initial implementation of `restoreColor` logic to prevent color bleeding after badges.
 
   ---
+
   ## ⚙️ CORE & SYNCHRONIZATION [[ TAG: INTEGRITY ]]
 
-  * **Precision Delta Tracking**: Fixed a bug in the `push` engine.
+  • **Precision Delta Tracking**: Fixed a critical bug in the `push` engine.
     The system now performs a physical-to-memory cross-check using `listSync` and `existsSync`.
     [[ RED: FIX ]] Deletions are now correctly flagged as [[ CRITICAL: DELETED ]] instead of Modified.
-  * **File Crawler**: New `buildFingerprint` function to handle OS-level locks (e.g., `vcs.exe.old`).
+  • **Atomic File Crawler**: New `buildFingerprint` function to handle OS-level locks (e.g., `vcs.exe.old`).
     [[ SYSTEM: OS-LOCK-HANDLING ]] Prevents corrupted fingerprints in snapshot metadata.
-  * **Enhanced Push Preview**: Redesigned pre-confirmation UI using `enum`-based counting logic for a 100% parity check.
+  • **Enhanced Push Preview**: Redesigned pre-confirmation UI using `enum`-based counting logic for a 100% parity check.
 
   ---
+
   ## 🪝 PRO-GRADE HOOK TEMPLATES [[ TAG: AUTOMATION ]]
   
   Introducing a suite of automation scripts in `templates/hooks/` to standardize repository health:
@@ -37,18 +169,19 @@ class VersionHistory {
   | `secrets_detects` | Credential Shield | API Keys / Tokens |
 
   ---
+
   ## 🐞 FIXES & REFINEMENTS
 
   > [!WARNING]
   > **Windows Environments**: It is recommended to close any processes using the executable before performing a deep prune due to file-lock constraints.
 
-  * **Path Normalization**: Reinforced `_normalizeRelativePath` logic.
+  • **Path Normalization**: Reinforced `_normalizeRelativePath` logic.
     [[ SUCCESS: FIXED ]] Resolved mixed-slash issues: [[ WHITE: / ]] vs [[ WHITE: \\ ]].
-  * **Performance**: `tree` and `ancestry` commands now utilize the `delta-index` for faster metadata traversal.
-  * **Summary Logic**: Fixed synchronization between log deletion reports and console preview.
-  * **prune logic**: Now prune removes the delta-indexes corresponding to the deleted snapshots
-  * **push --amend**: Now the --amend flag takes into account the delta-index, avoiding duplication.
-  * **tree**: Now tree uses the delta-index if available to display the repository map
+  • **Performance**: `tree` and `ancestry` commands now utilize the `delta-index` for faster metadata traversal.
+  • **Summary Logic**: Fixed synchronization between log deletion reports and console preview.
+
+  ---
+  [[ MAGENTA: VCS v0.3.9-Exp.2 ]] [[ DARK: 2026-05-13 ]]
   ''',
 
     '0.3.9-Experimental.1': '''
