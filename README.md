@@ -417,6 +417,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs list` | List repositories available on the connected USB/storage (includes linked status). |
 | | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder (with extraction feedback). |
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
+| | `vcs open` | Smart, context-unbound opener tool. Execute from any terminal path without requiring a local initialized repository. |
+| | `vcs adopt` | Interactive recovery and linking engine. Scan your connected Vault, view available remote repositories, and instantly regenerate a matching `.vcs/local_meta.json`. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
 | | `vcs tag <name>` | Assign a friendly label to a snapshot |
 | | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
@@ -428,6 +430,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs info` | Show detailed information about the current project and linked vault (includes activity charts). |
 | | `vcs status` | Summary of messages to help create Git/GitHub commits. |
 | | `vcs summary` | Compare tree against latest of the **active track**. |
+| | `vcs di` | Implementation of the **Delta-Index Viewer**. Allows for near-instant inspection of any snapshot's file structure without requiring decryption of the data blobs. |
+| | `vcs di --ext <extension>` | High-precision filtering. Isolate specific file families (e.g., `.dart`, `.json`) in large repositories using the `--ext` flag. |
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
 | | `vcs diff [id] [-f]` | Compare snapshots or tree. `-f` enables **Delta-Index**. |
 | | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
