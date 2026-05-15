@@ -13,6 +13,7 @@ import 'package:crypto/crypto.dart' as hash;
 import 'package:cryptography/cryptography.dart' as crypto_alg;
 import 'package:http/http.dart' as http;
 import 'package:vcs/models/alias_manager.dart';
+import 'package:vcs/models/ansi_string.dart';
 import 'package:vcs/models/change_counts.dart';
 import 'package:vcs/models/decrypted_snapshot.dart';
 import 'package:vcs/models/diff_line.dart';
@@ -31,10 +32,12 @@ import 'package:vcs/models/track_state.dart';
 import 'package:vcs/models/tree_node.dart';
 import 'package:vcs/models/update_cache.dart';
 import 'package:vcs/models/version_history.dart';
+import 'package:highlight/highlight.dart';
+import 'package:highlight/languages/all.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.3.9-Experimental.2';
+const String vcsBaseVersion = '0.4.0-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -327,7 +330,7 @@ class PortableVcs {
     print('═' * 55 + '\n');
   }
 
-   void showHelp() {
+  void showHelp() {
     const String helpMarkdown = '''
 
     # 🚀 PORTABLE SNAPSHOT VAULT [[ ${vcsBaseVersion} ]]
@@ -342,6 +345,11 @@ class PortableVcs {
     - `clone [repo_id]` Clone a repository from USB into a local folder.
       - `--into <dir>` Specify a custom directory name for the clone.
     - `bind [repo_id]` Bind current folder to an existing remote repository.
+    - `adopt` Interactive tool to link the current folder to an existing USB project.
+    - `open [target]` Smart opener for projects and hardware.
+      - `(no args)`      Opens the current directory in VS Code.
+      - `usb`            Opens the root of the connected Vault drive.
+      - `<name>`         Scans /USB/Local. If found on USB, opens the encrypted folder (even with random IDs).
 
     ## 🛤️ TRACKS MANAGEMENT
     - `track list` List all available tracks.
@@ -386,6 +394,10 @@ class PortableVcs {
     ## 🔍 INSPECTION & PERFORMANCE
     - `ui` Launch the Web Dashboard (Split-view diff support).
     - `status` Compare local tree vs latest of the active track.
+    - `di` Inspect the pre-computed **Delta-Index** of a snapshot.
+      - `-i, --id <id>` Target a specific snapshot (defaults to latest).
+      - `-e, --ext <.ext>` Filter files by type (e.g., `vcs di --ext .dart`).
+      - `-t, --track <name>` Target a specific track.
     - `timeline` Show an interactive or list-based chronological view.
       - `-t, --track <name>` Visualize a specific track.
       - `-n, --limit <n>` Number of snapshots to display (default: 15).
@@ -397,7 +409,7 @@ class PortableVcs {
       - `--file <query>` Search for filenames or filter content search by path.
     - `info` Project overview, storage impact and activity charts.
       - `--charts` Display 7-day activity histogram.
-    - `summary` Summary of messages to help create Git/GitHub commits.
+    - `summary` Summary of messages to help create Git|GitHub commits.
     - `diff` Compare latest snapshot vs current live files.
       - `-f, --fast` Use high-speed mode using **Delta-Index**.
     - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
@@ -440,7 +452,7 @@ class PortableVcs {
       - `--older-than N` Delete snapshots older than N days.
       - `--garbage` Deep clean: Remove orphaned data blobs and unused indices.
     - `storage-check` Hardware diagnostic and latency test of the device.
-      - `--full` Perform a more intensive read/write integrity check.
+      - `--full` Perform a more intensive read|write integrity check.
     - `migrate` Move your vault to a new drive or NAS:
       - `--to <path>` Target destination path for migration.
       - `--delete-source` Remove data from old drive after success.
@@ -884,6 +896,72 @@ class PortableVcs {
     } catch (e) {
       print('\r❌ ${"Clone failed: $e".red}');
     }
+  }
+
+  Future<void> adoptProject() async {
+    final context = await loadRepoContext(silent: true);
+    if (context == null) {
+      print('❌ ${"Error:".red} No prepared USB drive found. Connect your Vault to adopt a project.');
+      return;
+    }
+
+    final remoteBaseDir = Directory(p.join(context.usbDrive.path, remoteReposDir));
+    if (!remoteBaseDir.existsSync()) {
+      print('❌ ${"Error:".red} No repositories found on USB.');
+      return;
+    }
+
+    List<Map<String, dynamic>> availableRepos = [];
+    for (var entity in remoteBaseDir.listSync().whereType<Directory>()) {
+      final metaFile = File(p.join(entity.path, remoteMetaFileName));
+      if (metaFile.existsSync()) {
+        try {
+          final meta = jsonDecode(await metaFile.readAsString());
+          availableRepos.add({
+            'name': meta['project_name'],
+            'id': meta['repo_id'],
+            'path': entity.path
+          });
+        } catch (_) {}
+      }
+    }
+
+    if (availableRepos.isEmpty) {
+      print('❌ No valid repositories found on USB to adopt.');
+      return;
+    }
+
+    print('\n# 🔍 [[ CYAN: ADOPT A PROJECT ]] ');
+    print('Select a repository to link with this folder:\n');
+    for (var i = 0; i < availableRepos.length; i++) {
+      print('  ${(i + 1).toString().yellow}. ${availableRepos[i]['name'].toString().bold} [[ grey: (${availableRepos[i]['id']}) ]]');
+    }
+    print('\n  ${"0".red}. Cancel');
+
+    stdout.write('\nChoose an option: ');
+    final input = stdin.readLineSync();
+    final choice = int.tryParse(input ?? '');
+
+    if (choice == null || choice == 0 || choice > availableRepos.length) {
+      print('❌ Adoption cancelled.');
+      return;
+    }
+
+    final selected = availableRepos[choice - 1];
+
+    final vcsFolder = Directory('.vcs');
+    if (!vcsFolder.existsSync()) await vcsFolder.create();
+
+    final localMetaFile = File(p.join(vcsFolder.path, 'local_meta.json'));
+    final localMetaData = {
+      'repo_id': selected['id'],
+      'last_adoption': DateTime.now().toIso8601String(),
+    };
+
+    await localMetaFile.writeAsString(const JsonEncoder.withIndent('  ').convert(localMetaData));
+
+    print('\n✅ ${"Success:".green} This folder is now linked to project "${selected['name'].toString().bold}"');
+    print('[[ grey: Run "vcs status" or "vcs pull" to begin. ]]');
   }
 
   Future<void> bindRepo({String? repoId}) async {
@@ -2129,15 +2207,99 @@ class PortableVcs {
     print('');
   }
 
+  String _convertNodesToAnsi(List<Node> nodes) {
+    final sb = StringBuffer();
+    
+    void traverse(Node node) {
+      if (node.value != null) {
+        final className = node.className?.toLowerCase().trim() ?? '';
+
+        switch (className) {
+          case 'keyword':
+          case 'built_in':
+          case 'type':
+          case 'literal':
+          case 'operator':
+            sb.write(node.value!.magenta.bold);
+            break;
+
+          case 'string':
+          case 'quote':
+          case 'subst':
+            sb.write(node.value!.green);
+            break;
+
+          case 'number':
+          case 'symbol':
+          case 'bullet':
+          case 'regexp':
+          case 'variable':
+          case 'template-variable':
+            sb.write(node.value!.yellow);
+            break;
+
+          case 'comment':
+            sb.write(node.value!.grey.italic);
+            break;
+
+          case 'title':
+          case 'class':
+          case 'function':
+          case 'title.function':
+          case 'title.class':
+          case 'title function':
+          case 'title class':
+            sb.write(node.value!.cyan);
+            break;
+
+          case 'params':
+          case 'attr':
+          case 'property':
+          case 'attribute':
+            sb.write(node.value!.white);
+            break;
+
+          case 'meta':
+          case 'meta-keyword':
+          case 'meta keyword':
+            sb.write(node.value!.blue);
+            break;
+
+          default:
+            sb.write(node.value!);
+        }
+      }
+      
+      if (node.children != null) {
+        for (var child in node.children!) {
+          traverse(child);
+        }
+      }
+    }
+
+    for (var node in nodes) {
+      traverse(node);
+    }
+    return sb.toString();
+  }
+
+  bool _languagesRegistered = false;
+
   String _renderMarkdown(String text) {
     if (text.isEmpty) return text;
 
-    String rendered = text;
+    if (!_languagesRegistered) {
+      allLanguages.forEach((name, engine) {
+        highlight.registerLanguage(name, engine);
+        highlight.registerLanguage(name.toLowerCase(), engine);
+      });
+      _languagesRegistered = true;
+    }
+
+    String rendered = text.replaceAll('\u00A0', ' ').replaceAll('\r\n', '\n');
 
     rendered = rendered.replaceAllMapped(RegExp(r'((?:^[ \t]*\|.*\|[ \t]*(?:\n|$))+)'), (Match tableMatch) {
       List<String> rows = tableMatch.group(0)!.trim().split('\n');
-      if (rows.length < 2) return tableMatch.group(0)!;
-
       List<List<String>> data = rows
           .where((r) => !RegExp(r'^[ \t]*\|?[\s\-:|]+\|?[ \t]*$').hasMatch(r))
           .map((r) {
@@ -2149,55 +2311,157 @@ class PortableVcs {
 
       if (data.isEmpty) return "";
 
-      int realLength(String s) => s.replaceAll(RegExp(r'\x1B\[[0-9;]*m'), '').length;
       int cols = data.map((e) => e.length).reduce((a, b) => a > b ? a : b);
+      List<int> widths = List.filled(cols, 0);
       
-      List<List<String>> renderedData = data.map((row) {
+      List<List<AnsiString>> renderedData = data.map((row) {
         return List.generate(cols, (i) {
-          if (i >= row.length) return "";
-          String c = row[i];
-          c = _renderBadges(c);
-          c = c.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
-          c = c.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
-          return c;
+          String content = (i < row.length) ? row[i] : "";
+          content = _applyInlineFormatting(content);
+          var cell = AnsiString(content);
+          if (cell.visualLength > widths[i]) widths[i] = cell.visualLength;
+          return cell;
         });
       }).toList();
 
-      List<int> widths = List.filled(cols, 0);
-      for (var row in renderedData) {
-        for (var i = 0; i < cols; i++) {
-          int len = realLength(row[i]);
-          if (len > widths[i]) widths[i] = len;
-        }
-      }
-
       String tableOut = "\n";
       for (var i = 0; i < renderedData.length; i++) {
-        String line = "  ┃ ";
+        String line = "  ┃ ".cyan; 
         for (var j = 0; j < cols; j++) {
-          String cell = renderedData[i][j];
-          int padding = widths[j] - realLength(cell);
-          line += cell + (" " * padding) + (j == cols - 1 ? " ┃" : " │ ");
+          line += renderedData[i][j].padRight(widths[j]) + (j == cols - 1 ? " ┃".cyan : " │ ".grey);
         }
-        tableOut += (i == 0) ? line.bold.cyan + "\n" : line + "\n";
+        tableOut += (i == 0) ? line.bold + "\n" : line + "\n";
         if (i == 0) {
-          tableOut += "  ┣━" + widths.map((w) => "━" * w).join("━┿━") + "━┫\n";
+          tableOut += "  ┣━".cyan + widths.map((w) => "━" * w).join("━┿━".cyan) + "━┫".cyan + "\n";
         }
       }
       return tableOut;
     });
 
-    rendered = rendered.replaceAllMapped(RegExp(r'```[a-z]*\n([\s\S]*?)```'), (m) {
-      final content = m.group(1)?.trim() ?? "";
-      return content.split('\n').map((l) => '    ┃ '.italic + l).join('\n');
-    });
+    List<String> rawLines = rendered.split('\n');
+    List<String> preProcessedLines = [];
+    bool inCodeBlock = false;
+    String currentLang = "";
+    List<String> codeBlockContent = [];
 
-    List<String> lines = rendered.split('\n');
+    final Map<String, Set<String>> langKeywordsMap = {
+      'python': {'def', 'if', 'else', 'elif', 'for', 'while', 'return', 'in', 'not', 'and', 'or', 'import', 'from', 'class', 'try', 'except', 'pass', 'print', 'enumerate', 'True', 'False'},
+      'dart': {'void', 'main', 'var', 'final', 'const', 'import', 'class', 'extends', 'with', 'implements', 'if', 'else', 'for', 'while', 'return', 'int', 'double', 'String', 'bool', 'List', 'Map', 'Set', 'true', 'false', 'print', 'async', 'await', 'Future', 'this', 'new', 'get', 'set'},
+      'javascript': {'function', 'let', 'const', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'from', 'export', 'default', 'class', 'extends', 'true', 'false', 'console', 'log', 'async', 'await', 'Promise', 'this', 'null', 'typeof'},
+      'typescript': {'function', 'let', 'const', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'from', 'export', 'class', 'interface', 'type', 'string', 'number', 'boolean', 'any', 'void', 'unknown', 'true', 'false', 'console', 'log', 'async', 'await'},
+      'go': {'func', 'package', 'import', 'var', 'const', 'type', 'struct', 'interface', 'if', 'else', 'for', 'range', 'return', 'nil', 'true', 'false', 'string', 'int', 'bool', 'error', 'make', 'append', 'len', 'fmt', 'Println', 'Printf'},
+      'rust': {'fn', 'let', 'mut', 'struct', 'enum', 'impl', 'trait', 'use', 'mod', 'pub', 'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'return', 'true', 'false', 'String', 'str', 'u32', 'i32', 'bool', 'Option', 'Result', 'Some', 'None', 'Ok', 'Err', 'println'},
+      'cpp': {'int', 'float', 'double', 'char', 'bool', 'void', 'class', 'struct', 'public', 'private', 'protected', 'if', 'else', 'for', 'while', 'do', 'return', 'switch', 'case', 'default', 'include', 'define', 'std', 'cout', 'cin', 'endl', 'true', 'false', 'new', 'delete'},
+      'json': {'true', 'false', 'null'}
+    };
+
+    for (var line in rawLines) {
+      String trimmedLine = line.trim();
+      
+      if (trimmedLine.startsWith('```')) {
+        if (!inCodeBlock) {
+          inCodeBlock = true;
+          String afterBackticks = trimmedLine.substring(3).trim();
+          currentLang = afterBackticks.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '').toLowerCase();
+          codeBlockContent.clear();
+          continue;
+        } else {
+          inCodeBlock = false;
+          String fullContent = codeBlockContent.join('\n');
+          String highlighted = "";
+          
+          if (currentLang.isNotEmpty && langKeywordsMap.containsKey(currentLang)) {
+            final keywords = langKeywordsMap[currentLang]!;
+            final lines = fullContent.split('\n');
+            final fallbackLines = <String>[];
+            
+            for (var l in lines) {
+              String trimmedL = l.trim();
+              
+              if (currentLang == 'python' && trimmedL.startsWith('#')) {
+                fallbackLines.add(l.grey.italic);
+                continue;
+              }
+              if ((currentLang == 'dart' || currentLang == 'javascript' || currentLang == 'typescript' || currentLang == 'go' || currentLang == 'rust' || currentLang == 'cpp') && trimmedL.startsWith('//')) {
+                fallbackLines.add(l.grey.italic);
+                continue;
+              }
+              
+              String processedLine = l;
+              
+              if (currentLang == 'json') {
+                processedLine = processedLine.replaceAllMapped(
+                  RegExp(r'("([^"\\]|\\.)*")\s*:'),
+                  (match) => "${match.group(1)!.cyan}:"
+                );
+                processedLine = processedLine.replaceAllMapped(
+                  RegExp(r':\s*("([^"\\]|\\.)*")'),
+                  (match) => ": ${match.group(1)!.green}"
+                );
+                processedLine = processedLine.replaceAllMapped(
+                  RegExp(r'\b(true|false|null|-?\d+(\.\d+)?)\b'),
+                  (match) => match.group(0)!.yellow
+                );
+              } else {
+                final words = l.split(RegExp(r'(\W)'));
+                final uniqueWords = words.where((w) => keywords.contains(w)).toSet();
+                
+                for (var word in uniqueWords) {
+                  processedLine = processedLine.replaceAllMapped(
+                    RegExp('\\b$word\\b'), 
+                    (match) => (word == 'print' || word == 'enumerate' || word == 'console' || word == 'log' || word == 'Println' || word == 'Printf' || word == 'println' || word == 'cout') 
+                        ? word.cyan 
+                        : word.magenta.bold
+                  );
+                }
+                
+                processedLine = processedLine.replaceAllMapped(
+                  RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')"),
+                  (match) => match.group(0)!.green
+                );
+              }
+              
+              fallbackLines.add(processedLine);
+            }
+            highlighted = fallbackLines.join('\n');
+          } else if (currentLang == 'html' || currentLang == 'xml') {
+            final lines = fullContent.split('\n');
+            final fallbackLines = <String>[];
+            for (var l in lines) {
+              String processedLine = l;
+              processedLine = processedLine.replaceAllMapped(RegExp(r'()'), (match) => match.group(0)!.grey.italic);
+              processedLine = processedLine.replaceAllMapped(RegExp(r'(<\/?[a-zA-Z0-9:-]+)'), (match) => match.group(0)!.magenta.bold);
+              processedLine = processedLine.replaceAllMapped(RegExp(r'(\s[a-zA-Z0-9:-]+==)'), (match) => match.group(0)!.cyan);
+              processedLine = processedLine.replaceAllMapped(RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')"), (match) => match.group(0)!.green);
+              processedLine = processedLine.replaceAllMapped(RegExp(r'(>[^<]+<)'), (match) => ">${match.group(0)!.substring(1, match.group(0)!.length - 1).white}<");
+              fallbackLines.add(processedLine);
+            }
+            highlighted = fallbackLines.join('\n');
+          } else {
+            try {
+              final result = highlight.parse(fullContent, language: currentLang);
+              highlighted = _convertNodesToAnsi(result.nodes ?? []);
+            } catch (e) {
+              highlighted = fullContent;
+            }
+          }
+          
+          preProcessedLines.addAll(highlighted.split('\n').map((l) => '    │ '.grey + l));
+          continue;
+        }
+      }
+
+      if (inCodeBlock) {
+        codeBlockContent.add(line);
+      } else {
+        preProcessedLines.add(line);
+      }
+    }
+
     List<String> result = [];
     String? activeAdmonition;
 
-    for (var line in lines) {
-      String processed = line;
+    for (var line in preProcessedLines) {
       String trimmed = line.trim();
 
       if (line.contains('┃') || line.contains('┣') || line.contains('│')) {
@@ -2205,28 +2469,20 @@ class PortableVcs {
         continue;
       }
 
-      processed = processed.replaceAllMapped(
-        RegExp(r'!\[.*?\]\(https:\/\/img\.shields\.io\/badge\/(.*?)-(.*?)-(.*?)(?:\?.*?)?\)'), 
-        (m) {
-          String label = (m.group(1) ?? "").replaceAll('--', '-').replaceAll('_', ' ');
-          String message = (m.group(2) ?? "").replaceAll('--', '-').replaceAll('_', ' ');
-          String color = (m.group(3) ?? "blue").split('?')[0].toUpperCase();
-          return '[[ $color: $label $message ]]';
-        }
-      );
+      final indentMatch = RegExp(r'^[ \t]*').firstMatch(line);
+      final String indent = indentMatch != null ? indentMatch.group(0)! : '';
 
       if (trimmed.startsWith('> [!')) {
         final match = RegExp(r'> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', caseSensitive: false).firstMatch(trimmed);
         if (match != null) {
           activeAdmonition = match.group(1)!.toUpperCase();
           final icons = {'NOTE': 'ℹ', 'TIP': '💡', 'IMPORTANT': '📢', 'WARNING': '⚠️', 'CAUTION': '🛑'};
-          final head = '  ${icons[activeAdmonition]} $activeAdmonition';
-          
-          if (activeAdmonition == 'IMPORTANT') result.add(head.bold.cyan);
-          else if (activeAdmonition == 'WARNING') result.add(head.bold.yellow);
-          else if (activeAdmonition == 'CAUTION') result.add(head.bold.red);
-          else if (activeAdmonition == 'TIP') result.add(head.bold.green);
-          else result.add(head.bold.blue);
+          final head = ' ${icons[activeAdmonition]} $activeAdmonition';
+          final styles = {
+            'IMPORTANT': head.bold.cyan, 'WARNING': head.bold.yellow,
+            'CAUTION': head.bold.red, 'TIP': head.bold.green, 'NOTE': head.bold.blue,
+          };
+          result.add(indent + (styles[activeAdmonition] ?? head.bold.blue));
           continue;
         }
       }
@@ -2234,114 +2490,108 @@ class PortableVcs {
       if (trimmed.startsWith('>')) {
         String content = trimmed.replaceFirst('>', '').trimLeft();
         if (content.isNotEmpty) {
-          String restore = "";
-          if (activeAdmonition == 'IMPORTANT') restore = "\x1B[36m";
-          else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') restore = "\x1B[33m";
-          else if (activeAdmonition == 'TIP') restore = "\x1B[32m";
-          else if (activeAdmonition == 'NOTE') restore = "\x1B[34m";
+          String colorCode = activeAdmonition == 'IMPORTANT' ? "\x1B[36m" : 
+                            (activeAdmonition == 'WARNING' ? "\x1B[33m" : 
+                            (activeAdmonition == 'TIP' ? "\x1B[32m" : "\x1B[34m"));
           
-          content = _renderBadges(content, restore);
-          content = content.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green + restore);
-          content = content.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold + restore);
-
-          if (activeAdmonition == 'IMPORTANT') result.add('    ${content.cyan}');
-          else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') result.add('    ${content.yellow}');
-          else if (activeAdmonition == 'TIP') result.add('    ${content.green}');
-          else if (activeAdmonition == 'NOTE') result.add('    ${content.blue}');
-          else result.add('  ${content.grey.italic}');
+          content = _applyInlineFormatting(content, colorCode);
+          if (activeAdmonition == 'IMPORTANT') result.add(indent + '  ┃ '.cyan + content.cyan);
+          else if (activeAdmonition == 'WARNING' || activeAdmonition == 'CAUTION') result.add(indent + '  ┃ '.yellow + content.yellow);
+          else if (activeAdmonition == 'TIP') result.add(indent + '  ┃ '.green + content.green);
+          else result.add(indent + '  ┃ '.grey + content.grey.italic);
         }
         continue;
       }
 
       if (trimmed.isNotEmpty) activeAdmonition = null;
 
+      String processed = line;
+      
       if (trimmed.startsWith('# ')) {
-        processed = '\n  ' + _renderBadges(trimmed.replaceFirst('# ', ''), "\x1B[36m\x1B[1m").bold.cyan.underline + '\n';
+        processed = '\n' + indent + '▌ '.cyan.bold + _applyInlineFormatting(trimmed.replaceFirst('# ', ''), "\x1B[36m\x1B[1m").bold.cyan.underline + '\n';
       } 
       else if (trimmed.startsWith('## ')) {
-        processed = '\n  ' + _renderBadges(trimmed.replaceFirst('## ', ''), "\x1B[1m").bold + '\n  ' + ('─' * 45).grey;
-      } 
+        processed = '\n' + indent + _applyInlineFormatting(trimmed.replaceFirst('## ', ''), "\x1B[1m").bold + '\n' + indent + ('─' * 30).grey;
+      }
       else if (trimmed.startsWith('### ')) {
-        processed = '\n    ' + _renderBadges(trimmed.replaceFirst('### ', ''), "\x1B[33m\x1B[1m").bold.yellow;
+        processed = '\n' + indent + '📁 '.yellow + _applyInlineFormatting(trimmed.replaceFirst('### ', ''), "\x1B[33m").bold.yellow;
       }
+      else if (trimmed.startsWith('#### ')) {
+        processed = indent + '└ '.grey + _applyInlineFormatting(trimmed.replaceFirst('#### ', ''), "\x1B[3;90m").grey;
+      } 
       else if (RegExp(r'^[•\-\*] ').hasMatch(trimmed)) {
-        String listContent = trimmed.substring(2);
-        listContent = _renderBadges(listContent);
-        listContent = listContent.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
-        listContent = listContent.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
-        processed = '  • '.cyan + listContent;
+        processed = indent + '• '.cyan + _applyInlineFormatting(trimmed.substring(2));
       }
-      else {
-        final numListMatch = RegExp(r'^(\d+)\.\s+(.*)').firstMatch(trimmed);
-        if (numListMatch != null) {
-          String content = _renderBadges(numListMatch.group(2)!);
-          content = content.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
-          processed = '  ${numListMatch.group(1)!.bold.cyan}. $content';
-        } else if (trimmed == '---' || trimmed == '***' || trimmed == '___') {
-          processed = '\n  ' + ('━' * 50).grey.italic + '\n';
-        } else {
-          processed = _renderBadges(processed);
-          processed = processed.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green);
-          processed = processed.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold);
-          processed = processed.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => m.group(1)!.blue.underline);
-        }
+      else if (trimmed == '---' || trimmed == '***' || trimmed == '___') {
+        processed = '\n' + indent + ('┈' * 40).grey + '\n';
+      } else {
+        processed = _applyInlineFormatting(processed);
       }
-
       result.add(processed);
     }
-
     return result.join('\n');
+  }
+
+  String _applyInlineFormatting(String text, [String? restoreColor]) {
+    String res = _renderBadges(text, restoreColor);
+    String restore = restoreColor ?? "\x1B[0m";
+
+    res = res.replaceAllMapped(RegExp(r'(\.?\/[\w\d\/\.\-_]+)'), (m) => m.group(1)!.white.italic + restore);
+    res = res.replaceAllMapped(RegExp(r'\[\s?([A-Z0-9_-]{3,})\s?\]'), (m) => '[ '.grey + m.group(1)!.white.bold + ' ]'.grey + restore);
+    res = res.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green + restore);
+    res = res.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold + restore);
+    res = res.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => m.group(1)!.blue.underline + restore);
+
+    return res;
   }
 
   String _renderBadges(String text, [String? contextColor]) {
     final regExp = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]');
-
     return text.splitMapJoin(
       regExp,
       onMatch: (Match m) {
         final key = (m.group(1) ?? 'CYAN').toUpperCase();
         final label = (m.group(2) ?? "").trim();
-
-        String icon = "";
-        if (['RED', 'CRITICAL', 'CAUTION'].contains(key)) icon = "✘ ";
-        else if (['GREEN', 'SUCCESS', 'TIP'].contains(key)) icon = "✔ ";
-        else if (['YELLOW', 'WARNING'].contains(key)) icon = "⚠️ ";
-        else if (['MAGENTA', 'TAG'].contains(key)) icon = "🏷️ ";
-        else if (['BLUE', 'INFO', 'NOTE'].contains(key)) icon = "ℹ️ ";
-        else if (['CYAN', 'SYSTEM'].contains(key)) icon = "⚙️ ";
-
+        String icon = _getIconForBadge(key);
         final badgeText = ' $icon$label '.bold;
-
-        final Map<String, List<String>> themes = {
-          'RED':      [badgeText.onRed,     badgeText.white],
-          'CRITICAL': [badgeText.onRed,     badgeText.white],
-          'CAUTION':  [badgeText.onRed,     badgeText.white],
-          'ORANGE':   [badgeText.onRed,     badgeText.white],
-          'GREEN':    [badgeText.onGreen,   badgeText.black],
-          'SUCCESS':  [badgeText.onGreen,   badgeText.black],
-          'TIP':      [badgeText.onGreen,   badgeText.black],
-          'YELLOW':   [badgeText.onYellow,  badgeText.black],
-          'WARNING':  [badgeText.onYellow,  badgeText.black],
-          'BLUE':     [badgeText.onBlue,    badgeText.white],
-          'INFO':     [badgeText.onBlue,    badgeText.white],
-          'NOTE':     [badgeText.onBlue,    badgeText.white],
-          'MAGENTA':  [badgeText.onMagenta, badgeText.white],
-          'FEATURE':  [badgeText.onMagenta, badgeText.white],
-          'TAG':      [badgeText.onMagenta, badgeText.white],
-          'WHITE':    [badgeText.onWhite,   badgeText.black],
-          'LIGHT':    [badgeText.onWhite,   badgeText.black],
-          'BLACK':    [badgeText.onBlack,   badgeText.white],
-          'DARK':     [badgeText.onBlack,   badgeText.white],
-          'CYAN':     [badgeText.onCyan,    badgeText.black],
-          'SYSTEM':   [badgeText.onCyan,    badgeText.black],
-        };
-
-        final theme = themes[key] ?? [badgeText.onCyan, badgeText.black];
+        final theme = _getBadgeTheme(key, badgeText);
         String resetAndRestore = (contextColor != null) ? "\x1B[0m$contextColor" : "\x1B[0m";
         return theme[0].replaceAll(badgeText, theme[1]) + resetAndRestore;
       },
       onNonMatch: (String nonMatch) => nonMatch,
     );
+  }
+
+  String _getIconForBadge(String key) {
+    if (['RED', 'CRITICAL', 'CAUTION'].contains(key)) return "✘ ";
+    if (['GREEN', 'SUCCESS', 'TIP'].contains(key)) return "✔ ";
+    if (['YELLOW', 'WARNING'].contains(key)) return "⚠️ ";
+    if (['MAGENTA', 'TAG'].contains(key)) return "🏷️ ";
+    if (['BLUE', 'INFO', 'NOTE'].contains(key)) return "ℹ️ ";
+    if (['CYAN', 'SYSTEM'].contains(key)) return "⚙️ ";
+    return "";
+  }
+
+  List<String> _getBadgeTheme(String key, String text) {
+    final Map<String, List<String>> themes = {
+      'RED': [text.onRed, text.white],
+      'CRITICAL': [text.onRed, text.white],
+      'CAUTION': [text.onRed, text.white],
+      'GREEN': [text.onGreen, text.black],
+      'SUCCESS': [text.onGreen, text.black],
+      'TIP': [text.onGreen, text.black],
+      'YELLOW': [text.onYellow, text.black],
+      'WARNING': [text.onYellow, text.black],
+      'BLUE': [text.onBlue, text.white],
+      'INFO': [text.onBlue, text.white],
+      'NOTE': [text.onBlue, text.white],
+      'MAGENTA': [text.onMagenta, text.white],
+      'TAG': [text.onMagenta, text.white],
+      'WHITE': [text.onWhite, text.black],
+      'CYAN': [text.onCyan, text.black],
+      'SYSTEM': [text.onCyan, text.black],
+    };
+    return themes[key] ?? [text.onCyan, text.black];
   }
 
   Future<void> log({
@@ -3075,7 +3325,7 @@ class PortableVcs {
     }
   }
 
-  Future<void> stats() async {
+  Future<void> stats({Map<String, dynamic>? command, List<String> args = const []}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -3089,7 +3339,6 @@ class PortableVcs {
     String? largestId;
     int verifiedWithHash = 0;
     final trackSizes = <String, int>{};
-    
     final registeredFiles = <String>{};
 
     if (snapshotsDir.existsSync()) {
@@ -3192,6 +3441,44 @@ class PortableVcs {
       final size = _formatBytes(trackSizes[name] ?? 0);
       print('$prefix${name.padRight(18)} ${state.logs.length.toString().padLeft(3)} logs | ${size.padLeft(10)}');
     });
+
+    final bool showCharts = command?['charts'] == true || args.contains('--charts');
+    if (showCharts) {
+      print('\n${"FILE TYPE DISTRIBUTION".bold.cyan}');
+      final activeTrack = context.remoteMeta.activeTrack;
+      final lastSnapshotId = context.remoteMeta.tracks[activeTrack]?.logs.lastOrNull?.id;
+
+      if (lastSnapshotId != null) {
+        final indexData = await IndexService.loadSnapshotIndex(context.remoteRepoDir, lastSnapshotId);
+        if (indexData != null && indexData.isNotEmpty) {
+          final extensionMap = <String, int>{};
+          for (var path in indexData.keys) {
+            final ext = p.extension(path).toLowerCase();
+            final label = ext.isEmpty ? 'no-ext' : ext;
+            extensionMap[label] = (extensionMap[label] ?? 0) + 1;
+          }
+
+          final sortedExts = extensionMap.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+          final totalFiles = indexData.length;
+          const maxBarWidth = 40;
+
+          for (var entry in sortedExts.take(8)) {
+            final percent = entry.value / totalFiles;
+            final barCount = (percent * maxBarWidth).round();
+            final bar = ('█' * barCount).cyan + ('░' * (maxBarWidth - barCount)).grey;
+            final label = entry.key.padRight(8);
+            final countStr = entry.value.toString().padLeft(4);
+            final percentStr = (percent * 100).toStringAsFixed(1).padLeft(5);
+            print('   $label $bar $countStr files ($percentStr%)');
+          }
+          if (sortedExts.length > 8) print('   ${"... others".grey}');
+        } else {
+          print('   ${"ℹ No index available to generate charts.".grey}');
+        }
+      } else {
+        print('   ${"ℹ No snapshots in active track to analyze.".grey}');
+      }
+    }
 
     print('\n${"HEALTH STATUS".bold.cyan}');
     bool isHealthy = orphanCount == 0 && (verifiedWithHash == totalLogs);
@@ -3810,44 +4097,63 @@ class PortableVcs {
     return prepared[index];
   }
 
-  Future<RepoContext?> loadRepoContext() async {
-    if (!_localRepoFile.existsSync()) {
-      print('❌ This project is not initialized. Run init first.');
-      return null;
-    }
-
+  Future<RepoContext?> loadRepoContext({bool silent = false}) async {
     final usb = await findUsbDrive();
     if (usb == null) {
-      print('❌ No prepared USB drive found.');
+      if (!silent) print('❌ No prepared USB drive found.');
       return null;
     }
 
-    final localMeta = jsonDecode(await _localRepoFile.readAsString()) as Map<String, dynamic>;
-    final repoId = localMeta['repo_id']?.toString();
-    if (repoId == null || repoId.isEmpty) {
-      print('❌ Invalid local repo_id.');
-      return null;
+    if (!_localRepoFile.existsSync()) {
+      return RepoContext(
+        usbDrive: usb,
+        remoteRepoDir: Directory(''), 
+        localMeta: {},
+        remoteMeta: RepoMeta(
+          repoId: '',            
+          projectName: '', 
+          activeTrack: '', 
+          tracks: {}, 
+          tags: {},
+          createdAt: '',         
+          updatedAt: '',         
+          formatVersion: int.tryParse('4') ?? 4, 
+        ),
+      );
     }
 
-    final remoteRepoDir = Directory(p.join(usb.path, remoteReposDir, repoId));
-    if (!remoteRepoDir.existsSync()) {
-      print('❌ Repo not found on USB drive.');
+    try {
+      final localMeta = jsonDecode(await _localRepoFile.readAsString()) as Map<String, dynamic>;
+      final repoId = localMeta['repo_id']?.toString();
+      
+      if (repoId == null || repoId.isEmpty) {
+        if (!silent) print('❌ Invalid local repo_id.');
+        return null;
+      }
+
+      final remoteRepoDir = Directory(p.normalize(p.join(usb.path, remoteReposDir, repoId)));
+      if (!remoteRepoDir.existsSync()) {
+        if (!silent) print('❌ Repo not found on USB drive.');
+        return null;
+      }
+
+      final metaFile = File(p.join(remoteRepoDir.path, remoteMetaFileName));
+      if (!metaFile.existsSync()) {
+        if (!silent) print('❌ Remote metadata file is missing.');
+        return null;
+      }
+
+      final remoteMetaJson = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
+      return RepoContext(
+        usbDrive: usb,
+        remoteRepoDir: remoteRepoDir,
+        localMeta: localMeta,
+        remoteMeta: RepoMeta.fromJson(remoteMetaJson),
+      );
+    } catch (e) {
+      if (!silent) print('❌ Error loading context: $e');
       return null;
     }
-
-    final metaFile = File(p.join(remoteRepoDir.path, remoteMetaFileName));
-    if (!metaFile.existsSync()) {
-      print('❌ Remote metadata file is missing.');
-      return null;
-    }
-
-    final remoteMetaJson = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
-    return RepoContext(
-      usbDrive: usb,
-      remoteRepoDir: remoteRepoDir,
-      localMeta: localMeta,
-      remoteMeta: RepoMeta.fromJson(remoteMetaJson),
-    );
   }
 
   Future<List<RemoteRepoInfo>> _loadRemoteRepos(Directory usb) async {
@@ -5169,27 +5475,109 @@ class PortableVcs {
       return;
     }
 
-    print('\n⏳ ${" INTERACTIVE TIMELINE ".black.onMagenta} ${"v0.3.5-Exp".grey}');
-    print('Track: ${targetTrack.cyan} | Showing last $limit snapshots');
-    print('═' * 60);
+    final sb = StringBuffer();
+    sb.writeln("# TIMELINE: [[ ${targetTrack.toUpperCase()} ]]");
+    sb.writeln("> Showing last $limit snapshots from the repository history.\n");
 
-    final logsToShow = trackData.logs.take(limit).toList();
+    final logsToShow = trackData.logs.reversed.take(limit).toList();
 
     for (var entry in logsToShow) {
       final String sId = entry.id.toString();
       final String shortId = sId.length > 8 ? sId.substring(0, 8) : sId;
+      final date = DateTime.parse(entry.createdAt).toLocal().toString().substring(0, 16);
       
-      final date = DateTime.parse(entry.createdAt).toLocal().toString().substring(5, 16);
-      
-      String tagLabel = "";
+      String tags = "";
       context.remoteMeta.tags.forEach((tag, id) {
-        if (id == sId) tagLabel = ' 🏷️ ${tag.yellow}';
+        if (id == sId) tags += " [[ YELLOW: 🏷️ $tag ]]";
       });
 
-      print(' ${"•".cyan} ${shortId.grey} | $date | ${entry.message.white.bold}$tagLabel');
+      sb.writeln("## [[ grey: $shortId ]] | $date");
+      sb.writeln("${entry.message.bold}$tags");
+
+      if (entry.notes.isNotEmpty) {
+        for (var note in entry.notes) {
+          sb.writeln("> [[ grey: 📝 ${note.author}: ]] ${note.text}");
+        }
+      }
+      sb.writeln(""); 
     }
 
-    print('═' * 60 + '\n');
+    print(_renderMarkdown(sb.toString()));
+  }
+
+  Future<void> openTarget(String? target) async {
+    final context = await loadRepoContext(silent: true);
+    
+    if (target == null || target.isEmpty) {
+      await _launch(Directory.current.path, useCode: true);
+      return;
+    }
+
+    if (target.toLowerCase() == 'usb' && context != null) {
+      await _launch(context.usbDrive.path);
+      return;
+    }
+
+    String? foundPath;
+    bool useCode = false;
+
+    final localFolder = Directory(p.join(Directory.current.path, target));
+    if (localFolder.existsSync()) {
+      foundPath = localFolder.path;
+      useCode = true;
+    } 
+    
+    if (foundPath == null && context != null) {
+      final remoteBaseDir = Directory(p.join(context.usbDrive.path, remoteReposDir));
+      if (remoteBaseDir.existsSync()) {
+        for (var entity in remoteBaseDir.listSync().whereType<Directory>()) {
+          final metaFile = File(p.join(entity.path, remoteMetaFileName));
+          if (metaFile.existsSync()) {
+            try {
+              final metaJson = jsonDecode(await metaFile.readAsString());
+              if (metaJson['project_name']?.toString().toLowerCase() == target.toLowerCase()) {
+                foundPath = entity.path;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    }
+
+    if (foundPath != null) {
+      await _launch(foundPath, useCode: useCode);
+    } else {
+      print('❌ ${"Error:".red} Project "$target" not found locally or on USB.');
+    }
+  }
+
+  Future<void> _launch(String path, {bool useCode = false}) async {
+    final Directory dir = Directory(path).absolute;
+    String nativePath = p.normalize(dir.path);
+
+    if (!dir.existsSync()) {
+      print('❌ ${"Error:".red} Path does not exist: $nativePath');
+      return;
+    }
+
+    print('🚀 ${"Launching:".cyan} $nativePath');
+
+    try {
+      if (Platform.isWindows) {
+        if (useCode) {
+          await Process.run('cmd', ['/c', 'code', nativePath], runInShell: true);
+        } else {
+          await Process.run('cmd', ['/c', 'start', '""', nativePath], runInShell: true);
+        }
+      } else if (Platform.isMacOS) {
+        await Process.run(useCode ? 'code' : 'open', [nativePath]);
+      } else {
+        await Process.run('xdg-open', [nativePath]);
+      }
+    } catch (e) {
+      print('❌ Failed to launch: $e');
+    }
   }
 
   Future<RemoteStatus> _checkRemoteStatus(String remote, String branch) async {
@@ -7439,6 +7827,9 @@ extension ColorConsole on String {
 
 Future<void> main(List<String> args) async {
   final app = PortableVcs();
+  allLanguages.forEach((label, builtin) {
+    highlight.registerLanguage(label, builtin);
+  });
   try {
     await runWithArgs(args, app);
   } finally {
@@ -7477,6 +7868,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('rm', help: 'Remove an alias')
       ..addFlag('list', abbr: 'l', negatable: false, help: 'List all aliases')
     )
+    ..addCommand('open', ArgParser())
     ..addCommand('migrate', ArgParser()
       ..addOption('to', abbr: 'd', help: 'Path to the new device or network folder')
       ..addFlag('delete-source', negatable: false, help: 'Remove data from the old drive after migration'),
@@ -7500,7 +7892,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('doctor', ArgParser()
       ..addFlag('rebuild', abbr: 'r', negatable: false, help: 'Physically scan the .vcs files to reconstruct the meta.json if it is lost.',)
     )
-    ..addCommand('stats')
+    ..addCommand('stats', ArgParser()
+      ..addFlag('charts', abbr: 'c', help: 'Show file distribution charts.', negatable: false)
+    )
     ..addCommand('summary', ArgParser()
       ..addOption('track', abbr: 't', help: 'Get summary from a specific track')
       ..addFlag('copy', abbr: 'c', negatable: false, help: 'Copy to clipboard (if supported)')
@@ -7582,6 +7976,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('hook', ArgParser()
       ..addOption('config', abbr: 'c', help: 'Set hook mode: auto or man')
     )
+    ..addCommand('di', ArgParser()
+      ..addOption('id', abbr: 'i', help: 'Target snapshot ID to analyze')
+      ..addOption('ext', abbr: 'e', help: 'Filter files by type (e.g., `vcs di --ext .dart`).')
+      ..addOption('track', abbr: 't', help: 'Target track')
+    )
+    ..addCommand('adopt', ArgParser())
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
@@ -7650,11 +8050,27 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'version': app.showVersion(); break;
       case 'ui': await app.launchUI(); break;
       case 'list': await app.listRepos(); break;
-      case 'stats': await app.stats(); break;
       case 'clear-history': await app.clearHistory(); break;
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'adopt':
+        await app.adoptProject();
+        break;
+
+      case 'open':
+        final String? repoName = command?.rest.isNotEmpty == true ? command?.rest.first : null;
+        await app.openTarget(repoName);
+        break;
+
+      case 'stats':
+        final statsOptions = command != null ? { for (var key in command.options) key : command[key] } : null;        
+        await app.stats(
+          command: statsOptions, 
+          args: args
+        );
+        break;
 
       case 'hook':
         if (context == null) {
@@ -7945,6 +8361,49 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
           limit: int.tryParse(command['max']?.toString() ?? ''),
           fileQuery: command['file'],
         );
+        break;
+
+      case 'di':
+        if (context == null) {
+          print('❌ ${"Error:".red} Repository context not found.');
+          return;
+        }
+
+        final meta = context.remoteMeta;
+        
+        final targetTrackName = command?['track']?.toString() ?? meta.activeTrack;
+        final String? extensionFilter = command?['ext']?.toString();
+        
+        final trackState = meta.tracks[targetTrackName];
+
+        if (trackState == null) {
+          print('❌ ${"Error:".red} Track "${targetTrackName.cyan}" not found in metadata.');
+          return;
+        }
+
+        String? targetId = command?['id']?.toString();
+        
+        if (targetId == null && trackState.logs.isNotEmpty) {
+          targetId = trackState.logs.last.id;
+        }
+
+        if (targetId == null) {
+          print('❌ ${"Error:".red} No snapshots found in track: ${targetTrackName.cyan}');
+          return;
+        }
+
+        try {
+          final report = await IndexService.generateDeltaReport(
+            remoteRepoDir: context.remoteRepoDir,
+            currentId: targetId,
+            extensionFilter: extensionFilter,
+          );
+          
+          print(app._renderMarkdown(report));
+          
+        } catch (e) {
+          print('❌ ${"Error generating report:".red} $e');
+        }
         break;
 
       default:
