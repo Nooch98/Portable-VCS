@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.3.8--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.0--experimental.2-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -418,7 +418,6 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder (with extraction feedback). |
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
 | | `vcs open` | Smart, context-unbound opener tool. Execute from any terminal path without requiring a local initialized repository. |
-| | `vcs adopt` | Interactive recovery and linking engine. Scan your connected Vault, view available remote repositories, and instantly regenerate a matching `.vcs/local_meta.json`. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
 | | `vcs tag <name>` | Assign a friendly label to a snapshot |
 | | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
