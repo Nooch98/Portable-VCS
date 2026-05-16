@@ -1,5 +1,69 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.0-Experimental.2': '''
+  # 🩺 THE SEMANTIC HYGIENE & HISTORICAL ALIGNMENT
+
+  This update fixes some bugs from the previous release, improves how files are categorized in both status and log commands, and removes an unstable feature.
+  ---
+
+  ## 🛑 COMMAND LIFECYCLE [[ TAG: CLEANUP ]]
+
+  • **Removed Command: `vcs adopt`**: This feature has been completely removed from the CLI due to detected incompatibilities with other core system commands during execution.
+
+  ---
+
+  ## 🧪 ADVANCED TESTING & SEMANTIC CLASSIFICATION [[ TAG: STATUS-REFINE ]]
+
+  • **Introduction of the `🧪 TESTS` Group**: Isolated test suites from code logic. The system now cross-checks file patterns (`*_test.dart`, `*.spec.js`) and structural path roots (`/test/`, `/test_driver/`) to avoid layout pollution in the active development view.
+  • **Documentation Engine Overhaul (`ℹ️ DOCS`)**: Extended native support beyond Markdown to include major technical formats: **AsciiDoc (`.adoc`)**, **reStructuredText (`.rst`)**, and **Plain Text (`.txt`)**.
+  • **Case-Insensitive Legal & Log Mapping**: Patched a string-casing bug in `p.basename` analysis. Key repository structures without common extensions (e.g., `license`, `changelog`, `readme`) are now successfully captured regardless of lowercase mutations.
+  • **Expansion of Core Extension Palettes**: Added modern backend, mobile, and styling targets to prevent fallback leaks into `📄 OTHER`:
+    - *Logic Layer:* `.java`, `.kt` (Kotlin), `.swift`, `.cs` (C#).
+    - *Asset Layer:* `.ttf`, `.otf`, `.woff`, `.woff2` (Font packages).
+    - *Config Layer:* `.conf`, `.ini`, `.env`.
+
+  ---
+
+  ## 📜 RETROACTIVE HISTORICAL TREE-VIEW [[ TAG: LOG-EVOLUTION ]]
+
+  • **Sub-Prefix Branching Optimization**: Embedded the structural categorization crawler directly into the `vcs log` engine via a safe, non-decrypting pre-parser.
+  • **Conditional Tree Rendering**: The `summary`, `standard`, and `full` log views now natively build a visual ASCII distribution tree mapping the composition of historical snapshots.
+    - **Zero-Waste Filter**: The system automatically omits categories without active mutations to maximize terminal real estate.
+  
+    ```terminal
+    📜 Snapshot history [Track: main]
+    ═* [02] b7a8c9d2f4e1 (latest)
+     |      Date:       2026-05-16 20:00:00
+     |      Author:     Nooch98
+     |      Message:    feat: stabilize core system
+     |      Changes:    4 file(s) (+2 ~2 -0)
+     |      ├── 🛠️  LOGIC: 2 file(s)
+     |      ├── 🧪  TESTS: 1 file(s)
+     |      └── ℹ️  DOCS:  1 file(s)
+    ```
+
+  ---
+
+  ## 🎨 UNIVERSAL TERMINAL SYNTAX HIGHLIGHTING [[ TAG: RENDER-ENGINE ]]
+
+  • **Multi-Environment Token Support**: The Markdown rendering engine (`_renderMarkdown`) now features an smart adaptive lexer that highlights native commands, flags, and system outputs inside code blocks without needing specialized language tags.
+    - **Cross-Platform Coverage**: Fully recognizes syntax patterns for traditional Linux|macOS Shells (`bash`) and Windows environments (`powershell`).
+
+    ### VCS CLI
+    ```terminal
+    vcs log --full
+    ```
+
+    ### PoweShell
+    ```terminal
+    Invoke-WebRequest -Uri https://github.com
+    ```
+
+    ### Bash
+    ```Terminal
+    curl -I --connect-timeout 5 https://google.com
+    ```
+  ''',
     '0.4.0-Experimental.1': '''
   # 🌐 THE PORTABILITY & SMART OPENER RELEASE
 
