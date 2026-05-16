@@ -37,7 +37,7 @@ import 'package:highlight/languages/all.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.0-Experimental.1';
+const String vcsBaseVersion = '0.4.0-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -345,7 +345,6 @@ class PortableVcs {
     - `clone [repo_id]` Clone a repository from USB into a local folder.
       - `--into <dir>` Specify a custom directory name for the clone.
     - `bind [repo_id]` Bind current folder to an existing remote repository.
-    - `adopt` Interactive tool to link the current folder to an existing USB project.
     - `open [target]` Smart opener for projects and hardware.
       - `(no args)`      Opens the current directory in VS Code.
       - `usb`            Opens the root of the connected Vault drive.
@@ -898,72 +897,6 @@ class PortableVcs {
     }
   }
 
-  Future<void> adoptProject() async {
-    final context = await loadRepoContext(silent: true);
-    if (context == null) {
-      print('❌ ${"Error:".red} No prepared USB drive found. Connect your Vault to adopt a project.');
-      return;
-    }
-
-    final remoteBaseDir = Directory(p.join(context.usbDrive.path, remoteReposDir));
-    if (!remoteBaseDir.existsSync()) {
-      print('❌ ${"Error:".red} No repositories found on USB.');
-      return;
-    }
-
-    List<Map<String, dynamic>> availableRepos = [];
-    for (var entity in remoteBaseDir.listSync().whereType<Directory>()) {
-      final metaFile = File(p.join(entity.path, remoteMetaFileName));
-      if (metaFile.existsSync()) {
-        try {
-          final meta = jsonDecode(await metaFile.readAsString());
-          availableRepos.add({
-            'name': meta['project_name'],
-            'id': meta['repo_id'],
-            'path': entity.path
-          });
-        } catch (_) {}
-      }
-    }
-
-    if (availableRepos.isEmpty) {
-      print('❌ No valid repositories found on USB to adopt.');
-      return;
-    }
-
-    print('\n# 🔍 [[ CYAN: ADOPT A PROJECT ]] ');
-    print('Select a repository to link with this folder:\n');
-    for (var i = 0; i < availableRepos.length; i++) {
-      print('  ${(i + 1).toString().yellow}. ${availableRepos[i]['name'].toString().bold} [[ grey: (${availableRepos[i]['id']}) ]]');
-    }
-    print('\n  ${"0".red}. Cancel');
-
-    stdout.write('\nChoose an option: ');
-    final input = stdin.readLineSync();
-    final choice = int.tryParse(input ?? '');
-
-    if (choice == null || choice == 0 || choice > availableRepos.length) {
-      print('❌ Adoption cancelled.');
-      return;
-    }
-
-    final selected = availableRepos[choice - 1];
-
-    final vcsFolder = Directory('.vcs');
-    if (!vcsFolder.existsSync()) await vcsFolder.create();
-
-    final localMetaFile = File(p.join(vcsFolder.path, 'local_meta.json'));
-    final localMetaData = {
-      'repo_id': selected['id'],
-      'last_adoption': DateTime.now().toIso8601String(),
-    };
-
-    await localMetaFile.writeAsString(const JsonEncoder.withIndent('  ').convert(localMetaData));
-
-    print('\n✅ ${"Success:".green} This folder is now linked to project "${selected['name'].toString().bold}"');
-    print('[[ grey: Run "vcs status" or "vcs pull" to begin. ]]');
-  }
-
   Future<void> bindRepo({String? repoId}) async {
     if (_localRepoFile.existsSync()) {
       print('❌ This folder is already bound to a VCS repository.');
@@ -1169,7 +1102,47 @@ class PortableVcs {
     print('\n🔍 ${"WORKING TREE STATUS".black.onCyan}');
     print('${"On track:".yellow} ${targetTrackName.magenta.bold}');
 
-    final currentFingerprint = await buildFingerprint(_cwd);
+    var currentFingerprint = await buildFingerprint(_cwd);
+
+    final gitignoreFile = File(p.join(_cwd.path, '.gitignore'));
+    if (gitignoreFile.existsSync()) {
+      try {
+        final lines = await gitignoreFile.readAsLines();
+        final rules = lines
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty && !l.startsWith('#'))
+            .toList();
+
+        if (!rules.contains('.vcs') && !rules.contains('.vcs/')) {
+          rules.add('.vcs');
+          rules.add('.vcs/');
+        }
+
+        currentFingerprint = Map.fromEntries(
+          currentFingerprint.entries.where((entry) {
+            final relativePath = entry.key;
+            
+            for (final rule in rules) {
+              if (rule.endsWith('/')) {
+                if (p.split(relativePath).contains(rule.replaceAll('/', ''))) {
+                  return false; 
+                }
+              } else {
+                if (rule.startsWith('*.')) {
+                  final ext = rule.substring(1);
+                  if (relativePath.endsWith(ext)) return false;
+                } else if (p.split(relativePath).contains(rule) || relativePath == rule) {
+                  return false;
+                }
+              }
+            }
+            return true;
+          }),
+        );
+      } catch (_) {
+        // Continue
+      }
+    }
 
     if (trackData == null || trackData.logs.isEmpty) {
       if (currentFingerprint.isEmpty) {
@@ -1228,22 +1201,36 @@ class PortableVcs {
     }
 
     Map<String, List<FileChange>> groups = {
-      '🛠️  LOGIC': [],
-      '🎨  ASSETS': [],
-      '⚙️  CONFIG': [],
-      '📄  OTHER': [],
+      '🛠️  LOGIC': [],
+      '🧪  TESTS': [], // El nuevo grupo estrella para separar el entorno de pruebas
+      '🎨  ASSETS': [],
+      '⚙️  CONFIG': [],
+      'ℹ️ DOCS': [],
+      '📄  OTHER': [],
     };
 
     for (final change in changes) {
       final ext = p.extension(change.path).toLowerCase();
-      if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs', '.php', '.c'].contains(ext)) {
-        groups['🛠️  LOGIC']!.add(change);
-      } else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico', '.mp4', '.wav', '.mp3'].contains(ext)) {
-        groups['🎨  ASSETS']!.add(change);
-      } else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.md', '.txt', '.plist', '.properties'].contains(ext)) {
-        groups['⚙️  CONFIG']!.add(change);
-      } else {
-        groups['📄  OTHER']!.add(change);
+      final fileName = p.basename(change.path).toLowerCase();
+      final pathSegments = p.split(change.path).map((s) => s.toLowerCase()).toList();
+
+      if (fileName.contains('_test.') || fileName.contains('.spec.') || pathSegments.contains('test') || pathSegments.contains('test_driver')) {
+        groups['🧪  TESTS']!.add(change);
+      } 
+      else if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs', '.php', '.c', '.java', '.kt', '.swift', '.cs'].contains(ext)) {
+        groups['🛠️  LOGIC']!.add(change);
+      } 
+      else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico', '.mp4', '.wav', '.mp3', '.ttf', '.otf', '.woff', '.woff2'].contains(ext)) {
+        groups['🎨  ASSETS']!.add(change);
+      } 
+      else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.plist', '.properties', '.conf', '.ini', '.env'].contains(ext) || fileName == 'dockerfile' || fileName == 'makefile') {
+        groups['⚙️  CONFIG']!.add(change);
+      } 
+      else if (['.md', '.adoc', '.rst', '.txt'].contains(ext) || fileName == 'license' || fileName == 'changelog' || fileName == 'readme') {
+        groups['ℹ️ DOCS']!.add(change);
+      } 
+      else {
+        groups['📄  OTHER']!.add(change);
       }
     }
 
@@ -2352,8 +2339,23 @@ class PortableVcs {
       'go': {'func', 'package', 'import', 'var', 'const', 'type', 'struct', 'interface', 'if', 'else', 'for', 'range', 'return', 'nil', 'true', 'false', 'string', 'int', 'bool', 'error', 'make', 'append', 'len', 'fmt', 'Println', 'Printf'},
       'rust': {'fn', 'let', 'mut', 'struct', 'enum', 'impl', 'trait', 'use', 'mod', 'pub', 'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'return', 'true', 'false', 'String', 'str', 'u32', 'i32', 'bool', 'Option', 'Result', 'Some', 'None', 'Ok', 'Err', 'println'},
       'cpp': {'int', 'float', 'double', 'char', 'bool', 'void', 'class', 'struct', 'public', 'private', 'protected', 'if', 'else', 'for', 'while', 'do', 'return', 'switch', 'case', 'default', 'include', 'define', 'std', 'cout', 'cin', 'endl', 'true', 'false', 'new', 'delete'},
-      'json': {'true', 'false', 'null'}
+      'json': {'true', 'false', 'null'},
+      'bash': {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'in', 'do', 'done', 'case', 'esac', 'function', 'return', 'exit', 'echo', 'printf', 'local', 'export', 'alias', 'true', 'false', 'sudo', 'cd', 'ls'},
+      'powershell': {'if', 'else', 'elseif', 'for', 'foreach', 'while', 'do', 'until', 'return', 'exit', 'function', 'param', 'process', 'try', 'catch', 'finally', 'true', 'false', 'Write-Host', 'Write-Output', 'Get-ChildItem', 'Set-ExecutionPolicy', 'Bypass', 'Invoke-WebRequest', '-Uri'},      
+      'terminal': {
+        'sudo', 'cd', 'ls', 'dir', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'cat', 'echo', 'clear', 'cls',
+        'git', 'ssh', 'curl', 'wget', 'ping', 'ipconfig', 'ifconfig', 'chmod', 'chown', 'ps', 'kill',
+        'npm', 'node', 'deno', 'bun', 'pip', 'python', 'python3', 'go', 'rustc', 'cargo', 'dart', 'flutter', 'vcs',
+        'Date:', 'Author:', 'Message:', 'Commit:', 'History:', 'Track:', 'Branch:', 'Status:', 'Version:', 'Changes:',
+        'LOGIC:', 'TESTS:', 'DOCS:', 'ASSETS:', 'CONFIG:', 'OTHER:', 'Snapshot', 'history',
+        '(latest)', 'latest', 'master', 'main', 'stable', 'release',
+        'error', 'ERROR', 'warning', 'WARNING', 'success', 'SUCCESS', 'info', 'INFO', 'failed', 'FAILED',
+        'done', 'DONE', 'compiled', 'building', 'running', 'exit', 'OK', 'FAIL',
+        '--help', '-h', '--version', '-v', '--force', '-f', '--all', '-a', '--verbose', '--graph', '--list', '-l', '--ext', '--full'
+      }
     };
+
+    langKeywordsMap['shell'] = langKeywordsMap['terminal']!;
 
     for (var line in rawLines) {
       String trimmedLine = line.trim();
@@ -2402,14 +2404,54 @@ class PortableVcs {
                   RegExp(r'\b(true|false|null|-?\d+(\.\d+)?)\b'),
                   (match) => match.group(0)!.yellow
                 );
-              } else {
+              } 
+              else if (currentLang == 'terminal' || currentLang == 'shell') {
+                final Set<String> terminalKeywords = {
+                  ...langKeywordsMap['terminal']!,
+                  ...langKeywordsMap['bash']!,
+                  ...langKeywordsMap['powershell']!,
+                };
+
+                final List<String> words = l.split(RegExp(r'\s+'));
+                final Set<String> uniqueWords = {};
+                
+                for (var rawWord in words) {
+                  String cleanWord = rawWord.replaceAll(RegExp(r'^[═*│├──└──\s]+'), '').trim();
+                  
+                  if (terminalKeywords.contains(cleanWord)) {
+                    uniqueWords.add(cleanWord);
+                  }
+                }
+                
+                for (var word in uniqueWords) {
+                  String escapedWord = RegExp.escape(word);
+                  processedLine = processedLine.replaceAllMapped(
+                    RegExp('(?<=^|\\s|[═*│├──└──])$escapedWord(?=\\s|\$|\\b)'), 
+                    (match) {
+                      if (word.endsWith(':') || word == 'Snapshot' || word == 'history') {
+                        return word.yellow.bold;
+                      } else if (word.startsWith('-')) {
+                        return word.cyan;
+                      } else if (word == 'error' || word == 'ERROR' || word == 'failed' || word == 'FAILED' || word == 'FAIL') {
+                        return word.red.bold;
+                      } else if (word == 'success' || word == 'SUCCESS' || word == 'done' || word == 'DONE' || word == 'OK') {
+                        return word.green.bold;
+                      } else if (word == 'warning' || word == 'WARNING') {
+                        return word.yellow;
+                      }
+                      return word.magenta.bold; 
+                    }
+                  );
+                }
+              }
+              else {
                 final words = l.split(RegExp(r'(\W)'));
                 final uniqueWords = words.where((w) => keywords.contains(w)).toSet();
                 
                 for (var word in uniqueWords) {
                   processedLine = processedLine.replaceAllMapped(
                     RegExp('\\b$word\\b'), 
-                    (match) => (word == 'print' || word == 'enumerate' || word == 'console' || word == 'log' || word == 'Println' || word == 'Printf' || word == 'println' || word == 'cout') 
+                    (match) => (word == 'print' || word == 'enumerate' || word == 'console' || word == 'log' || word == 'Println' || word == 'Printf' || word == 'println' || word == 'cout' || word == 'Write-Host' || word == 'Write-Output') 
                         ? word.cyan 
                         : word.magenta.bold
                   );
@@ -2429,7 +2471,7 @@ class PortableVcs {
             final fallbackLines = <String>[];
             for (var l in lines) {
               String processedLine = l;
-              processedLine = processedLine.replaceAllMapped(RegExp(r'()'), (match) => match.group(0)!.grey.italic);
+              processedLine = processedLine.replaceAllMapped(RegExp(r''), (match) => match.group(0)!.grey.italic);
               processedLine = processedLine.replaceAllMapped(RegExp(r'(<\/?[a-zA-Z0-9:-]+)'), (match) => match.group(0)!.magenta.bold);
               processedLine = processedLine.replaceAllMapped(RegExp(r'(\s[a-zA-Z0-9:-]+==)'), (match) => match.group(0)!.cyan);
               processedLine = processedLine.replaceAllMapped(RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')"), (match) => match.group(0)!.green);
@@ -2673,67 +2715,44 @@ class PortableVcs {
         }
       }
 
-      switch (mode) {
-        case LogViewMode.summary:
-          if (entry.changeSummary.isEmpty) {
-            print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
-          } else {
-            print(
-              '$subPrefix     ${"Changes:".yellow.padRight(10)} '
-              '${counts.total.toString().green} file(s) '
-              '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
-            );
-          }
-          break;
+      if (entry.changeSummary.isEmpty) {
+        print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
+      } else {
+        print(
+          '$subPrefix     ${"Changes:".yellow.padRight(10)} '
+          '${counts.total.toString().green} file(s) '
+          '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
+        );
 
-        case LogViewMode.standard:
-          if (entry.changeSummary.isEmpty) {
-            print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
-          } else {
-            print(
-              '$subPrefix     ${"Changes:".yellow.padRight(10)} '
-              '${counts.total.toString().green} file(s) '
-              '(${'+${counts.added}'.green} ${'~${counts.modified}'.yellow} ${'-${counts.deleted}'.red})',
-            );
+        _printGroupedSummary(entry.changeSummary, subPrefix);
 
+        switch (mode) {
+          case LogViewMode.summary:
+            break;
+
+          case LogViewMode.standard:
             final preview = entry.changeSummary.take(5).toList();
             for (final c in preview) {
-              if (c.startsWith('[N]')) {
-                print('$subPrefix       ${c.green}');
-              } else if (c.startsWith('[M]')) {
-                print('$subPrefix       ${c.yellow}');
-              } else if (c.startsWith('[D]')) {
-                print('$subPrefix       ${c.red}');
-              } else {
-                print('$subPrefix       $c');
-              }
+              if (c.startsWith('[N]')) print('$subPrefix       ${c.green}');
+              else if (c.startsWith('[M]')) print('$subPrefix       ${c.yellow}');
+              else if (c.startsWith('[D]')) print('$subPrefix       ${c.red}');
+              else print('$subPrefix       $c');
             }
-
             final remaining = entry.changeSummary.length - preview.length;
             if (remaining > 0) {
               print('$subPrefix       ${"... and $remaining more change(s)".yellow}');
             }
-          }
-          break;
+            break;
 
-        case LogViewMode.full:
-          if (entry.changeSummary.isEmpty) {
-            print('$subPrefix     ${"Changes:".yellow.padRight(10)} ${"(none)".red}');
-          } else {
-            print('$subPrefix     ${"Changes:".yellow.padRight(10)}');
+          case LogViewMode.full:
             for (final c in entry.changeSummary) {
-              if (c.startsWith('[N]')) {
-                print('$subPrefix       ${c.green}');
-              } else if (c.startsWith('[M]')) {
-                print('$subPrefix       ${c.yellow}');
-              } else if (c.startsWith('[D]')) {
-                print('$subPrefix       ${c.red}');
-              } else {
-                print('$subPrefix       $c');
-              }
+              if (c.startsWith('[N]')) print('$subPrefix       ${c.green}');
+              else if (c.startsWith('[M]')) print('$subPrefix       ${c.yellow}');
+              else if (c.startsWith('[D]')) print('$subPrefix       ${c.red}');
+              else print('$subPrefix       $c');
             }
-          }
-          break;
+            break;
+        }
       }
 
       if (i != 0) { 
@@ -2748,19 +2767,54 @@ class PortableVcs {
     print('═' * 60);
   }
 
+  void _printGroupedSummary(List<String> changes, String subPrefix) {
+    var logic = 0, tests = 0, assets = 0, config = 0, docs = 0, other = 0;
+
+    for (final change in changes) {
+      final cleanPath = change.length > 4 ? change.substring(4).trim() : change;
+      final ext = p.extension(cleanPath).toLowerCase();
+      final fileName = p.basename(cleanPath).toLowerCase();
+      final pathSegments = p.split(cleanPath).map((s) => s.toLowerCase()).toList();
+
+      if (fileName.contains('_test.') || fileName.contains('.spec.') || pathSegments.contains('test') || pathSegments.contains('test_driver')) {
+        tests++;
+      } else if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs', '.php', '.c', '.java', '.kt', '.swift', '.cs'].contains(ext)) {
+        logic++;
+      } else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico', '.mp4', '.wav', '.mp3', '.ttf', '.otf', '.woff', '.woff2'].contains(ext)) {
+        assets++;
+      } else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.plist', '.properties', '.conf', '.ini', '.env'].contains(ext) || fileName == 'dockerfile' || fileName == 'makefile') {
+        config++;
+      } else if (['.md', '.adoc', '.rst', '.txt'].contains(ext) || fileName == 'license' || fileName == 'changelog' || fileName == 'readme') {
+        docs++;
+      } else {
+        other++;
+      }
+    }
+
+    final List<String> treeLines = [];
+    if (logic > 0) treeLines.add('🛠️  LOGIC: $logic file(s)');
+    if (tests > 0) treeLines.add('🧪  TESTS: $tests file(s)');
+    if (assets > 0) treeLines.add('🎨  ASSETS: $assets file(s)');
+    if (config > 0) treeLines.add('⚙️  CONFIG: $config file(s)');
+    if (docs > 0) treeLines.add('ℹ️  DOCS: $docs file(s)');
+    if (other > 0) treeLines.add('📄  OTHER: $other file(s)');
+
+    for (var k = 0; k < treeLines.length; k++) {
+      final isLastTreeLine = k == treeLines.length - 1;
+      final branch = isLastTreeLine ? '└── ' : '├── ';
+      print('$subPrefix      ${branch.grey}${treeLines[k].grey}');
+    }
+  }
+
   ChangeCounts countChanges(List<String> changes) {
     var added = 0;
     var modified = 0;
     var deleted = 0;
 
     for (final c in changes) {
-      if (c.startsWith('[N]')) {
-        added++;
-      } else if (c.startsWith('[M]')) {
-        modified++;
-      } else if (c.startsWith('[D]')) {
-        deleted++;
-      }
+      if (c.startsWith('[N]')) added++;
+      else if (c.startsWith('[M]')) modified++;
+      else if (c.startsWith('[D]')) deleted++;
     }
 
     return ChangeCounts(
@@ -7981,7 +8035,6 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('ext', abbr: 'e', help: 'Filter files by type (e.g., `vcs di --ext .dart`).')
       ..addOption('track', abbr: 't', help: 'Target track')
     )
-    ..addCommand('adopt', ArgParser())
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
@@ -8054,10 +8107,6 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
-
-      case 'adopt':
-        await app.adoptProject();
-        break;
 
       case 'open':
         final String? repoName = command?.rest.isNotEmpty == true ? command?.rest.first : null;
