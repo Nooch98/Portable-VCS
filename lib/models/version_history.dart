@@ -1,5 +1,35 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.1-Experimental.1': '''
+  # ⚡ THE RETROACTIVE INDEXING & HEALTH ALIGNMENT
+
+  This update introduces retroactive delta-indexing for legacy storage blocks, stabilizes global variable scopes within the diagnostic core, and closes critical security loops during remote repository repair.
+  ---
+
+  ## 🩺 CRYPTOGRAPHIC REPAIR & REINDEXING [[ TAG: RETRO-ALIGN ]]
+
+  • **New Feature: `vcs doctor --reindex` (or `-i`)**: Implementation of a safe, retroactive indexing pipeline for legacy snapshots. 
+    - **Native Decryption Hook**: The engine now securely mounts old blocks using the core `readSnapshot` subsystem, requesting the user password exactly once.
+    - **Bypass Acceleration**: Extracts the encrypted historical `fingerprint` structure and recalculates the structural Fast-Diff JSON mapping in `/index` to restore instant access for delta-based tools like `vcs di`.
+  • **Disaster Recovery Resiliency**: Patched the physical scanner to seamlessly skip temporary artifacts (`.tmp_*`) and safely isolate corrupt or incomplete block hashes without freezing execution threads.
+
+  ---
+
+  ## 📁 ARCHITECTURE & VARIABLE LIFECYCLE [[ TAG: SCOPE-FIX ]]
+
+  • **Global Diagnostic Scope**: Refactored the core execution loop inside the `doctor` subsystem. Elevated the tracking array `snapshotsLackingIndex` to a global level within the function scope.
+    - **The Bug**: Prior iterations isolated the array inside the physical existence `if` blocks, causing scope-leaks and crash barriers when the terminal attempted to render the final summary dashboard.
+    - **The Fix**: The structural map is now persistent across all diagnostic validation stages, ensuring consistent metrics in both silent scans and repair runs.
+  • **ArgParser Command Wiring**: Explicitly wired the `--reindex` and `--rebuild` flags into the root CLI dispatcher (`result.command`), separating physical raw header reconstructions from index-table updates.
+
+  ---
+
+  ## 📊 SMART SUMMARY & INTERACTIVE METRICS [[ TAG: UI-CLEANUP ]]
+
+  • **Adaptive Summary Output**: The terminal dashboard now intelligently detects when a repair cycle has successfully realigned storage systems.
+    - **Contextual Notifications**: If the system detects external warnings (such as a missing local `.gitignore`), but storage indices are 100% fixed, the CLI prints a dedicated status update: `⚡ Reindexing completed successfully. Core storage indices are now aligned.`.
+  • **Color Leak Guard**: Embedded rigid ANSI reset anchors to prevent color bleeding when alternating between missing configuration alerts (Yellow) and successful delta alignment flags (Magenta).
+  ''',
     '0.4.0-Experimental.2': '''
   # 🩺 THE SEMANTIC HYGIENE & HISTORICAL ALIGNMENT
 
@@ -243,9 +273,6 @@ class VersionHistory {
     [[ SUCCESS: FIXED ]] Resolved mixed-slash issues: [[ WHITE: / ]] vs [[ WHITE: \\ ]].
   • **Performance**: `tree` and `ancestry` commands now utilize the `delta-index` for faster metadata traversal.
   • **Summary Logic**: Fixed synchronization between log deletion reports and console preview.
-
-  ---
-  [[ MAGENTA: VCS v0.3.9-Exp.2 ]] [[ DARK: 2026-05-13 ]]
   ''',
 
     '0.3.9-Experimental.1': '''
