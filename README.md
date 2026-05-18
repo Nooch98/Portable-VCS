@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.0--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.1--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -469,6 +469,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs verify <id\|--all>` | Run SHA-256 integrity checks on one or all snapshots. |
 | | `vcs doctor` | Run repository diagnostics and health checks. |
 | | `vcs doctor --rebuild/-r` | Physically scan the .vcs files to reconstruct the meta.json if it is lost. |
+| | `vcs doctor --reindex/-i` | Retroactively regenerate missing Fast-Diff indices for legacy snapshots. |
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
 | | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
 | | `vcs prune --oldr-than N` | Delete snapshots older than N days. |
