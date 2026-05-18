@@ -37,7 +37,7 @@ import 'package:highlight/languages/all.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.0-Experimental.2';
+const String vcsBaseVersion = '0.4.1-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -258,17 +258,19 @@ class PortableVcs {
   }
 
   void _printUpdateToast(String current, String latest) {
-    final String title = " UPGRADE New version available!";
-    final String info = " ┃ $current → $latest";
-    final String action = " ┃ Run vcs update to install.";
+    final String headerStr = " UPGRADE  New version available!";
+    final String infoStr   = " ┃  $current → $latest";
+    final String actionStr = " ┃  Run vcs update to install.";
 
-    final int width = [title.length, info.length, action.length].reduce((a, b) => a > b ? a : b) + 2;
+    final int width = [headerStr.length, infoStr.length, actionStr.length]
+        .reduce((a, b) => a > b ? a : b);
 
     print('');
     print('  ${" UPGRADE ".black.onYellow.bold} ${"New version available!".yellow}');
     print('  ${"┃".yellow.bold}  ${current.grey} → ${latest.green.bold}');
     print('  ${"┃".yellow.bold}  Run ${"vcs update".cyan.bold} to install.');
-    print('  ${"━" * width}\n'.grey);
+    print('  ${"━" * width}'.grey);
+    print('');
   }
 
   Future<void> showVersion() async {
@@ -442,6 +444,7 @@ class PortableVcs {
     - `update` Download latest source from GitHub and recompile.
     - `doctor` Run repository diagnostics, health checks and **meta-recovery**.
       - `--rebuild, -r` Physically scan the USB to reconstruct meta.json or missing indices.
+      - `--reindex, -i` Retroactively regenerate missing Fast-Diff indices for legacy snapshots.
     - `stats` Show global repo metrics, track breakdown and **index coverage**.
     - `benchmark` Performance stress test (IOPS, Crypto & Transfer speed).
       - `-i, --intensive` Run a high-load test with larger data buffers.
@@ -1202,7 +1205,7 @@ class PortableVcs {
 
     Map<String, List<FileChange>> groups = {
       '🛠️  LOGIC': [],
-      '🧪  TESTS': [], // El nuevo grupo estrella para separar el entorno de pruebas
+      '🧪  TESTS': [],
       '🎨  ASSETS': [],
       '⚙️  CONFIG': [],
       'ℹ️ DOCS': [],
@@ -3113,9 +3116,11 @@ class PortableVcs {
     }
   }
 
-  Future<void> doctor({bool rebuildMode = false}) async {
+  Future<void> doctor({bool rebuildMode = false, bool reindexMode = false}) async {
     print('\n🩺 ${"Repository diagnostics".cyan}');
     print('═' * 60);
+
+    final snapshotsLackingIndex = <String>[];
 
     var okCount = 0;
     var warnCount = 0;
@@ -3129,7 +3134,7 @@ class PortableVcs {
           print('  ${"ℹ".blue} ${label.blue}');
         } else {
           warnCount++;
-          print('  ${"⚠".yellow} ${label.yellow}');
+          print('  ${"⚠️".yellow} ${label.yellow}');
         }
       }
       if (details != null && details.trim().isNotEmpty) {
@@ -3195,6 +3200,12 @@ class PortableVcs {
       print('─' * 60);
 
       try {
+        final context = await loadRepoContext();
+        if (context == null) {
+          check(false, 'Repository Context', details: 'Could not load local or remote repository context.');
+          return;
+        }
+
         final localMetaRaw = jsonDecode(await _localRepoFile.readAsString());
         final repoId = localMetaRaw['repo_id']?.toString() ?? '';
         final remoteRepoDir = Directory(p.normalize(p.join(usb.path, remoteReposDir, repoId)));
@@ -3210,10 +3221,11 @@ class PortableVcs {
           RepoMeta? meta;
           bool restoredFromBackup = false;
           bool rebuildSuccess = false;
+          final snapshotsLackingIndex = <String>[];
 
           if (!metaFile.existsSync() || rebuildMode) {
             if (rebuildMode && snapshotsDir.existsSync()) {
-              print('  ${"🔧".magenta} Recovery Mode: Physical scan of ${snapshotsDir.path}...');
+              print('  ${"🔧".magenta} Recovery Mode: Executing physical parser scanner...');
               final files = snapshotsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.vcs'));
               Map<String, List<SnapshotLogEntry>> recoveredTracks = {};
 
@@ -3223,6 +3235,8 @@ class PortableVcs {
                   final headerLine = content.split('\n').first;
                   final trackMatch = RegExp(r'Track: (.*?) \|').firstMatch(headerLine);
                   final parentMatch = RegExp(r'Parent: (.*)').firstMatch(headerLine);
+                  final dateMatch = RegExp(r'Date: (.*?) \|').firstMatch(headerLine);
+                  final dateStr = dateMatch != null ? dateMatch.group(1)! : DateTime.now().toUtc().toIso8601String();
 
                   if (trackMatch != null) {
                     final trackName = trackMatch.group(1)!;
@@ -3233,7 +3247,7 @@ class PortableVcs {
                       id: snapshotId,
                       message: "[Recovered by Doctor]",
                       author: "System",
-                      createdAt: DateTime.now().toUtc().toIso8601String(),
+                      createdAt: dateStr,
                       fileName: p.basename(file.path),
                       hash: (await sha256.bind(file.openRead()).first).toString(),
                       parentId: (parentId == "null" || parentId == null) ? null : parentId,
@@ -3248,7 +3262,7 @@ class PortableVcs {
                 final inferredProjectName = p.basename(remoteRepoDir.path);
                 final now = DateTime.now().toUtc().toIso8601String();
                 final finalTracks = recoveredTracks.map((name, logs) {
-                  logs.sort((a, b) => b.id.compareTo(a.id)); 
+                  logs.sort((a, b) => a.createdAt.compareTo(b.createdAt)); 
                   return MapEntry(name, TrackState(logs: logs, originTrackName: name == 'main' ? null : 'main'));
                 });
 
@@ -3305,8 +3319,10 @@ class PortableVcs {
               final List<File> snapshotsFiles = snapshotsDir.listSync().whereType<File>().toList();
               int corruptCount = 0;
               int verifiedCount = 0;
-              int missingIndices = 0;
+              snapshotsLackingIndex.clear();
 
+              print('  ${"⚙".cyan} Scanning snapshot blocks hashes...');
+              
               for (var file in snapshotsFiles) {
                 final name = p.basename(file.path);
                 if (name.startsWith('.tmp_') || !name.endsWith('.vcs')) continue;
@@ -3314,10 +3330,11 @@ class PortableVcs {
                 if (expectedHashes.containsKey(name)) {
                   final savedHash = expectedHashes[name];
                   if (savedHash != null) {
+                    stdout.write('.'.grey); 
                     final currentHash = (await sha256.bind(file.openRead()).first).toString();
                     if (currentHash != savedHash) {
                       corruptCount++;
-                      print('  ${"❌".red} Integrity fail: ${name.grey} (Hash mismatch)');
+                      print('\n  ${"❌".red} Integrity fail: ${name.grey} (Hash mismatch)');
                     } else {
                       verifiedCount++;
                     }
@@ -3326,18 +3343,57 @@ class PortableVcs {
                   final snapshotId = p.basenameWithoutExtension(name);
                   final indexFile = File(p.normalize(p.join(indexDir.path, '$snapshotId.json')));
                   if (!indexFile.existsSync()) {
-                    missingIndices++;
+                    snapshotsLackingIndex.add(snapshotId);
                   }
                 }
               }
+              if (verifiedCount > 0) stdout.write('\n');
 
               check(corruptCount == 0, 'Data Content Health', 
-                details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount snapshots.');
+                details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount snapshots securely.');
 
-              check(missingIndices == 0, 'Fast-Diff Optimization',
-                details: missingIndices > 0 
-                  ? '$missingIndices snapshots lack metadata indices in /index. Run a push to regenerate.'
-                  : 'All snapshots have valid delta indices.');
+              if (snapshotsLackingIndex.isNotEmpty) {
+                if (reindexMode) {
+                  final finalPassword = askPassword();
+                  if (finalPassword == null || finalPassword.isEmpty) {
+                    print('❌ ${"Reindexing Aborted:".red} Password required to decrypt snapshots structures.');
+                    return;
+                  }
+
+                  print('\n  ${"⚡".magenta} Retroactive Indexing: Rebuilding Fast-Diff structures for ${snapshotsLackingIndex.length} blocks...');
+                  
+                  for (var snapshotId in snapshotsLackingIndex) {
+                    try {
+                      final DecryptedSnapshot? snapshotData = await readSnapshot(
+                        context,
+                        snapshotId,
+                        password: finalPassword,
+                      );
+
+                      if (snapshotData != null) {
+                        final Map<String, String> extractedMap = Map<String, String>.from(snapshotData.fingerprint);
+
+                        await IndexService.saveSnapshotIndex(
+                          remoteRepoDir: remoteRepoDir,
+                          snapshotId: snapshotId,
+                          fileMap: extractedMap,
+                        );
+                        print('    ${"✔".green} Fast-Diff Index regenerated for snapshot: ${snapshotId.cyan}');
+                      } else {
+                        print('    ${"❌".red} Snapshot data could not be decrypted or found for ID: $snapshotId');
+                      }
+                    } catch (e) {
+                      print('    ${"❌".red} Error building delta-index for snapshot $snapshotId: $e');
+                    }
+                  }
+                  check(true, 'Fast-Diff Optimization', details: 'All missing delta indices regenerated successfully.');
+                } else {
+                  check(false, 'Fast-Diff Optimization',
+                    details: '${snapshotsLackingIndex.length} snapshots lack metadata indices. Run "vcs doctor --reindex" to fix retroactively.');
+                }
+              } else {
+                check(true, 'Fast-Diff Optimization', details: 'All snapshots have valid delta indices.');
+              }
 
               final List<File> indexFiles = indexDir.existsSync() ? indexDir.listSync().whereType<File>().toList() : [];
               final orphans = <String>[];
@@ -3354,7 +3410,7 @@ class PortableVcs {
               }
 
               if (orphans.isNotEmpty) {
-                check(false, 'Storage optimization', details: 'Found ${orphans.length} unlinked (orphan) files.');
+                check(false, 'Storage optimization', details: 'Found ${orphans.length} unlinked (orphan) files. Run "vcs prune --garbage" to optimize space.');
               } else {
                 check(true, 'Storage optimized', details: 'No orphan files detected.');
               }
@@ -3374,7 +3430,10 @@ class PortableVcs {
     if (warnCount == 0) {
       print('\n✨ ${"Everything looks perfect. Your portable vault is healthy.".green.bold}');
     } else {
-      print('\n⚠️  ${"Diagnostics found issues. Review the logs above.".yellow.bold}');
+      if (reindexMode && snapshotsLackingIndex.isNotEmpty) {
+        print('\n⚡ ${"Reindexing completed successfully. Core storage indices are now aligned.".magenta.bold}');
+      }
+      print('\n⚠️  ${"Diagnostics found remaining issues (like missing .gitignore). Review logs above.".yellow.bold}');
       if (rebuildMode) print('ℹ️  ${"Recovery attempted. Check if your tracks are back.".blue}');
     }
   }
@@ -3398,12 +3457,13 @@ class PortableVcs {
     if (snapshotsDir.existsSync()) {
       for (var trackEntry in context.remoteMeta.tracks.entries) {
         int trackTotal = 0;
+        
         for (final entry in trackEntry.value.logs) {
           final file = File(p.normalize(p.join(snapshotsDir.path, entry.fileName)));
           final indexFile = File(p.normalize(p.join(indexDir.path, '${entry.id}.json')));
           
-          if (file.existsSync()) {
-            final size = file.lengthSync();
+          if (await file.exists()) {
+            final size = await file.length();
             trackTotal += size;
             totalBytes += size;
             registeredFiles.add('snapshots/${entry.fileName}');
@@ -3416,9 +3476,9 @@ class PortableVcs {
             }
           }
 
-          if (indexFile.existsSync()) {
+          if (await indexFile.exists()) {
             indexCount++;
-            final iSize = indexFile.lengthSync();
+            final iSize = await indexFile.length();
             indexBytes += iSize;
             registeredFiles.add('index/${entry.id}.json');
           }
@@ -3430,23 +3490,25 @@ class PortableVcs {
     int orphanBytes = 0;
     int orphanCount = 0;
 
-    void scanForOrphans(Directory dir, String folderName) {
+    Future<void> scanForOrphans(Directory dir, String folderName) async {
       if (dir.existsSync()) {
-        for (var f in dir.listSync().whereType<File>()) {
-          final name = p.basename(f.path);
-          if (name.startsWith('.tmp_') || name == 'vcs_aliases.json') continue;
-          
-          final relativePath = '$folderName/$name';
-          if (!registeredFiles.contains(relativePath)) {
-            orphanBytes += f.lengthSync();
-            orphanCount++;
+        await for (var entity in dir.list()) {
+          if (entity is File) {
+            final name = p.basename(entity.path);
+            if (name.startsWith('.tmp_') || name == 'vcs_aliases.json') continue;
+            
+            final relativePath = '$folderName/$name';
+            if (!registeredFiles.contains(relativePath)) {
+              orphanBytes += await entity.length();
+              orphanCount++;
+            }
           }
         }
       }
     }
 
-    scanForOrphans(snapshotsDir, 'snapshots');
-    scanForOrphans(indexDir, 'index');
+    await scanForOrphans(snapshotsDir, 'snapshots');
+    await scanForOrphans(indexDir, 'index');
 
     print('\n📊 ${" REPOSITORY STATISTICS ".black.onCyan}');
     print('═' * 60);
@@ -3476,7 +3538,7 @@ class PortableVcs {
 
     if (orphanCount > 0) {
       print('${"Unlinked Garbage:".red.padRight(22)} ${_formatBytes(orphanBytes).red} ($orphanCount files)');
-      print('   ${"ℹ Tip: Run 'vcs doctor' to see details.".grey}');
+      print('   ${"ℹ Tip: Run 'vcs doctor' to safely clean or inspect them.".grey}');
     }
 
     print('\n${"TAGS & MILESTONES".bold.cyan}');
@@ -3542,7 +3604,7 @@ class PortableVcs {
         print('   ${"ℹ Note: ${totalLogs - indexCount} snapshots lack Fast-Diff indices.".blue}');
       }
     } else {
-      if (orphanCount > 0) print('   ${"⚠ Found $orphanCount orphan files".yellow}');
+      if (orphanCount > 0) print('   ${"⚠ Found $orphanCount orphan files (unlinked garbage)".yellow}');
       if (verifiedWithHash < totalLogs) print('   ${"⚠ Some snapshots lack integrity hashes".yellow}');
     }
 
@@ -7945,6 +8007,8 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('list')
     ..addCommand('doctor', ArgParser()
       ..addFlag('rebuild', abbr: 'r', negatable: false, help: 'Physically scan the .vcs files to reconstruct the meta.json if it is lost.',)
+      ..addFlag('reindex', abbr: 'i', negatable: false, help: 'Retroactively regenerate missing Fast-Diff indices for legacy snapshots.',
+    )
     )
     ..addCommand('stats', ArgParser()
       ..addFlag('charts', abbr: 'c', help: 'Show file distribution charts.', negatable: false)
@@ -8151,7 +8215,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
 
       case 'doctor':
         final rebuild = result.command?['rebuild'] == true;
-        await app.doctor(rebuildMode: rebuild);
+        final reindex = result.command?['reindex'] == true;
+        
+        await app.doctor(
+          rebuildMode: rebuild, 
+          reindexMode: reindex,
+        );
         break;
 
       case 'changelog':
