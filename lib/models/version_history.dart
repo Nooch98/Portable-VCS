@@ -1,5 +1,33 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.1-Experimental.2': r'''
+  # 🛡️ THE STORAGE PRE-VALIDATION & HEALTH ALIGNMENT LAYER
+
+  This update introduces real-time system storage pre-validation across data-moving boundaries (push, pull, trackSwitch) to prevent block corruption, unifies cross-platform paths via canonical resolution, and locks down core execution stability within terminal I/O streams.
+  ---
+
+  ## 💾 ATOMIC STORAGE PRE-VALIDATION [[ TAG: VOL-GUARD ]]
+
+  • **Proactive Volume Check Subsystem**: Implemented a non-destructive hardware space verification pipeline powered by native OS bindings (`wmic` on Windows; `df` on Unix/macOS) executing completely in memory before any I/O stream opens.
+    - **External Drive Protection (`push`)**: The engine estimates the packed snapshot footprint plus an encryption metadata cushion (~64KB). If the target USB or external HDD lacks bytes, the transaction aborts atomically *before* mutating `meta.json` or writing partial `.vcs` streams.
+    - **Workspace Safeguard (`pull` & `trackSwitch`)**: Computes total uncompressed file sizes from the decrypted Zip archive, blocking local deployment if the host machine's drive is full, avoiding corrupted or truncated workspaces.
+  • **Auto-Sanitization of Volatile Garbage**: Upgraded the `doctor` core loop to actively identify and sweep away dead residual artifacts (`.tmp_*`) left by interrupted pushes or hardware disconnects, moving from passive diagnosis to active self-healing.
+
+  ---
+
+  ## 🗺️ CANONICAL PATH SANITIZATION & POSIX MAPPING [[ TAG: PATH-ALIGN ]]
+
+  • **Cross-Platform Cross-Over Fix (`status`)**: Overhauled file-tree evaluation to completely eliminate path-mismatch false positives when working interchangeably between Windows (`\`) and Unix (`/`).
+    - **Canonical Symlink Resolution**: Injected `file.resolveSymbolicLinksSync()` to extract real physical paths, preventing loop barriers or duplicates caused by directory shortcuts or alias points.
+    - **POSIX Normalization Engine**: Forced all internal key-matching and `.gitignore` parsing structures to map onto unified forward-slash (`/`) boundaries. Exclusion patterns (like `build/` or `*.log`) now evaluate flawlessly regardless of the host OS terminal style.
+
+  ---
+
+  ## ⚙️ STABLE CORE FLOWS & TERMINAL ISOLATION [[ TAG: CORE-STABILITY ]]
+
+  • **Preservation of Stable Blind Input**: Retained the original síncrono `_readHiddenLine` utility using standard native `stdin.echoMode` switches.
+    - **Zero Stream Contention**: By bypassing character-by-character interception loop diagnostics, the system ensures that interactive confirmation triggers (`y/N`) executed within async file-locking contexts (`_withLock`) never bottleneck or suffer from I/O resource deadlock.
+  ''',
     '0.4.1-Experimental.1': '''
   # ⚡ THE RETROACTIVE INDEXING & HEALTH ALIGNMENT
 
@@ -273,6 +301,9 @@ class VersionHistory {
     [[ SUCCESS: FIXED ]] Resolved mixed-slash issues: [[ WHITE: / ]] vs [[ WHITE: \\ ]].
   • **Performance**: `tree` and `ancestry` commands now utilize the `delta-index` for faster metadata traversal.
   • **Summary Logic**: Fixed synchronization between log deletion reports and console preview.
+
+  ---
+  [[ MAGENTA: VCS v0.3.9-Exp.2 ]] [[ DARK: 2026-05-13 ]]
   ''',
 
     '0.3.9-Experimental.1': '''

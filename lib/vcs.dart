@@ -37,7 +37,7 @@ import 'package:highlight/languages/all.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.1-Experimental.1';
+const String vcsBaseVersion = '0.4.1-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -1105,7 +1105,22 @@ class PortableVcs {
     print('\n🔍 ${"WORKING TREE STATUS".black.onCyan}');
     print('${"On track:".yellow} ${targetTrackName.magenta.bold}');
 
-    var currentFingerprint = await buildFingerprint(_cwd);
+    final rawFingerprint = await buildFingerprint(_cwd);
+    var currentFingerprint = <String, String>{};
+
+    for (final entry in rawFingerprint.entries) {
+      try {
+        final file = File(p.join(_cwd.path, entry.key));
+        if (file.existsSync()) {
+          final canonical = p.relative(file.resolveSymbolicLinksSync(), from: _cwd.resolveSymbolicLinksSync());
+          currentFingerprint[p.normalize(canonical).replaceAll('\\', '/')] = entry.value;
+        } else {
+          currentFingerprint[p.normalize(entry.key).replaceAll('\\', '/')] = entry.value;
+        }
+      } catch (_) {
+        currentFingerprint[p.normalize(entry.key).replaceAll('\\', '/')] = entry.value;
+      }
+    }
 
     final gitignoreFile = File(p.join(_cwd.path, '.gitignore'));
     if (gitignoreFile.existsSync()) {
@@ -1114,6 +1129,7 @@ class PortableVcs {
         final rules = lines
             .map((l) => l.trim())
             .where((l) => l.isNotEmpty && !l.startsWith('#'))
+            .map((rule) => rule.replaceAll('\\', '/'))
             .toList();
 
         if (!rules.contains('.vcs') && !rules.contains('.vcs/')) {
@@ -1127,14 +1143,16 @@ class PortableVcs {
             
             for (final rule in rules) {
               if (rule.endsWith('/')) {
-                if (p.split(relativePath).contains(rule.replaceAll('/', ''))) {
+                final cleanRule = rule.substring(0, rule.length - 1);
+                if (p.split(relativePath).contains(cleanRule)) {
                   return false; 
                 }
               } else {
                 if (rule.startsWith('*.')) {
                   final ext = rule.substring(1);
                   if (relativePath.endsWith(ext)) return false;
-                } else if (p.split(relativePath).contains(rule) || relativePath == rule) {
+                } 
+                else if (p.split(relativePath).contains(rule) || relativePath == rule) {
                   return false;
                 }
               }
@@ -1143,7 +1161,7 @@ class PortableVcs {
           }),
         );
       } catch (_) {
-        // Continue
+        // Continue safely
       }
     }
 
@@ -1195,7 +1213,11 @@ class PortableVcs {
       lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
     }
 
-    final changes = diffFingerprints(lastFingerprint, currentFingerprint);
+    final cleanLastFingerprint = lastFingerprint.map(
+      (key, value) => MapEntry(p.normalize(key).replaceAll('\\', '/'), value)
+    );
+
+    final changes = diffFingerprints(cleanLastFingerprint, currentFingerprint);
 
     if (changes.isEmpty) {
       print('\n✨ ${"Working tree clean.".green}');
@@ -1204,12 +1226,12 @@ class PortableVcs {
     }
 
     Map<String, List<FileChange>> groups = {
-      '🛠️  LOGIC': [],
-      '🧪  TESTS': [],
-      '🎨  ASSETS': [],
-      '⚙️  CONFIG': [],
+      '🛠️   LOGIC': [],
+      '🧪   TESTS': [],
+      '🎨   ASSETS': [],
+      '⚙️   CONFIG': [],
       'ℹ️ DOCS': [],
-      '📄  OTHER': [],
+      '📄   OTHER': [],
     };
 
     for (final change in changes) {
@@ -1218,22 +1240,22 @@ class PortableVcs {
       final pathSegments = p.split(change.path).map((s) => s.toLowerCase()).toList();
 
       if (fileName.contains('_test.') || fileName.contains('.spec.') || pathSegments.contains('test') || pathSegments.contains('test_driver')) {
-        groups['🧪  TESTS']!.add(change);
+        groups['🧪   TESTS']!.add(change);
       } 
       else if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs', '.php', '.c', '.java', '.kt', '.swift', '.cs'].contains(ext)) {
-        groups['🛠️  LOGIC']!.add(change);
+        groups['🛠️   LOGIC']!.add(change);
       } 
       else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico', '.mp4', '.wav', '.mp3', '.ttf', '.otf', '.woff', '.woff2'].contains(ext)) {
-        groups['🎨  ASSETS']!.add(change);
+        groups['🎨   ASSETS']!.add(change);
       } 
       else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.plist', '.properties', '.conf', '.ini', '.env'].contains(ext) || fileName == 'dockerfile' || fileName == 'makefile') {
-        groups['⚙️  CONFIG']!.add(change);
+        groups['⚙️   CONFIG']!.add(change);
       } 
       else if (['.md', '.adoc', '.rst', '.txt'].contains(ext) || fileName == 'license' || fileName == 'changelog' || fileName == 'readme') {
         groups['ℹ️ DOCS']!.add(change);
       } 
       else {
-        groups['📄  OTHER']!.add(change);
+        groups['📄   OTHER']!.add(change);
       }
     }
 
@@ -1843,6 +1865,53 @@ class PortableVcs {
     return null;
   }
 
+  Future<bool> _hasEnoughStorageSpace(Directory targetDir, int requiredBytes) async {
+    try {
+      final path = targetDir.absolute.path;
+      int freeBytes = -1;
+
+      if (Platform.isWindows) {
+        final drive = path.contains(':') ? path.split(':').first + ':' : path;
+        final result = await Process.run('wmic', ['logicaldisk', 'where', 'DeviceID="$drive"', 'get', 'FreeSpace']);
+        if (result.exitCode == 0) {
+          final lines = result.stdout.toString().split('\n');
+          for (var line in lines) {
+            final trimmed = line.trim();
+            if (trimmed.isNotEmpty && RegExp(r'^\d+$').hasMatch(trimmed)) {
+              freeBytes = int.tryParse(trimmed) ?? -1;
+              break;
+            }
+          }
+        }
+      } else {
+        final result = await Process.run('df', ['-B1', path]);
+        if (result.exitCode == 0) {
+          final lines = result.stdout.toString().split('\n');
+          if (lines.length >= 2) {
+            final parts = lines[1].split(RegExp(r'\s+'));
+            if (parts.length >= 4) {
+              freeBytes = int.tryParse(parts[3]) ?? -1;
+            }
+          }
+        }
+      }
+
+      if (freeBytes != -1 && freeBytes < requiredBytes) {
+        final double freeMb = freeBytes / (1024 * 1024);
+        final double reqMb = requiredBytes / (1024 * 1024);
+        print('\n❌ ${"STORAGE ERROR: Insufficient disk space.".red.bold}');
+        print('   Required: ${reqMb.toStringAsFixed(2).yellow} MB');
+        print('   Available: ${freeMb.toStringAsFixed(2).red} MB');
+        print('   Target: ${path.grey}\n');
+        return false;
+      }
+    } catch (_) {
+      // Silent Error
+      return true; 
+    }
+    return true;
+  }
+
   Future<void> push(
     String message, {
     String? author,
@@ -1996,6 +2065,12 @@ class PortableVcs {
 
       print('📦 Packing and encrypting...');
       final zipBytes = await _createZipFromCurrentProject(sourcePath: workingDir);
+      final int estimatedEncryptedSize = zipBytes.length + (64 * 1024);
+
+      if (!await _hasEnoughStorageSpace(context.remoteRepoDir, estimatedEncryptedSize)) {
+        print('❌ Push aborted: Storage drive is full. No data was modified.'.red);
+        return;
+      }
 
       final encrypted = await _encryptSnapshot(
         zipBytes: zipBytes,
@@ -3117,7 +3192,7 @@ class PortableVcs {
   }
 
   Future<void> doctor({bool rebuildMode = false, bool reindexMode = false}) async {
-    print('\n🩺 ${"Repository diagnostics".cyan}');
+    print('\n🔬 ${"Repository diagnostics".cyan}');
     print('═' * 60);
 
     final snapshotsLackingIndex = <String>[];
@@ -3221,7 +3296,6 @@ class PortableVcs {
           RepoMeta? meta;
           bool restoredFromBackup = false;
           bool rebuildSuccess = false;
-          final snapshotsLackingIndex = <String>[];
 
           if (!metaFile.existsSync() || rebuildMode) {
             if (rebuildMode && snapshotsDir.existsSync()) {
@@ -3360,32 +3434,42 @@ class PortableVcs {
                     return;
                   }
 
-                  print('\n  ${"⚡".magenta} Retroactive Indexing: Rebuilding Fast-Diff structures for ${snapshotsLackingIndex.length} blocks...');
+                  print('\n  ${"⚡".magenta} Retroactive Parallel Indexing: Rebuilding ${snapshotsLackingIndex.length} blocks...');
                   
-                  for (var snapshotId in snapshotsLackingIndex) {
-                    try {
-                      final DecryptedSnapshot? snapshotData = await readSnapshot(
-                        context,
-                        snapshotId,
-                        password: finalPassword,
-                      );
+                  const int maxConcurrentTasks = 3;
+                  
+                  for (var i = 0; i < snapshotsLackingIndex.length; i += maxConcurrentTasks) {
+                    final end = (i + maxConcurrentTasks < snapshotsLackingIndex.length) 
+                        ? i + maxConcurrentTasks 
+                        : snapshotsLackingIndex.length;
+                    final batch = snapshotsLackingIndex.sublist(i, end);
 
-                      if (snapshotData != null) {
-                        final Map<String, String> extractedMap = Map<String, String>.from(snapshotData.fingerprint);
-
-                        await IndexService.saveSnapshotIndex(
-                          remoteRepoDir: remoteRepoDir,
-                          snapshotId: snapshotId,
-                          fileMap: extractedMap,
+                    await Future.wait(batch.map((snapshotId) async {
+                      try {
+                        final DecryptedSnapshot? snapshotData = await readSnapshot(
+                          context,
+                          snapshotId,
+                          password: finalPassword,
                         );
-                        print('    ${"✔".green} Fast-Diff Index regenerated for snapshot: ${snapshotId.cyan}');
-                      } else {
-                        print('    ${"❌".red} Snapshot data could not be decrypted or found for ID: $snapshotId');
+
+                        if (snapshotData != null) {
+                          final Map<String, String> extractedMap = Map<String, String>.from(snapshotData.fingerprint);
+
+                          await IndexService.saveSnapshotIndex(
+                            remoteRepoDir: remoteRepoDir,
+                            snapshotId: snapshotId,
+                            fileMap: extractedMap,
+                          );
+                          print('    ${"✔".green} Fast-Diff Index regenerated for snapshot: ${snapshotId.cyan}');
+                        } else {
+                          print('    ${"❌".red} Snapshot data could not be decrypted or found for ID: $snapshotId');
+                        }
+                      } catch (e) {
+                        print('    ${"❌".red} Error building delta-index for snapshot $snapshotId: $e');
                       }
-                    } catch (e) {
-                      print('    ${"❌".red} Error building delta-index for snapshot $snapshotId: $e');
-                    }
+                    }));
                   }
+
                   check(true, 'Fast-Diff Optimization', details: 'All missing delta indices regenerated successfully.');
                 } else {
                   check(false, 'Fast-Diff Optimization',
@@ -3908,6 +3992,17 @@ class PortableVcs {
       final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
       if (snapshot == null) {
         print('❌ Failed to read or decrypt snapshot data. Check your password.');
+        return;
+      }
+
+      final archive = ZipDecoder().decodeBytes(snapshot.zipBytes);
+      int totalRequiredBytes = 0;
+      for (final file in archive) {
+        if (file.isFile) totalRequiredBytes += file.size;
+      }
+
+      if (!await _hasEnoughStorageSpace(Directory.current, totalRequiredBytes)) {
+        print ('🚫 Pull aborted to safeguard workspace consistency.'.red);
         return;
       }
 
@@ -5336,10 +5431,29 @@ class PortableVcs {
     }
 
     stdout.write('🔑 Project password: ');
-    final password = _readHiddenLine();
+    final password = _readHiddenLine().trim();
     stdout.writeln();
 
     if (password.isEmpty) {
+      try {
+        ProcessResult result;
+        if (Platform.isWindows) {
+          result = Process.runSync('powershell', ['-Command', 'Get-Clipboard']);
+        } else if (Platform.isMacOS) {
+          result = Process.runSync('pbpaste', []);
+        } else {
+          result = Process.runSync('xclip', ['-selection', 'clipboard', '-o']);
+        }
+
+        if (result.exitCode == 0) {
+          final clipboardData = result.stdout.toString().trim();
+          if (clipboardData.isNotEmpty) {
+            print('📋 ${"Password securely injected from clipboard.".green}');
+            return clipboardData;
+          }
+        }
+      } catch (_) {}
+
       print('❌ Empty password.');
       return null;
     }
@@ -5351,10 +5465,13 @@ class PortableVcs {
     try {
       stdin.echoMode = false;
     } catch (_) {}
+    
     final line = stdin.readLineSync() ?? '';
+    
     try {
       stdin.echoMode = true;
     } catch (_) {}
+    
     return line;
   }
 
@@ -6533,7 +6650,7 @@ class PortableVcs {
       return;
     }
 
-    print('🧪 Preparing shadow workspace for: $targetTrackName');
+    print('🧪 Preparing shadow workspace for: $targetTrackName'.cyan);
     final shadowPath = p.join(Directory.current.path, '.vcs', 'shadow_$targetTrackName');
     final shadowDir = Directory(shadowPath);
     
@@ -6548,11 +6665,11 @@ class PortableVcs {
       }
 
       if (effectivePassword == null || effectivePassword.isEmpty) {
-        print('❌ Password required.');
+        print('❌ Password required.'.red);
         return; 
       }
 
-      print('📥 Extracting last snapshot to LOCAL storage...');
+      print('📥 Extracting last snapshot to LOCAL storage...'.cyan);
       
       final lastSnapshot = await readSnapshot(
         context, 
@@ -6562,6 +6679,17 @@ class PortableVcs {
 
       if (lastSnapshot != null) {
         final archive = ZipDecoder().decodeBytes(lastSnapshot.zipBytes);
+
+        int totalRequiredBytes = 0;
+        for (final file in archive) {
+          if (file.isFile) totalRequiredBytes += file.size;
+        }
+
+        if (!await _hasEnoughStorageSpace(shadowDir, totalRequiredBytes)) {
+          print('🚫 Switch aborted: Not enough space to deploy shadow workspace.'.red);
+          return;
+        }
+
         for (final file in archive) {
           if (file.isFile) {
             final outFile = File(p.join(shadowPath, file.name));
@@ -6569,7 +6697,7 @@ class PortableVcs {
             await outFile.writeAsBytes(file.content as List<int>);
           }
         }
-        print('✅ Content restored locally.');
+        print('✅ Content restored locally.'.green);
       } else {
         print('❌ Wrong password.');
         return;
@@ -7845,7 +7973,9 @@ class PortableVcs {
           cachedLatest = lines[0];
           lastCheck = DateTime.parse(lines[1]);
         }
-      } catch (_) {}
+      } catch (_) {
+        // Silent Error
+      }
     }
 
     if (cachedLatest != null && isUpdateAvailable(vcsBaseVersion, cachedLatest)) {
@@ -7855,24 +7985,19 @@ class PortableVcs {
     final bool isFirstTime = lastCheck == null;
     final bool isExpired = !isFirstTime && DateTime.now().difference(lastCheck).inHours >= 24;
 
-    if (isFirstTime) {
-      try {
-        final latestV = await _getLatestGitHubVersion().timeout(const Duration(seconds: 2));
-        if (latestV != null) {
-          await cacheFile.writeAsString('$latestV\n${DateTime.now().toIso8601String()}');
-          if (isUpdateAvailable(vcsBaseVersion, latestV) && latestV != cachedLatest) {
-            _printUpdateToast(vcsBaseVersion, latestV);
-          }
-        }
-      } catch (_) { /* Silent */ }
-    } 
-    else if (isExpired) {
-      _getLatestGitHubVersion().then((latestV) async {
+    void triggerBackgroundFetch() {
+      _getLatestGitHubVersion().timeout(const Duration(seconds: 3)).then((latestV) async {
         if (latestV != null) {
           final data = '$latestV\n${DateTime.now().toIso8601String()}';
-          await cacheFile.writeAsString(data);
+          try {
+            await cacheFile.writeAsString(data, mode: FileMode.write, flush: true);
+          } catch (_) {}
         }
       }).catchError((_) {});
+    }
+
+    if (isFirstTime || isExpired) {
+      triggerBackgroundFetch();
     }
   }
 
