@@ -26,6 +26,7 @@ import 'package:vcs/models/merge_report.dart';
 import 'package:vcs/models/range.dart';
 import 'package:vcs/models/repo_context.dart';
 import 'package:vcs/models/repo_meta.dart';
+import 'package:vcs/models/roadmap_model.dart';
 import 'package:vcs/models/snapshot_log_entry.dart';
 import 'package:vcs/models/snapshot_notes.dart';
 import 'package:vcs/models/track_state.dart';
@@ -34,10 +35,11 @@ import 'package:vcs/models/update_cache.dart';
 import 'package:vcs/models/version_history.dart';
 import 'package:highlight/highlight.dart';
 import 'package:highlight/languages/all.dart';
+import 'package:vcs/services/roadmap_manager.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.1-Experimental.2';
+const String vcsBaseVersion = '0.4.2-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -391,6 +393,16 @@ class PortableVcs {
       - `-r, --remove` Remove a note (requires `--index`).
       - `-i, --index <n>` The index of the note to remove (from `log`).
       - `--all` Remove all notes from the target snapshot.
+
+    ## 🗺️ STRATEGIC ROADMAP
+    - `roadmap` (No args) Render the visual tree of milestones and tasks.
+    - `roadmap init` Fast initial template setup for uninitiated projects.
+    - `roadmap edit` Open the roadmap.json in your system editor for rapid batch modification.
+    - `roadmap add <version> "title"` Append a new release block milestone.
+    - `roadmap task <version> "desc"` Append an incremental task to a target version block.
+      - `-g, --task-tag <tag>` Assign a short classification tag (e.g., CORE, PERF, BUG).
+    - `roadmap done <task_id>` Toggle completion progress state (TODO/DONE) for a specific task.
+    - `roadmap rm <version>` Remove a version milestone block and all its nested tasks.
 
     ## 🔍 INSPECTION & PERFORMANCE
     - `ui` Launch the Web Dashboard (Split-view diff support).
@@ -4473,8 +4485,9 @@ class PortableVcs {
     return input.replaceAll('\\', '/');
   }
 
-  Future<Map<String, String>> buildFingerprint(Directory dir) async {
+  Future<Map<String, String>> buildFingerprint(Directory dir, {Map<String, String>? previousFingerprint}) async {
     final out = <String, String>{};
+    
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
       if (entity is! File || !entity.existsSync()) continue;
 
@@ -4486,8 +4499,35 @@ class PortableVcs {
         final stat = await entity.stat();
         if (stat.size == 0 && rel.endsWith('.old')) continue;
 
-        final bytes = await entity.readAsBytes();
-        out[rel] = hash.sha256.convert(bytes).toString();
+        final currentSize = stat.size;
+        final currentMtime = stat.modified.millisecondsSinceEpoch;
+
+        String? computedHash;
+
+        if (previousFingerprint != null && previousFingerprint.containsKey(rel)) {
+          final cachedData = previousFingerprint[rel]!;
+          
+          final parts = cachedData.split('|');
+          if (parts.length == 3) {
+            final cachedHash = parts[0];
+            final cachedSize = int.tryParse(parts[1]) ?? -1;
+            final cachedMtime = int.tryParse(parts[2]) ?? -1;
+
+            if (currentSize == cachedSize && currentMtime == cachedMtime) {
+              computedHash = cachedHash;
+            }
+          } else if (parts.length == 1) {
+            // Retrocompatibility
+          }
+        }
+
+        if (computedHash == null) {
+          final bytes = await entity.readAsBytes();
+          computedHash = hash.sha256.convert(bytes).toString();
+        }
+
+        out[rel] = '$computedHash|$currentSize|$currentMtime';
+
       } catch (e) {
         continue; 
       }
@@ -8042,6 +8082,182 @@ class PortableVcs {
   }
 }
 
+class RoadmapCommand {
+  static Future<void> handle(List<String> args, dynamic context, {String? taskTag}) async {
+    if (args.isEmpty) {
+      _displayRoadmap(context);
+      return;
+    }
+
+    final roadmap = RoadmapManager.load(context);
+    final action = args[0].toLowerCase();
+
+    switch (action) {
+      case 'init':
+      case 'edit':
+        final file = File(p.join(context.remoteRepoDir.path, 'roadmap.json'));
+        
+        if (!file.existsSync()) {
+          print('✨ Creating a new strategic roadmap from template...');
+          RoadmapManager.initializeTemplate(context);
+        } else {
+          print('🔄 Roadmap detected. Opening your active project planner...');
+        }
+
+        print('\n📌 ${"EXPECTED JSON STRUCTURE EXAMPLE:".bold.cyan}');
+        print('${" [".grey}');
+        print('${"   {".grey}');
+        print('     ${"\"version\"".cyan}: ${"\"1.0.0-Beta\"".green},');
+        print('     ${"\"title\"".cyan}: ${"\"Core Implementation\"".green},');
+        print('     ${"\"tasks\"".cyan}: [');
+        print('       {');
+        print('         ${"\"id\"".cyan}: ${"\"TSK-001\"".yellow},');
+        print('         ${"\"description\"".cyan}: ${"\"Database indexing migration\"".green},');
+        print('         ${"\"tag\"".cyan}: ${"\"DB\"".magenta},');
+        print('         ${"\"isDone\"".cyan}: ${"false".red}');
+        print('       }');
+        print('     ]');
+        print('${"   }".grey}');
+        print('${" ]".grey}');
+        
+        print('\n📊 ${"HOW IT WILL RENDER IN YOUR TERMINAL:".bold.yellow}');
+        print(' 📦 Version ${"1.0.0-Beta".green.bold} - ${"Core Implementation".white}');
+        print('  └── [${"TSK-001".cyan}] <${"DB".magenta}> Database indexing migration${" [TODO]".yellow}');
+        
+        print('\n⚠️  ${"Strict JSON Reminder:".red} Strings must use double-quotes. Avoid trailing commas.\n');
+
+        print('📝 Opening ${"roadmap.json".cyan} in your system editor...');
+        await _openSystemEditor(file.path);
+
+        try {
+          final testLoad = RoadmapManager.load(context);
+          print('✅ Roadmap parsed successfully (${testLoad.length} milestones found).');
+        } catch (_) {
+          print('⚠️  ${"Syntax error detected.".red} Please fix the errors to view your tree using "vcs roadmap".');
+        }
+        return;
+
+      case 'add':
+        if (args.length < 3) {
+          print('❌ Usage: vcs roadmap add <version> "<title>"');
+          return;
+        }
+        roadmap.add(Milestone(version: args[1], title: args[2], tasks: []));
+        print('🚀 Milestone ${args[1].bold} added.');
+        break;
+
+      case 'task':
+        if (args.length < 3) {
+          print('❌ Usage: vcs roadmap task <version> "<description>" [-g TAG]');
+          return;
+        }
+        final version = args[1];
+        final description = args[2];
+        
+        final finalTag = (taskTag ?? 'TASK').toUpperCase();
+
+        try {
+          final ms = roadmap.firstWhere((e) => e.version == version);
+          final id = 'TSK-${(ms.tasks.length + 1).toString().padLeft(3, '0')}';
+          
+          ms.tasks.add(RoadmapTask(id: id, tag: finalTag, description: description));
+          print('✅ Task ${id.cyan} <$finalTag> created under ${version.bold}.');
+        } catch (_) {
+          print('❌ Error: Milestone version "$version" not found in roadmap.');
+          return;
+        }
+        break;
+
+      case 'done':
+        if (args.length < 2) {
+          print('❌ Usage: vcs roadmap done <task-id>');
+          return;
+        }
+        final targetId = args[1].toUpperCase();
+        bool found = false;
+
+        for (var ms in roadmap) {
+          for (var task in ms.tasks) {
+            if (task.id == targetId) {
+              task.isDone = !task.isDone;
+              print('${task.isDone ? "✔️".green : "⭕".yellow} Task ${task.id} set to ${task.isDone ? "DONE" : "TODO"}.');
+              found = true;
+            }
+          }
+        }
+        if (!found) {
+          print('❌ Task $targetId not found.');
+          return;
+        }
+        break;
+
+      case 'rm':
+        if (args.length < 2) {
+          print('❌ Usage: vcs roadmap rm <version>');
+          return;
+        }
+        roadmap.removeWhere((e) => e.version == args[1]);
+        print('🗑️ Milestone ${args[1]} removed.');
+        break;
+
+      default:
+        print('❌ Unknown roadmap action. Available: init, edit, add, task, done, rm');
+        return;
+    }
+
+    RoadmapManager.save(context, roadmap);
+  }
+
+  static Future<void> _openSystemEditor(String filePath) async {
+    final absolutePath = p.normalize(File(filePath).absolute.path);
+
+    if (Platform.isWindows) {
+      try {
+        final result = await Process.run('code', [absolutePath], runInShell: true);
+        if (result.exitCode != 0) throw Exception();
+      } catch (e) {
+        await Process.run('notepad.exe', [absolutePath]);
+      }
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [absolutePath]);
+    } else {
+      try {
+        await Process.run('xdg-open', [absolutePath]);
+      } catch (_) {
+        await Process.start('nano', [absolutePath], mode: ProcessStartMode.inheritStdio);
+      }
+    }
+  }
+
+  static void _displayRoadmap(dynamic context) {
+    final roadmap = RoadmapManager.load(context);
+    if (roadmap.isEmpty) {
+      print('📭 No roadmap found. Use "vcs roadmap init" to start.');
+      return;
+    }
+
+    print('\n 🗺️  ${"PROJECT STRATEGIC ROADMAP".bold.underline}\n');
+    
+    for (var ms in roadmap) {
+      print(' 📦 Version ${ms.version.green.bold} - ${ms.title.white}');
+      
+      if (ms.tasks.isEmpty) {
+        print('    ${"No tasks planned yet.".grey}');
+      }
+
+      for (var i = 0; i < ms.tasks.length; i++) {
+        final t = ms.tasks[i];
+        final isLast = i == ms.tasks.length - 1;
+        final branch = isLast ? ' └──' : ' ├──';
+        final status = t.isDone ? ' [DONE]'.green : ' [TODO]'.yellow;
+        
+        print('$branch [${t.id.cyan}] <${t.tag.magenta}> ${t.description}$status');
+      }
+      print(''); 
+    }
+  }
+}
+
 extension ColorConsole on String {
   String get green => '\x1B[32m$this\x1B[0m';
   String get yellow => '\x1B[33m$this\x1B[0m';
@@ -8092,6 +8308,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('changelog', ArgParser()..addFlag('list', abbr: 'l', negatable: false))
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
+    )
+    ..addCommand('roadmap', ArgParser()
+      ..addOption('task-tag', abbr: 'g', help: 'Set tag for task insertion (e.g. CORE, PERF)')
     )
     ..addCommand('note', ArgParser()
       ..addOption('id', help: 'Target snapshot ID')
@@ -8296,6 +8515,21 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'roadmap':
+        if (context == null) {
+          print('❌ ${"Error:".red} USB storage context not found. Cannot manage roadmap.');
+          return;
+        }
+        final List<String> roadmapArgs = [...command!.rest];
+        
+        String? explicitTag;
+        if (command.options.contains('task-tag') && command['task-tag'] != null) {
+          explicitTag = command['task-tag'].toString();
+        }
+
+        await RoadmapCommand.handle(roadmapArgs, context, taskTag: explicitTag);
+        break;
 
       case 'open':
         final String? repoName = command?.rest.isNotEmpty == true ? command?.rest.first : null;
