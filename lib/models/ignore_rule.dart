@@ -1,3 +1,5 @@
+import 'dart:io';
+
 class IgnoreRule {
   final String original;
   final String pattern;
@@ -40,6 +42,8 @@ class IgnoreRule {
       anchoredToRoot = true;
       raw = raw.substring(1);
       if (raw.isEmpty) return null;
+    } else if (raw.contains('/') && !raw.startsWith('**')) {
+      anchoredToRoot = true;
     }
 
     final regex = _buildRegex(
@@ -59,9 +63,11 @@ class IgnoreRule {
   }
 
   bool matches(String normalizedPath, String basename) {
+    final path = normalizedPath.replaceAll(r'\', '/');
+
     if (directoryOnly) {
-      if (regex.hasMatch(normalizedPath)) return true;
-      final parts = normalizedPath.split('/');
+      if (regex.hasMatch(path)) return true;
+      final parts = path.split('/');
       for (var i = 0; i < parts.length - 1; i++) {
         final partial = parts.sublist(0, i + 1).join('/');
         if (regex.hasMatch(partial)) return true;
@@ -69,7 +75,7 @@ class IgnoreRule {
       return false;
     }
 
-    if (regex.hasMatch(normalizedPath)) return true;
+    if (regex.hasMatch(path)) return true;
 
     if (!pattern.contains('/')) {
       return regex.hasMatch(basename);
@@ -95,15 +101,30 @@ class IgnoreRule {
     if (directoryOnly) {
       body = '$body(\$|/.*)';
     } else {
-      body = '$body\$';
+      body = '$body(\$|/.*)';
     }
 
-    return RegExp(body);
+    return RegExp(body, caseSensitive: !Platform.isWindows && !Platform.isMacOS);
   }
 
   static String _globToRegex(String input) {
     final buffer = StringBuffer();
-    for (var i = 0; i < input.length; i++) {
+    var i = 0;
+
+    while (i < input.length) {
+      if (i + 1 < input.length && input[i] == '*' && input[i + 1] == '*') {
+        if ((i == 0 || input[i - 1] == '/') && (i + 2 == input.length || input[i + 2] == '/')) {
+          buffer.write('.*');
+          if (i + 2 < input.length && input[i + 2] == '/') {
+            i++;
+          }
+        } else {
+          buffer.write('.*');
+        }
+        i += 2;
+        continue;
+      }
+
       final ch = input[i];
       switch (ch) {
         case '*':
@@ -129,6 +150,7 @@ class IgnoreRule {
         default:
           buffer.write(ch);
       }
+      i++;
     }
     return buffer.toString();
   }
