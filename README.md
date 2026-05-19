@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.1--experimental.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.2--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -276,6 +276,25 @@ You can create a hook named `build_test` to ensure your project is always valid 
 https://github.com/user-attachments/assets/4766a2ca-5eb7-49b6-9d4a-ea5fe006bcfc
 
 
+# 🗺️ Strategic Roadmap Planner (Built-in)
+Portable VCS includes an integrated strategic planner driven directly via the CLI and managed through a local `roadmap.json` schema. This allows you to chart development milestones, track features, and map core technical blocks entirely offline.
+
+### Interactive JSON Legend & Terminal Mirroring
+When using the editing ecosystem, the tool automatically echoes a visual syntax legend and structural mirror so you know exactly how your data will render beforehand:
+
+<img width="361" height="236" alt="Captura de pantalla 2026-05-20 010203" src="https://github.com/user-attachments/assets/ea6a1d95-9caf-4327-81ba-69f74f5dfca6" />
+
+### Roadmap Commands
+| Command | Description |
+| :--- | :--- |
+| `vcs roadmap` | (No args) Render the visual tree of milestones and architectural tasks. |
+| `vcs roadmap init` | Fast initial template setup for uninitiated projects. |
+| `vcs roadmap edit` | Open `roadmap.json` in your system editor for rapid batch modification. |
+| `vcs roadmap add <version> "title"` | Append a new release block milestone. |
+| `vcs roadmap task <v> "desc"` | Append an incremental task to a target version block (`-g, --task-tag`). |
+| `vcs roadmap done <task_id>` | Toggle completion progress state (`TODO` / `DONE`) for a task. |
+| `vcs roadmap rm <version>` | Remove a version milestone block and all its nested tasks. |
+
 # Core Features
 
 ### Snapshot System
@@ -410,6 +429,9 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 # Main Commands
 ### 🛠️ Command Reference
 
+# Main Commands
+### 🛠️ Command Reference
+
 | Category | Command | Description |
 | :--- | :--- | :--- |
 | **Setup** | `vcs setup` | Prepare a USB drive or external storage for Vault use. |
@@ -429,6 +451,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs info` | Show detailed information about the current project and linked vault (includes activity charts). |
 | | `vcs status` | Summary of messages to help create Git/GitHub commits. |
 | | `vcs summary` | Compare tree against latest of the **active track**. |
+| | `vcs roadmap` | **Render the strategic milestone tree** and task compliance map. |
 | | `vcs di` | Implementation of the **Delta-Index Viewer**. Allows for near-instant inspection of any snapshot's file structure without requiring decryption of the data blobs. |
 | | `vcs di --ext <extension>` | High-precision filtering. Isolate specific file families (e.g., `.dart`, `.json`) in large repositories using the `--ext` flag. |
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
@@ -484,6 +507,12 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | **Automation** | `vcs hook create <name> [-c/--config auto\|man]` | Create a new automation script (.ps1, .bat, .sh). |
 | | `vcs hook edit <name> [-c/--config auto\|man]` | Edit hook code or toggle execution mode. |
 | | `vcs hook exec <name>` | Run a specific hook manually. |
+| | `vcs roadmap init` | Initialize template for strategic milestones schema. |
+| | `vcs roadmap edit` | Open roadmap configuration in system standard editor. |
+| | `vcs roadmap add <v> "t"` | Append a milestone release block directly. |
+| | `vcs roadmap task <v> "d"` | Append a categorized task to a release checkpoint. |
+| | `vcs roadmap done <id>` | Toggle compliance state of a task. |
+| | `vcs roadmap rm <v>` | Remove an entire version milestone. |
 | **General** | `vcs version` | Show tool version, OS information and **check for updates**. |
 | | `vcs changelog` | Show changes of the version |
 | | `vcs changelog --list/-l` | Display the full version history. Allows selecting a specific version to view its detailed changes. |
