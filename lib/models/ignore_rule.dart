@@ -66,13 +66,7 @@ class IgnoreRule {
     final path = normalizedPath.replaceAll(r'\', '/');
 
     if (directoryOnly) {
-      if (regex.hasMatch(path)) return true;
-      final parts = path.split('/');
-      for (var i = 0; i < parts.length - 1; i++) {
-        final partial = parts.sublist(0, i + 1).join('/');
-        if (regex.hasMatch(partial)) return true;
-      }
-      return false;
+      return regex.hasMatch(path);
     }
 
     if (regex.hasMatch(path)) return true;
@@ -104,7 +98,10 @@ class IgnoreRule {
       body = '$body(\$|/.*)';
     }
 
-    return RegExp(body, caseSensitive: !Platform.isWindows && !Platform.isMacOS);
+    return RegExp(
+      body, 
+      caseSensitive: !Platform.isWindows && !Platform.isMacOS
+    );
   }
 
   static String _globToRegex(String input) {
@@ -113,16 +110,28 @@ class IgnoreRule {
 
     while (i < input.length) {
       if (i + 1 < input.length && input[i] == '*' && input[i + 1] == '*') {
-        if ((i == 0 || input[i - 1] == '/') && (i + 2 == input.length || input[i + 2] == '/')) {
-          buffer.write('.*');
-          if (i + 2 < input.length && input[i + 2] == '/') {
-            i++;
+        bool startWithSlash = (i == 0 || input[i - 1] == '/');
+        bool endWithSlash = (i + 2 == input.length || input[i + 2] == '/');
+
+        if (startWithSlash && endWithSlash) {
+          if (i == 0 && i + 2 < input.length) {
+            buffer.write('(.*)?');
+            i += 3;
+            continue;
+          } else if (i > 0 && i + 2 < input.length) {
+            buffer.write('(/.*)?');
+            i += 2;
+            continue;
+          } else {
+            buffer.write('.*');
+            i += 2;
+            continue;
           }
         } else {
           buffer.write('.*');
+          i += 2;
+          continue;
         }
-        i += 2;
-        continue;
       }
 
       final ch = input[i];
