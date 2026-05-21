@@ -4,6 +4,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
@@ -24,6 +25,7 @@ import 'package:vcs/models/ignore_rule.dart';
 import 'package:vcs/models/index_service.dart';
 import 'package:vcs/models/merge_report.dart';
 import 'package:vcs/models/range.dart';
+import 'package:vcs/models/release_meta.dart';
 import 'package:vcs/models/repo_context.dart';
 import 'package:vcs/models/repo_meta.dart';
 import 'package:vcs/models/roadmap_model.dart';
@@ -35,11 +37,13 @@ import 'package:vcs/models/update_cache.dart';
 import 'package:vcs/models/version_history.dart';
 import 'package:highlight/highlight.dart';
 import 'package:highlight/languages/all.dart';
+import 'package:vcs/services/release_service.dart';
 import 'package:vcs/services/roadmap_manager.dart';
+import 'package:vcs/utils/progress_visualizer.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.2-Experimental.1';
+const String vcsBaseVersion = '0.4.2-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -379,6 +383,14 @@ class PortableVcs {
     - `restore <id|tag>` Restore a specific snapshot into another folder.
       - `--to <dir>` Destination path for the restored files.
 
+    ## 🚀 RELEASES (Public/Distribution)
+    - `release create "message"` Create a portable, encrypted archive for distribution.
+      - Prompts for version tag (e.g., v1.0.1) and repository password.
+    - `release list` List all registered release versions and their IDs.
+    - `release public [id]` Extract and run an isolated VS Code instance from a release.
+      - Prompts for password to decrypt the archive into a volatile workspace.
+    - `release delete [id]` Remove a release and its physical data from the vault.
+
     ## 🪝 AUTOMATION & HOOKS
     - `hook create <name>` Create a new automation script (.ps1, .bat, .sh).
       - `-c, --config <auto|man>` Set execution mode (default: man).
@@ -401,7 +413,7 @@ class PortableVcs {
     - `roadmap add <version> "title"` Append a new release block milestone.
     - `roadmap task <version> "desc"` Append an incremental task to a target version block.
       - `-g, --task-tag <tag>` Assign a short classification tag (e.g., CORE, PERF, BUG).
-    - `roadmap done <task_id>` Toggle completion progress state (TODO/DONE) for a specific task.
+    - `roadmap done <task_id>` Toggle completion progress state (TODO|DONE) for a specific task.
     - `roadmap rm <version>` Remove a version milestone block and all its nested tasks.
 
     ## 🔍 INSPECTION & PERFORMANCE
@@ -1107,7 +1119,7 @@ class PortableVcs {
     print('✅ ${all ? "All notes" : "Note"} removed from snapshot ${idToFind.cyan}.');
   }
 
-  Future<void> status({String? password}) async {
+  Future<void> status({String? password, showIgnored = false}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
@@ -1135,45 +1147,41 @@ class PortableVcs {
     }
 
     final gitignoreFile = File(p.join(_cwd.path, '.gitignore'));
+    List<String> explicitlyIgnoredFiles = [];
     if (gitignoreFile.existsSync()) {
       try {
         final lines = await gitignoreFile.readAsLines();
-        final rules = lines
-            .map((l) => l.trim())
-            .where((l) => l.isNotEmpty && !l.startsWith('#'))
-            .map((rule) => rule.replaceAll('\\', '/'))
-            .toList();
-
-        if (!rules.contains('.vcs') && !rules.contains('.vcs/')) {
-          rules.add('.vcs');
-          rules.add('.vcs/');
+        final List<IgnoreRule> compiledRules = [];
+        for (final line in lines) {
+          final rule = IgnoreRule.parse(line);
+          if (rule != null) compiledRules.add(rule);
         }
+        compiledRules.add(IgnoreRule.parse('.vcs')!);
+        compiledRules.add(IgnoreRule.parse('.vcs/')!);
 
         currentFingerprint = Map.fromEntries(
           currentFingerprint.entries.where((entry) {
             final relativePath = entry.key;
+            final basename = p.basename(relativePath);
             
-            for (final rule in rules) {
-              if (rule.endsWith('/')) {
-                final cleanRule = rule.substring(0, rule.length - 1);
-                if (p.split(relativePath).contains(cleanRule)) {
-                  return false; 
-                }
-              } else {
-                if (rule.startsWith('*.')) {
-                  final ext = rule.substring(1);
-                  if (relativePath.endsWith(ext)) return false;
-                } 
-                else if (p.split(relativePath).contains(rule) || relativePath == rule) {
-                  return false;
-                }
+            bool isIgnored = false;
+
+            for (final rule in compiledRules) {
+              if (rule.matches(relativePath, basename)) {
+                isIgnored = !rule.negated;
               }
             }
+
+            if (isIgnored) {
+              if (showIgnored) explicitlyIgnoredFiles.add(relativePath);
+              return false;
+            }
+
             return true;
           }),
         );
-      } catch (_) {
-        // Continue safely
+        } catch (e) {
+          print('⚠️ ${"Warning: Error evaluating exclusion rules: $e".yellow}');
       }
     }
 
@@ -1269,6 +1277,21 @@ class PortableVcs {
       else {
         groups['📄   OTHER']!.add(change);
       }
+    }
+
+    if (showIgnored) {
+      print('\n${'--- 🚫 Ignored Files ---'.cyan}');
+      
+      if (explicitlyIgnoredFiles.isEmpty) {
+        print('   ${"(No bypassed files detected in the workspace)".grey.italic}');
+      } else {
+        explicitlyIgnoredFiles.sort();
+        for (final path in explicitlyIgnoredFiles) {
+          print('   ${'[I]'.grey} ${path.gray}');
+        }
+        print('\n   ${explicitlyIgnoredFiles.length.toString().grey} files currently excluded by rules.');
+      }
+      print('  ' + '─' * 45 + '\n');
     }
 
     print('\n${"Changes not yet pushed:".bold}');
@@ -2101,11 +2124,30 @@ class PortableVcs {
       final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
 
       String? fileHash;
+
+      final visualizer = ProgressVisualizer(
+        label: 'Writing to Vault',
+        totalBytes: encrypted.length,
+      );
+
+      Stream<List<int>> chunkedStream(List<int> data, int chunkSize) async* {
+        for (var i = 0; i < data.length; i += chunkSize) {
+          final end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
+          yield data.sublist(i, end);
+          await Future.delayed(Duration.zero); 
+        }
+      }
+
       try {
-        await finalFile.writeAsBytes(encrypted, flush: true);
+        final sink = finalFile.openWrite();
+        await chunkedStream(encrypted, 64 * 1024)
+            .withProgress(visualizer)
+            .pipe(sink);
+
         fileHash = sha256.convert(encrypted).toString();
       } catch (e) {
-        print('❌ Error writing snapshot: $e');
+        print('\n❌ Error writing snapshot: $e');
+        if (finalFile.existsSync()) await finalFile.delete();
         return;
       }
 
@@ -4036,6 +4078,11 @@ class PortableVcs {
         }
       }
 
+      final visualizer = ProgressVisualizer(
+        label: 'Restoring Workspace',
+        totalBytes: totalRequiredBytes,
+      );
+
       final totalFiles = filesInSnapshot.length;
       for (final sEntry in filesInSnapshot.entries) {
         final path = sEntry.key;
@@ -4050,13 +4097,13 @@ class PortableVcs {
         await file.writeAsBytes(bytes, flush: true);
         restoredCount++;
 
-        if (restoredCount % 5 == 0 || restoredCount == totalFiles) {
-          final percent = ((restoredCount / totalFiles) * 100).toInt();
-          stdout.write('\rRestoring: $percent% ($restoredCount/$totalFiles files)');
-        }
+        visualizer.update(bytes.length);
+        await Future.delayed(Duration.zero); 
       }
+      
+      visualizer.complete();
 
-      print('\n\n✅ Pull complete!');
+      print('\n✅ Pull complete!');
       print('   ${restoredCount.toString().green} files updated/restored.');
       if (deletedCount > 0) {
         print('   ${deletedCount.toString().red} files removed as per snapshot.');
@@ -5220,7 +5267,7 @@ class PortableVcs {
     required Uint8List zipBytes,
     required String message,
     required String password,
-    required String trackName,
+    String? trackName,
     String? parentId,
     Map<String, String>? fingerprint,
     String? author,
@@ -5261,9 +5308,9 @@ class PortableVcs {
 
     final recoveryHeader = {
       'vcs_recovery': '0.3.7',
-      'track': trackName,
-      'parent': parentId,
-      'author': author,
+      'track': trackName ?? 'release',
+      'parent': parentId ?? 'none',
+      'author': author ?? 'unknown',
       'timestamp': DateTime.now().toUtc().toIso8601String(),
     };
 
@@ -8080,6 +8127,109 @@ class PortableVcs {
 
     print('✅ Tag ${tagName.magenta.bold} successfully linked to ${idToTag.green}');
   }
+
+  Future<bool> isFileIgnored(String path, Directory rootDir, List<IgnoreRule> rules) async {
+    final relativePath = p.relative(path, from: rootDir.path);
+    final basename = p.basename(path);
+    
+    bool ignored = false;
+    for (final rule in rules) {
+      if (rule.matches(relativePath, basename)) {
+        ignored = !rule.negated;
+      }
+    }
+    return ignored;
+  }
+
+  Future<void> createRelease(String message) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    stdout.write('🏷️  Enter version tag (e.g., v1.0.1): ');
+    final version = stdin.readLineSync()?.trim() ?? 'v0.0.0';
+
+    final releaseId = DateTime.now().millisecondsSinceEpoch.toString();
+    final releaseService = ReleaseService(context.remoteRepoDir);
+    await releaseService.ensureInitialized();
+
+    final releaseFolder = Directory(p.join(releaseService.releasesDir.path, releaseId));
+    await releaseFolder.create(recursive: true);
+
+    print('📦 Preparing release archive using existing VCS rules...');
+
+    final zipBytes = await _createZipFromCurrentProject(sourcePath: _cwd);
+
+    final password = askPassword();
+    if (password == null) {
+      print('❌ Encryption cancelled.');
+      await releaseFolder.delete(recursive: true);
+      return;
+    }
+
+    final encryptedData = await _encryptSnapshot(
+      zipBytes: zipBytes,
+      message: message,
+      password: password,
+      trackName: 'release', 
+      author: 'system',
+    );
+
+    final snapshotPath = p.join(releaseFolder.path, 'archive.enc');
+    await File(snapshotPath).writeAsBytes(encryptedData);
+
+    final manifest = {
+      'version': version,
+      'releaseId': releaseId,
+      'message': message,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    };
+    await File(p.join(releaseFolder.path, 'manifest.json'))
+        .writeAsString(jsonEncode(manifest), flush: true);
+
+    await releaseService.appendReleaseToIndex(ReleaseEntry(
+      version: version,
+      releaseId: releaseId,
+      message: message,
+      snapshotPath: snapshotPath,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+    ));
+
+    print('🚀 ${"Release $version successfully created!".green.bold}');
+  }
+
+  ReleaseService? _releaseService;
+  
+  Future<ReleaseService> getReleaseService(Directory repoDir) async {
+    if (_releaseService == null || _releaseService!.repoDir.path != repoDir.path) {
+      _releaseService = ReleaseService(repoDir);
+      await _releaseService!.ensureInitialized();
+    }
+    return _releaseService!;
+  }
+
+  Future<void> releasePublic(String releaseId) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+    final service = await getReleaseService(context.remoteRepoDir);
+    final password = askPassword();
+    if (password != null) {
+      await service.releasePublic(releaseId, password);
+    }
+  }
+
+  Future<void> listReleases() async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+    final service = await getReleaseService(context.remoteRepoDir);
+    await service.listReleases();
+  }
+
+  Future<void> deleteRelease(String releaseId) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+    final service = await getReleaseService(context.remoteRepoDir);
+    await service.deleteRelease(releaseId);
+  }
 }
 
 class RoadmapCommand {
@@ -8303,7 +8453,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
   final parser = ArgParser()
     ..addCommand('setup')
     ..addCommand('init')
-    ..addCommand('status')
+    ..addCommand('status', ArgParser()
+      ..addFlag('ignored', abbr: 'i', help: 'List all files currently bypassed by active exclusion structures.', negatable: false)
+    )
     ..addCommand('update')
     ..addCommand('changelog', ArgParser()..addFlag('list', abbr: 'l', negatable: false))
     ..addCommand('storage-check', ArgParser()
@@ -8443,6 +8595,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('ext', abbr: 'e', help: 'Filter files by type (e.g., `vcs di --ext .dart`).')
       ..addOption('track', abbr: 't', help: 'Target track')
     )
+    ..addCommand('release', ArgParser()
+      ..addCommand('create')
+      ..addCommand('public')
+      ..addCommand('delete')
+      ..addCommand('list')
+    )
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
@@ -8506,7 +8664,6 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
 
       case 'setup': await app.setupDrive(); break;
       case 'init': await app.init(); break;
-      case 'status': await app.status(); break;
       case 'update': await app.update(); break;
       case 'version': app.showVersion(); break;
       case 'ui': await app.launchUI(); break;
@@ -8515,6 +8672,51 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'release':
+        final subCommand = command?.command?.name;
+        if (subCommand == null) {
+          print('❌ Usage: vcs release <create|public|delete|list>');
+          break;
+        }
+
+        final subResult = command!.command!;
+        switch (subCommand) {
+          case 'create':
+            if (subResult.rest.isEmpty) {
+              print('❌ Please provide a message for the release.');
+            } else {
+              await app.createRelease(subResult.rest.join(' '));
+            }
+            break;
+
+          case 'public':
+            if (subResult.rest.isEmpty) {
+              print('❌ Please provide the release ID to open.');
+            } else {
+              await app.releasePublic(subResult.rest.first);
+            }
+            break;
+
+          case 'delete':
+            if (subResult.rest.isEmpty) {
+              print('❌ Please provide the release ID to delete.');
+            } else {
+              await app.deleteRelease(subResult.rest.first);
+            }
+            break;
+
+          case 'list':
+            await app.listReleases();
+            break;
+        }
+        break;
+
+      case 'status':
+        final statusCommand = result.command;        
+        final isIgnoredActive = statusCommand != null && statusCommand['ignored'] == true;
+        await app.status(showIgnored: isIgnoredActive); 
+        break;
 
       case 'roadmap':
         if (context == null) {
