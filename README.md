@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.2--experimental.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.2--experimental.2-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -18,6 +18,29 @@ Instead, it solves a different problem:
 
 > [!NOTE]
 > This is a tool created for my personal use and is not intended to compete with anything. It's a complement to use with Git.
+
+---
+
+## 📑 Table of Contents
+- [Why this exists](#why-this-exists)
+- [Why not Git?](#why-not-git)
+- [Important Notice](#important-notice)
+- [What Portable VCS IS / IS NOT](#what-portable-vcs-is)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Web Dashboard (Local UI)](#web-dashboard-local-ui)
+- [Automation & Hooks (Local CI/CD)](#automation--hooks-local-cicd)
+- [Strategic Roadmap Planner](#strategic-roadmap-planner-built-in)
+- [Portable Releases (Distribution)](#portable-releases-distribution)
+- [Core Features](#core-features)
+- [Git Sync Workflow](#git-sync-workflow)
+- [Main Commands (Reference)](#main-commands)
+- [Encryption](#encryption)
+- [Example Real Workflow](#example-real-workflow)
+- [Parallel Reality Workflow (Multi-Track)](#parallel-reality-workflow-multi-track)
+- [Current Limitations & Stability](#current-limitations)
+- [Testing & Roadmap](#testing-coverage)
+- [Contributing & License](#contributing)
 
 ---
 
@@ -275,8 +298,7 @@ You can create a hook named `build_test` to ensure your project is always valid 
    
 https://github.com/user-attachments/assets/4766a2ca-5eb7-49b6-9d4a-ea5fe006bcfc
 
-
-# 🗺️ Strategic Roadmap Planner (Built-in)
+# Strategic Roadmap Planner (Built-in)
 Portable VCS includes an integrated strategic planner driven directly via the CLI and managed through a local `roadmap.json` schema. This allows you to chart development milestones, track features, and map core technical blocks entirely offline.
 
 ### Interactive JSON Legend & Terminal Mirroring
@@ -294,6 +316,23 @@ When using the editing ecosystem, the tool automatically echoes a visual syntax 
 | `vcs roadmap task <v> "desc"` | Append an incremental task to a target version block (`-g, --task-tag`). |
 | `vcs roadmap done <task_id>` | Toggle completion progress state (`TODO` / `DONE`) for a task. |
 | `vcs roadmap rm <version>` | Remove a version milestone block and all its nested tasks. |
+
+# Portable Releases (Distribution)
+Portable VCS allows you to create immutable, portable, and encrypted archives of your project for distribution. Unlike standard snapshots, releases are designed for sharing specific project milestones or "public" versions.
+
+### Release Workflow
+* **Creation:** Packages your project based on your existing VCS ignore rules into a secure, encrypted archive.
+* **Metadata:** Each release includes a `manifest.json` with version tagging and custom messages.
+* **Isolation:** When you run a release, the system decrypts it into a volatile, isolated workspace folder within your system's temp directory.
+* **Execution:** Automatically launches a new, clean VS Code instance pointing to that isolated workspace, ensuring your local development environment remains untouched.
+
+### Release Commands
+| Command | Description |
+| :--- | :--- |
+| `vcs release create "msg"` | Create a portable, encrypted archive for distribution. |
+| `vcs release list` | List all registered release versions and their IDs. |
+| `vcs release public [id]` | Extract and run an isolated VS Code instance from a specific release. |
+| `vcs release rm [id]` | Remove a release and its physical data from the vault. |
 
 # Core Features
 
@@ -429,9 +468,6 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 # Main Commands
 ### 🛠️ Command Reference
 
-# Main Commands
-### 🛠️ Command Reference
-
 | Category | Command | Description |
 | :--- | :--- | :--- |
 | **Setup** | `vcs setup` | Prepare a USB drive or external storage for Vault use. |
@@ -447,6 +483,10 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs pull --dry-run` | Preview changes without applying |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
+| **Releases** | `vcs release create "msg"` | Create a portable, encrypted archive for distribution. |
+| | `vcs release list` | List all registered release versions and their IDs. |
+| | `vcs release public [id]` | Extract and run an isolated VS Code instance from a release. |
+| | `vcs release rm [id]` | Remove a release and its physical data from the vault. |
 | **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
 | | `vcs info` | Show detailed information about the current project and linked vault (includes activity charts). |
 | | `vcs status` | Summary of messages to help create Git/GitHub commits. |
