@@ -1,5 +1,25 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.3-Experimental.1': r'''
+  # 🩺 INTELLIGENT INITIALIZATION & MARKDOWN DIAGNOSTICS
+
+  This release elevates repository setup and health tracking by introducing contextual workspace awareness during initialization and rich document exports for system diagnostics.
+  ---
+
+  ## 💡 NEW FEATURE: CONTEXTUAL PROJECT DETECTOR [[ TAG: INIT-SMART ]]
+
+  • **Interactive Language Sentinel**: Upgraded `vcs init` to scan the active workspace for language-specific project descriptors (such as `pubspec.yaml`, `package.json`, `Cargo.toml`, `requirements.txt`, or `go.mod`).
+    - **Recommended .gitignore Generator**: If no exclusion structure exists, the engine prompts the user to auto-generate a tailored `.gitignore` pre-populated with standard production bypass rules for their detected stack, preventing repository bloating.
+    - **Override Protection**: Rigidly blocks generation if a `.gitignore` already exists, ensuring custom structures remain untouched.
+
+  ---
+
+  ## 📄 NEW FEATURE: MARKDOWN DIAGNOSTIC REPORTS [[ TAG: DOCTOR-EXPORT ]]
+
+  • **Automated Markdown Reporter**: Re-engineered `vcs doctor` to act as an offline auditor, writing a comprehensive audit trail to disk as a structured Markdown file (`vcs_doctor_report_[timestamp].md`).
+    - **ANSI Sanitization Engine**: Embedded a rigid regex-based ANSI escape sequence filter (`stripAnsi`) to strip out terminal styling codes, ensuring the generated Markdown document remains perfectly clean, formatted, and legible.
+    - **Dual-Stream Dispatcher**: Dynamically maps validation flags into simultaneous console colors and formatted Markdown logs in a single runtime pass.
+  ''',
     '0.4.2-Experimental.2': r'''
   # 🚀 PORTABLE RELEASE ARCHITECTURE & TERMINAL UX UPGRADE
 
