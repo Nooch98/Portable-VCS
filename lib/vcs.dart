@@ -40,10 +40,11 @@ import 'package:highlight/languages/all.dart';
 import 'package:vcs/services/release_service.dart';
 import 'package:vcs/services/roadmap_manager.dart';
 import 'package:vcs/utils/progress_visualizer.dart';
+import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.2-Experimental.2';
+const String vcsBaseVersion = '0.4.3-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -673,6 +674,44 @@ class PortableVcs {
       return;
     }
 
+    final Map<String, String> languageTemplates = {
+      'pubspec.yaml': '.dart_tool/\n.packages\n.pub-cache/\nbuild/\n*.exe\n*.zip',
+      'lib/main.dart': '.dart_tool/\n.packages\n.pub-cache/\nbuild/\n*.exe\n*.apk\n*.ipa',
+      'package.json': 'node_modules/\ndist/\nbuild/\n.env\n*.log\ncoverage/',
+      'requirements.txt': '__pycache__/\n*.pyc\n.venv/\nvenv/\n.env\n.pytest_cache/',
+      'pom.xml': 'target/\n.settings/\n.project\n.classpath\n.idea/',
+      'go.mod': 'bin/\nobj/\n*.exe\n*.test\n*.out',
+      'Cargo.toml': 'target/\ndebug/\nrelease/\n*.rs.bk',
+      'build.gradle': '.gradle/\nbuild/\n.settings/\n.project',
+      'composer.json': 'vendor/\n.env\n*.log',
+      'index.php': 'vendor/\nnode_modules/\n.env\n*.log',
+      'CMakeLists.txt': 'build/\n*.o\n*.a\n*.so\n*.out',
+      'Makefile': '*.o\n*.out\n*.exe\nbuild/'
+    };
+
+    final gitIgnoreFile = File(p.join(_cwd.path, '.gitignore'));
+    if (!gitIgnoreFile.existsSync()) {
+      String? detectedTemplate;
+      String? detectedLanguage;
+
+      for (var entry in languageTemplates.entries) {
+        if (File(p.join(_cwd.path, entry.key)).existsSync()) {
+          detectedLanguage = entry.key;
+          detectedTemplate = entry.value;
+          break;
+        }
+      }
+
+      if (detectedTemplate != null) {
+        print('\n💡 ${"Detected project type:".yellow} $detectedLanguage');
+        if (confirmAction('✨ Generate recommended .gitignore?')) {
+          await gitIgnoreFile.writeAsString(detectedTemplate);
+          print('✅ ${".gitignore created successfully.".green}');
+          print('   ${"Files ignored:".grey} ${detectedTemplate.replaceAll('\n', ', ')}');
+        }
+      }
+    }
+
     final projectName = p.basename(_cwd.path);
     final repoId = _randomId(24);
     final createdAt = DateTime.now().toUtc().toIso8601String();
@@ -699,7 +738,7 @@ class PortableVcs {
       await remoteRepoDir.create(recursive: true);
       await Directory(p.join(remoteRepoDir.path, 'snapshots')).create(recursive: true);
 
-      final defaultTrack = 'main'; 
+      final defaultTrack = 'main';
 
       final remoteMeta = {
         'repo_id': repoId,
@@ -727,7 +766,6 @@ class PortableVcs {
       print('${"Storage:".yellow.padRight(12)} ${remoteRepoDir.path.grey}');
       print('─' * 60);
       print('💡 ${"Next step:".cyan} Run ${"vcs push \"Initial commit\"".green} to save your first snapshot.\n');
-
     } catch (e) {
       print('❌ ${"Failed to initialize repository:".red} $e');
       if (_localMetaDir.existsSync()) await _localMetaDir.delete(recursive: true);
@@ -984,8 +1022,7 @@ class PortableVcs {
       if (changes.length > 20) {
         print('  ... and ${changes.length - 20} more');
       }
-      stdout.write('Bind anyway? (y/N): ');
-      if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') {
+      if (!confirmAction('Bind anyway?')) {
         print('Cancelled.');
         return;
       }
@@ -2326,6 +2363,48 @@ class PortableVcs {
     print('');
   }
 
+  static final RegExp _tableRegex = RegExp(r'((?:^[ \t]*\|.*\|[ \t]*(?:\n|$))+)');
+  static final RegExp _tableDividerRegex = RegExp(r'^[ \t]*\|?[\s\-:|]+\|?[ \t]*$');
+  
+  static final RegExp _jsonKeyRegExp = RegExp(r'("([^"\\]|\\.)*")\s*:');
+  static final RegExp _jsonValueRegExp = RegExp(r':\s*("([^"\\]|\\.)*")');
+  static final RegExp _jsonLiteralRegExp = RegExp(r'\b(true|false|null|-?\d+(\.\d+)?)\b');
+  
+  static final RegExp _htmlCommentRegExp = RegExp(r'(<!--.*?-->)');
+  static final RegExp _htmlTagRegExp = RegExp(r'(<\/?[a-zA-Z0-9:-]+)');
+  static final RegExp _htmlAttrRegExp = RegExp(r'(\s[a-zA-Z0-9:-]+=)');
+  static final RegExp _htmlStringRegExp = RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')");
+  static final RegExp _htmlContentRegExp = RegExp(r'(>[^<]+<)');
+  
+  static final RegExp _stringLiteralRegExp = RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')");
+  static final RegExp _pathRegExp = RegExp(r'(?<!:)(\.?\/[\w\d\/\.\-_]+)');
+  static final RegExp _badgeRegExp = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]');
+  static final RegExp _admonitionRegExp = RegExp(r'> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', caseSensitive: false);
+
+  static const Map<String, Set<String>> _langKeywordsMap = {
+    'python': {'def', 'if', 'else', 'elif', 'for', 'while', 'return', 'in', 'not', 'and', 'or', 'import', 'from', 'class', 'try', 'except', 'pass', 'print', 'enumerate', 'True', 'False'},
+    'dart': {'void', 'main', 'var', 'final', 'const', 'import', 'class', 'extends', 'with', 'implements', 'if', 'else', 'for', 'while', 'return', 'int', 'double', 'String', 'bool', 'List', 'Map', 'Set', 'true', 'false', 'print', 'async', 'await', 'Future', 'this', 'new', 'get', 'set'},
+    'javascript': {'function', 'let', 'const', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'from', 'export', 'default', 'class', 'extends', 'true', 'false', 'console', 'log', 'async', 'await', 'Promise', 'this', 'null', 'typeof'},
+    'typescript': {'function', 'let', 'const', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'from', 'export', 'class', 'interface', 'type', 'string', 'number', 'boolean', 'any', 'void', 'unknown', 'true', 'false', 'console', 'log', 'async', 'await'},
+    'go': {'func', 'package', 'import', 'var', 'const', 'type', 'struct', 'interface', 'if', 'else', 'for', 'range', 'return', 'nil', 'true', 'false', 'string', 'int', 'bool', 'error', 'make', 'append', 'len', 'fmt', 'Println', 'Printf'},
+    'rust': {'fn', 'let', 'mut', 'struct', 'enum', 'impl', 'trait', 'use', 'mod', 'pub', 'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'return', 'true', 'false', 'String', 'str', 'u32', 'i32', 'bool', 'Option', 'Result', 'Some', 'None', 'Ok', 'Err', 'println'},
+    'cpp': {'int', 'float', 'double', 'char', 'bool', 'void', 'class', 'struct', 'public', 'private', 'protected', 'if', 'else', 'for', 'while', 'do', 'return', 'switch', 'case', 'default', 'include', 'define', 'std', 'cout', 'cin', 'endl', 'true', 'false', 'new', 'delete'},
+    'json': {'true', 'false', 'null'},
+    'bash': {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'in', 'do', 'done', 'case', 'esac', 'function', 'return', 'exit', 'echo', 'printf', 'local', 'export', 'alias', 'true', 'false', 'sudo', 'cd', 'ls'},
+    'powershell': {'if', 'else', 'elseif', 'for', 'foreach', 'while', 'do', 'until', 'return', 'exit', 'function', 'param', 'process', 'try', 'catch', 'finally', 'true', 'false', 'Write-Host', 'Write-Output', 'Get-ChildItem', 'Set-ExecutionPolicy', 'Bypass', 'Invoke-WebRequest', '-Uri'},      
+    'terminal': {
+      'sudo', 'cd', 'ls', 'dir', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'cat', 'echo', 'clear', 'cls',
+      'git', 'ssh', 'curl', 'wget', 'ping', 'ipconfig', 'ifconfig', 'chmod', 'chown', 'ps', 'kill',
+      'npm', 'node', 'deno', 'bun', 'pip', 'python', 'python3', 'go', 'rustc', 'cargo', 'dart', 'flutter', 'vcs',
+      'Date:', 'Author:', 'Message:', 'Commit:', 'History:', 'Track:', 'Branch:', 'Status:', 'Version:', 'Changes:',
+      'LOGIC:', 'TESTS:', 'DOCS:', 'ASSETS:', 'CONFIG:', 'OTHER:', 'Snapshot', 'history',
+      '(latest)', 'latest', 'master', 'main', 'stable', 'release',
+      'error', 'ERROR', 'warning', 'WARNING', 'success', 'SUCCESS', 'info', 'INFO', 'failed', 'FAILED',
+      'done', 'DONE', 'compiled', 'building', 'running', 'exit', 'OK', 'FAIL',
+      '--help', '-h', '--version', '-v', '--force', '-f', '--all', '-a', '--verbose', '--graph', '--list', '-l', '--ext', '--full'
+    }
+  };
+
   String _convertNodesToAnsi(List<Node> nodes) {
     final sb = StringBuffer();
     
@@ -2404,6 +2483,154 @@ class PortableVcs {
 
   bool _languagesRegistered = false;
 
+  String _renderTableMatch(Match tableMatch) {
+    List<String> rows = tableMatch.group(0)!.trim().split('\n');
+    List<List<String>> data = rows
+        .where((r) => !_tableDividerRegex.hasMatch(r))
+        .map((r) {
+          String rowContent = r.trim();
+          if (rowContent.startsWith('|')) rowContent = rowContent.substring(1);
+          if (rowContent.endsWith('|')) rowContent = rowContent.substring(0, rowContent.length - 1);
+          return rowContent.split('|').map((c) => c.trim()).toList();
+        }).toList();
+
+    if (data.isEmpty) return "";
+
+    int cols = data.map((e) => e.length).reduce((a, b) => a > b ? a : b);
+    List<int> widths = List.filled(cols, 0);
+    
+    List<List<AnsiString>> renderedData = data.map((row) {
+      return List.generate(cols, (i) {
+        String content = (i < row.length) ? row[i] : "";
+        content = _applyInlineFormatting(content);
+        var cell = AnsiString(content);
+        if (cell.visualLength > widths[i]) widths[i] = cell.visualLength;
+        return cell;
+      });
+    }).toList();
+
+    String tableOut = "\n";
+    for (var i = 0; i < renderedData.length; i++) {
+      String line = "  ┃ ".cyan; 
+      for (var j = 0; j < cols; j++) {
+        line += renderedData[i][j].padRight(widths[j]) + (j == cols - 1 ? " ┃".cyan : " │ ".grey);
+      }
+      tableOut += (i == 0) ? line.bold + "\n" : line + "\n";
+      if (i == 0) {
+        tableOut += "  ┣━".cyan + widths.map((w) => "━" * w).join("━┿━".cyan) + "━┫".cyan + "\n";
+      }
+    }
+    return tableOut;
+  }
+
+  String _highlightCodeBlock(String content, String lang) {
+    if (lang.isEmpty) return content;
+
+    final keywords = _langKeywordsMap[lang];
+    if (keywords == null) {
+      if (lang == 'html' || lang == 'xml') {
+        final lines = content.split('\n');
+        final fallbackLines = <String>[];
+        for (var l in lines) {
+          String processedLine = l;
+          processedLine = processedLine.replaceAllMapped(_htmlCommentRegExp, (m) => m.group(0)!.grey.italic);
+          processedLine = processedLine.replaceAllMapped(_htmlTagRegExp, (m) => m.group(0)!.magenta.bold);
+          processedLine = processedLine.replaceAllMapped(_htmlAttrRegExp, (m) => m.group(0)!.cyan);
+          processedLine = processedLine.replaceAllMapped(_htmlStringRegExp, (m) => m.group(0)!.green);
+          processedLine = processedLine.replaceAllMapped(_htmlContentRegExp, (m) => ">${m.group(0)!.substring(1, m.group(0)!.length - 1).white}<");
+          fallbackLines.add(processedLine);
+        }
+        return fallbackLines.join('\n');
+      }
+
+      try {
+        final result = highlight.parse(content, language: lang);
+        return _convertNodesToAnsi(result.nodes ?? []);
+      } catch (e) {
+        return content;
+      }
+    }
+
+    final lines = content.split('\n');
+    final fallbackLines = <String>[];
+    
+    final keywordPattern = RegExp('\\b(${keywords.map(RegExp.escape).join('|')})\\b');
+
+    for (var l in lines) {
+      String trimmedL = l.trim();
+      
+      if (lang == 'python' && trimmedL.startsWith('#')) {
+        fallbackLines.add(l.grey.italic);
+        continue;
+      }
+      if (const {'dart', 'javascript', 'typescript', 'go', 'rust', 'cpp'}.contains(lang) && trimmedL.startsWith('//')) {
+        fallbackLines.add(l.grey.italic);
+        continue;
+      }
+      
+      String processedLine = l;
+      
+      if (lang == 'json') {
+        processedLine = processedLine.replaceAllMapped(_jsonKeyRegExp, (m) => "${m.group(1)!.cyan}:");
+        processedLine = processedLine.replaceAllMapped(_jsonValueRegExp, (m) => ": ${m.group(1)!.green}");
+        processedLine = processedLine.replaceAllMapped(_jsonLiteralRegExp, (m) => m.group(0)!.yellow);
+      } 
+      else if (lang == 'terminal' || lang == 'shell') {
+        final Set<String> terminalKeywords = {
+          ..._langKeywordsMap['terminal']!,
+          ..._langKeywordsMap['bash']!,
+          ..._langKeywordsMap['powershell']!,
+        };
+
+        final List<String> words = l.split(RegExp(r'\s+'));
+        final Set<String> uniqueWords = {};
+        
+        for (var rawWord in words) {
+          String cleanWord = rawWord.replaceAll(RegExp(r'^[═*│├──└──\s]+'), '').trim();
+          if (terminalKeywords.contains(cleanWord)) {
+            uniqueWords.add(cleanWord);
+          }
+        }
+        
+        for (var word in uniqueWords) {
+          String escapedWord = RegExp.escape(word);
+          processedLine = processedLine.replaceAllMapped(
+            RegExp('(?<=^|\\s|[═*│├──└──])$escapedWord(?=\\s|\$|\\b)'), 
+            (match) {
+              if (word.endsWith(':') || word == 'Snapshot' || word == 'history') {
+                return word.yellow.bold;
+              } else if (word.startsWith('-')) {
+                return word.cyan;
+              } else if (const {'error', 'ERROR', 'failed', 'FAILED', 'FAIL'}.contains(word)) {
+                return word.red.bold;
+              } else if (const {'success', 'SUCCESS', 'done', 'DONE', 'OK'}.contains(word)) {
+                return word.green.bold;
+              } else if (word == 'warning' || word == 'WARNING') {
+                return word.yellow;
+              }
+              return word.magenta.bold; 
+            }
+          );
+        }
+      }
+      else {
+        processedLine = processedLine.replaceAllMapped(keywordPattern, (m) {
+          final word = m.group(0)!;
+          if (const {'print', 'enumerate', 'console', 'log', 'Println', 'Printf', 'println', 'cout', 'Write-Host', 'Write-Output'}.contains(word)) {
+            return word.cyan;
+          }
+          return word.magenta.bold;
+        });
+        
+        processedLine = processedLine.replaceAllMapped(_stringLiteralRegExp, (m) => m.group(0)!.green);
+      }
+      
+      fallbackLines.add(processedLine);
+    }
+    
+    return fallbackLines.join('\n');
+  }
+
   String _renderMarkdown(String text) {
     if (text.isEmpty) return text;
 
@@ -2417,77 +2644,13 @@ class PortableVcs {
 
     String rendered = text.replaceAll('\u00A0', ' ').replaceAll('\r\n', '\n');
 
-    rendered = rendered.replaceAllMapped(RegExp(r'((?:^[ \t]*\|.*\|[ \t]*(?:\n|$))+)'), (Match tableMatch) {
-      List<String> rows = tableMatch.group(0)!.trim().split('\n');
-      List<List<String>> data = rows
-          .where((r) => !RegExp(r'^[ \t]*\|?[\s\-:|]+\|?[ \t]*$').hasMatch(r))
-          .map((r) {
-            String rowContent = r.trim();
-            if (rowContent.startsWith('|')) rowContent = rowContent.substring(1);
-            if (rowContent.endsWith('|')) rowContent = rowContent.substring(0, rowContent.length - 1);
-            return rowContent.split('|').map((c) => c.trim()).toList();
-          }).toList();
-
-      if (data.isEmpty) return "";
-
-      int cols = data.map((e) => e.length).reduce((a, b) => a > b ? a : b);
-      List<int> widths = List.filled(cols, 0);
-      
-      List<List<AnsiString>> renderedData = data.map((row) {
-        return List.generate(cols, (i) {
-          String content = (i < row.length) ? row[i] : "";
-          content = _applyInlineFormatting(content);
-          var cell = AnsiString(content);
-          if (cell.visualLength > widths[i]) widths[i] = cell.visualLength;
-          return cell;
-        });
-      }).toList();
-
-      String tableOut = "\n";
-      for (var i = 0; i < renderedData.length; i++) {
-        String line = "  ┃ ".cyan; 
-        for (var j = 0; j < cols; j++) {
-          line += renderedData[i][j].padRight(widths[j]) + (j == cols - 1 ? " ┃".cyan : " │ ".grey);
-        }
-        tableOut += (i == 0) ? line.bold + "\n" : line + "\n";
-        if (i == 0) {
-          tableOut += "  ┣━".cyan + widths.map((w) => "━" * w).join("━┿━".cyan) + "━┫".cyan + "\n";
-        }
-      }
-      return tableOut;
-    });
+    rendered = rendered.replaceAllMapped(_tableRegex, _renderTableMatch);
 
     List<String> rawLines = rendered.split('\n');
     List<String> preProcessedLines = [];
     bool inCodeBlock = false;
     String currentLang = "";
     List<String> codeBlockContent = [];
-
-    final Map<String, Set<String>> langKeywordsMap = {
-      'python': {'def', 'if', 'else', 'elif', 'for', 'while', 'return', 'in', 'not', 'and', 'or', 'import', 'from', 'class', 'try', 'except', 'pass', 'print', 'enumerate', 'True', 'False'},
-      'dart': {'void', 'main', 'var', 'final', 'const', 'import', 'class', 'extends', 'with', 'implements', 'if', 'else', 'for', 'while', 'return', 'int', 'double', 'String', 'bool', 'List', 'Map', 'Set', 'true', 'false', 'print', 'async', 'await', 'Future', 'this', 'new', 'get', 'set'},
-      'javascript': {'function', 'let', 'const', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'from', 'export', 'default', 'class', 'extends', 'true', 'false', 'console', 'log', 'async', 'await', 'Promise', 'this', 'null', 'typeof'},
-      'typescript': {'function', 'let', 'const', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'from', 'export', 'class', 'interface', 'type', 'string', 'number', 'boolean', 'any', 'void', 'unknown', 'true', 'false', 'console', 'log', 'async', 'await'},
-      'go': {'func', 'package', 'import', 'var', 'const', 'type', 'struct', 'interface', 'if', 'else', 'for', 'range', 'return', 'nil', 'true', 'false', 'string', 'int', 'bool', 'error', 'make', 'append', 'len', 'fmt', 'Println', 'Printf'},
-      'rust': {'fn', 'let', 'mut', 'struct', 'enum', 'impl', 'trait', 'use', 'mod', 'pub', 'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'return', 'true', 'false', 'String', 'str', 'u32', 'i32', 'bool', 'Option', 'Result', 'Some', 'None', 'Ok', 'Err', 'println'},
-      'cpp': {'int', 'float', 'double', 'char', 'bool', 'void', 'class', 'struct', 'public', 'private', 'protected', 'if', 'else', 'for', 'while', 'do', 'return', 'switch', 'case', 'default', 'include', 'define', 'std', 'cout', 'cin', 'endl', 'true', 'false', 'new', 'delete'},
-      'json': {'true', 'false', 'null'},
-      'bash': {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'in', 'do', 'done', 'case', 'esac', 'function', 'return', 'exit', 'echo', 'printf', 'local', 'export', 'alias', 'true', 'false', 'sudo', 'cd', 'ls'},
-      'powershell': {'if', 'else', 'elseif', 'for', 'foreach', 'while', 'do', 'until', 'return', 'exit', 'function', 'param', 'process', 'try', 'catch', 'finally', 'true', 'false', 'Write-Host', 'Write-Output', 'Get-ChildItem', 'Set-ExecutionPolicy', 'Bypass', 'Invoke-WebRequest', '-Uri'},      
-      'terminal': {
-        'sudo', 'cd', 'ls', 'dir', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'cat', 'echo', 'clear', 'cls',
-        'git', 'ssh', 'curl', 'wget', 'ping', 'ipconfig', 'ifconfig', 'chmod', 'chown', 'ps', 'kill',
-        'npm', 'node', 'deno', 'bun', 'pip', 'python', 'python3', 'go', 'rustc', 'cargo', 'dart', 'flutter', 'vcs',
-        'Date:', 'Author:', 'Message:', 'Commit:', 'History:', 'Track:', 'Branch:', 'Status:', 'Version:', 'Changes:',
-        'LOGIC:', 'TESTS:', 'DOCS:', 'ASSETS:', 'CONFIG:', 'OTHER:', 'Snapshot', 'history',
-        '(latest)', 'latest', 'master', 'main', 'stable', 'release',
-        'error', 'ERROR', 'warning', 'WARNING', 'success', 'SUCCESS', 'info', 'INFO', 'failed', 'FAILED',
-        'done', 'DONE', 'compiled', 'building', 'running', 'exit', 'OK', 'FAIL',
-        '--help', '-h', '--version', '-v', '--force', '-f', '--all', '-a', '--verbose', '--graph', '--list', '-l', '--ext', '--full'
-      }
-    };
-
-    langKeywordsMap['shell'] = langKeywordsMap['terminal']!;
 
     for (var line in rawLines) {
       String trimmedLine = line.trim();
@@ -2502,123 +2665,7 @@ class PortableVcs {
         } else {
           inCodeBlock = false;
           String fullContent = codeBlockContent.join('\n');
-          String highlighted = "";
-          
-          if (currentLang.isNotEmpty && langKeywordsMap.containsKey(currentLang)) {
-            final keywords = langKeywordsMap[currentLang]!;
-            final lines = fullContent.split('\n');
-            final fallbackLines = <String>[];
-            
-            for (var l in lines) {
-              String trimmedL = l.trim();
-              
-              if (currentLang == 'python' && trimmedL.startsWith('#')) {
-                fallbackLines.add(l.grey.italic);
-                continue;
-              }
-              if ((currentLang == 'dart' || currentLang == 'javascript' || currentLang == 'typescript' || currentLang == 'go' || currentLang == 'rust' || currentLang == 'cpp') && trimmedL.startsWith('//')) {
-                fallbackLines.add(l.grey.italic);
-                continue;
-              }
-              
-              String processedLine = l;
-              
-              if (currentLang == 'json') {
-                processedLine = processedLine.replaceAllMapped(
-                  RegExp(r'("([^"\\]|\\.)*")\s*:'),
-                  (match) => "${match.group(1)!.cyan}:"
-                );
-                processedLine = processedLine.replaceAllMapped(
-                  RegExp(r':\s*("([^"\\]|\\.)*")'),
-                  (match) => ": ${match.group(1)!.green}"
-                );
-                processedLine = processedLine.replaceAllMapped(
-                  RegExp(r'\b(true|false|null|-?\d+(\.\d+)?)\b'),
-                  (match) => match.group(0)!.yellow
-                );
-              } 
-              else if (currentLang == 'terminal' || currentLang == 'shell') {
-                final Set<String> terminalKeywords = {
-                  ...langKeywordsMap['terminal']!,
-                  ...langKeywordsMap['bash']!,
-                  ...langKeywordsMap['powershell']!,
-                };
-
-                final List<String> words = l.split(RegExp(r'\s+'));
-                final Set<String> uniqueWords = {};
-                
-                for (var rawWord in words) {
-                  String cleanWord = rawWord.replaceAll(RegExp(r'^[═*│├──└──\s]+'), '').trim();
-                  
-                  if (terminalKeywords.contains(cleanWord)) {
-                    uniqueWords.add(cleanWord);
-                  }
-                }
-                
-                for (var word in uniqueWords) {
-                  String escapedWord = RegExp.escape(word);
-                  processedLine = processedLine.replaceAllMapped(
-                    RegExp('(?<=^|\\s|[═*│├──└──])$escapedWord(?=\\s|\$|\\b)'), 
-                    (match) {
-                      if (word.endsWith(':') || word == 'Snapshot' || word == 'history') {
-                        return word.yellow.bold;
-                      } else if (word.startsWith('-')) {
-                        return word.cyan;
-                      } else if (word == 'error' || word == 'ERROR' || word == 'failed' || word == 'FAILED' || word == 'FAIL') {
-                        return word.red.bold;
-                      } else if (word == 'success' || word == 'SUCCESS' || word == 'done' || word == 'DONE' || word == 'OK') {
-                        return word.green.bold;
-                      } else if (word == 'warning' || word == 'WARNING') {
-                        return word.yellow;
-                      }
-                      return word.magenta.bold; 
-                    }
-                  );
-                }
-              }
-              else {
-                final words = l.split(RegExp(r'(\W)'));
-                final uniqueWords = words.where((w) => keywords.contains(w)).toSet();
-                
-                for (var word in uniqueWords) {
-                  processedLine = processedLine.replaceAllMapped(
-                    RegExp('\\b$word\\b'), 
-                    (match) => (word == 'print' || word == 'enumerate' || word == 'console' || word == 'log' || word == 'Println' || word == 'Printf' || word == 'println' || word == 'cout' || word == 'Write-Host' || word == 'Write-Output') 
-                        ? word.cyan 
-                        : word.magenta.bold
-                  );
-                }
-                
-                processedLine = processedLine.replaceAllMapped(
-                  RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')"),
-                  (match) => match.group(0)!.green
-                );
-              }
-              
-              fallbackLines.add(processedLine);
-            }
-            highlighted = fallbackLines.join('\n');
-          } else if (currentLang == 'html' || currentLang == 'xml') {
-            final lines = fullContent.split('\n');
-            final fallbackLines = <String>[];
-            for (var l in lines) {
-              String processedLine = l;
-              processedLine = processedLine.replaceAllMapped(RegExp(r''), (match) => match.group(0)!.grey.italic);
-              processedLine = processedLine.replaceAllMapped(RegExp(r'(<\/?[a-zA-Z0-9:-]+)'), (match) => match.group(0)!.magenta.bold);
-              processedLine = processedLine.replaceAllMapped(RegExp(r'(\s[a-zA-Z0-9:-]+==)'), (match) => match.group(0)!.cyan);
-              processedLine = processedLine.replaceAllMapped(RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')"), (match) => match.group(0)!.green);
-              processedLine = processedLine.replaceAllMapped(RegExp(r'(>[^<]+<)'), (match) => ">${match.group(0)!.substring(1, match.group(0)!.length - 1).white}<");
-              fallbackLines.add(processedLine);
-            }
-            highlighted = fallbackLines.join('\n');
-          } else {
-            try {
-              final result = highlight.parse(fullContent, language: currentLang);
-              highlighted = _convertNodesToAnsi(result.nodes ?? []);
-            } catch (e) {
-              highlighted = fullContent;
-            }
-          }
+          String highlighted = _highlightCodeBlock(fullContent, currentLang);
           
           preProcessedLines.addAll(highlighted.split('\n').map((l) => '    │ '.grey + l));
           continue;
@@ -2647,7 +2694,7 @@ class PortableVcs {
       final String indent = indentMatch != null ? indentMatch.group(0)! : '';
 
       if (trimmed.startsWith('> [!')) {
-        final match = RegExp(r'> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', caseSensitive: false).firstMatch(trimmed);
+        final match = _admonitionRegExp.firstMatch(trimmed);
         if (match != null) {
           activeAdmonition = match.group(1)!.toUpperCase();
           final icons = {'NOTE': 'ℹ', 'TIP': '💡', 'IMPORTANT': '📢', 'WARNING': '⚠️', 'CAUTION': '🛑'};
@@ -2710,7 +2757,7 @@ class PortableVcs {
     String res = _renderBadges(text, restoreColor);
     String restore = restoreColor ?? "\x1B[0m";
 
-    res = res.replaceAllMapped(RegExp(r'(\.?\/[\w\d\/\.\-_]+)'), (m) => m.group(1)!.white.italic + restore);
+    res = res.replaceAllMapped(_pathRegExp, (m) => m.group(1)!.white.italic + restore);
     res = res.replaceAllMapped(RegExp(r'\[\s?([A-Z0-9_-]{3,})\s?\]'), (m) => '[ '.grey + m.group(1)!.white.bold + ' ]'.grey + restore);
     res = res.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => m.group(1)!.green + restore);
     res = res.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold + restore);
@@ -2720,9 +2767,8 @@ class PortableVcs {
   }
 
   String _renderBadges(String text, [String? contextColor]) {
-    final regExp = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]');
     return text.splitMapJoin(
-      regExp,
+      _badgeRegExp,
       onMatch: (Match m) {
         final key = (m.group(1) ?? 'CYAN').toUpperCase();
         final label = (m.group(2) ?? "").trim();
@@ -2737,12 +2783,12 @@ class PortableVcs {
   }
 
   String _getIconForBadge(String key) {
-    if (['RED', 'CRITICAL', 'CAUTION'].contains(key)) return "✘ ";
-    if (['GREEN', 'SUCCESS', 'TIP'].contains(key)) return "✔ ";
-    if (['YELLOW', 'WARNING'].contains(key)) return "⚠️ ";
-    if (['MAGENTA', 'TAG'].contains(key)) return "🏷️ ";
-    if (['BLUE', 'INFO', 'NOTE'].contains(key)) return "ℹ️ ";
-    if (['CYAN', 'SYSTEM'].contains(key)) return "⚙️ ";
+    if (const {'RED', 'CRITICAL', 'CAUTION'}.contains(key)) return "✘ ";
+    if (const {'GREEN', 'SUCCESS', 'TIP'}.contains(key)) return "✔ ";
+    if (const {'YELLOW', 'WARNING'}.contains(key)) return "⚠️ ";
+    if (const {'MAGENTA', 'TAG'}.contains(key)) return "🏷️ ";
+    if (const {'BLUE', 'INFO', 'NOTE'}.contains(key)) return "ℹ️ ";
+    if (const {'CYAN', 'SYSTEM'}.contains(key)) return "⚙️ ";
     return "";
   }
 
@@ -3246,28 +3292,40 @@ class PortableVcs {
   }
 
   Future<void> doctor({bool rebuildMode = false, bool reindexMode = false}) async {
+    final reporter = DoctorReporter();
+    reporter.log('# 🛠️ VCS Diagnostic Report\n*Generated on: ${DateTime.now().toLocal()}*\n');
+
     print('\n🔬 ${"Repository diagnostics".cyan}');
     print('═' * 60);
 
     final snapshotsLackingIndex = <String>[];
-
     var okCount = 0;
     var warnCount = 0;
 
+    String stripAnsi(String input) {
+      return input.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '');
+    }
+
     void check(bool ok, String label, {String? details, bool isInfo = false}) {
+      final cleanLabel = stripAnsi(label);
+      final cleanDetails = details != null ? stripAnsi(details) : null;
+
       if (ok) {
         okCount++;
         print('  ${"✔".green} ${label.green}');
+        reporter.log('- ✅ **$cleanLabel**');
+      } else if (isInfo) {
+        print('  ${"ℹ".blue} ${label.blue}');
+        reporter.log('- ℹ️ **$cleanLabel**');
       } else {
-        if (isInfo) {
-          print('  ${"ℹ".blue} ${label.blue}');
-        } else {
-          warnCount++;
-          print('  ${"⚠️".yellow} ${label.yellow}');
-        }
+        warnCount++;
+        print('  ${"⚠️".yellow} ${label.yellow}');
+        reporter.log('- ⚠️ **$cleanLabel**');
       }
-      if (details != null && details.trim().isNotEmpty) {
+
+      if (cleanDetails != null && cleanDetails.isNotEmpty) {
         print('      $details');
+        reporter.log('    > *$cleanDetails*');
       }
     }
 
@@ -3276,11 +3334,11 @@ class PortableVcs {
 
     final localInitialized = _localRepoFile.existsSync();
     check(localInitialized, 'Local repository metadata', 
-      details: localInitialized ? _localRepoFile.path : 'Run "vcs init" to start.');
+        details: localInitialized ? _localRepoFile.path : 'Run "vcs init" to start.');
 
     final gitignoreExists = _gitignoreFile.existsSync();
     check(gitignoreExists, '.gitignore detected', 
-      details: gitignoreExists ? null : 'VCS will snapshot EVERYTHING without a .gitignore.');
+        details: gitignoreExists ? null : 'VCS will snapshot EVERYTHING without a .gitignore.');
 
     final usb = await findUsbDrive();
     if (usb == null) {
@@ -3301,11 +3359,9 @@ class PortableVcs {
         final provisionedAt = markerMap['provisionedAt'];
 
         if (provisionedBy != null && provisionedAt != null) {
-          check(true, 'VCS Marker valid', 
-            details: 'Linked to host: ${provisionedBy.cyan} (at $provisionedAt)');
+          check(true, 'VCS Marker valid', details: 'Linked to host: ${provisionedBy.cyan} (at $provisionedAt)');
         } else {
-          check(false, 'Legacy Marker detected', isInfo: true,
-            details: 'This drive is v0.1. Run "vcs setup" to upgrade metadata.');
+          check(false, 'Legacy Marker detected', isInfo: true, details: 'This drive is v0.1. Run "vcs setup" to upgrade metadata.');
         }
       } catch (e) {
         check(false, 'VCS Marker readable', details: 'Marker file is corrupt or unreadable.');
@@ -3484,50 +3540,31 @@ class PortableVcs {
                 if (reindexMode) {
                   final finalPassword = askPassword();
                   if (finalPassword == null || finalPassword.isEmpty) {
-                    print('❌ ${"Reindexing Aborted:".red} Password required to decrypt snapshots structures.');
+                    print('❌ ${"Reindexing Aborted:".red} Password required.');
                     return;
                   }
 
-                  print('\n  ${"⚡".magenta} Retroactive Parallel Indexing: Rebuilding ${snapshotsLackingIndex.length} blocks...');
-                  
+                  print('\n  ${"⚡".magenta} Retroactive Parallel Indexing...');
                   const int maxConcurrentTasks = 3;
-                  
                   for (var i = 0; i < snapshotsLackingIndex.length; i += maxConcurrentTasks) {
-                    final end = (i + maxConcurrentTasks < snapshotsLackingIndex.length) 
-                        ? i + maxConcurrentTasks 
-                        : snapshotsLackingIndex.length;
+                    final end = (i + maxConcurrentTasks < snapshotsLackingIndex.length) ? i + maxConcurrentTasks : snapshotsLackingIndex.length;
                     final batch = snapshotsLackingIndex.sublist(i, end);
 
                     await Future.wait(batch.map((snapshotId) async {
                       try {
-                        final DecryptedSnapshot? snapshotData = await readSnapshot(
-                          context,
-                          snapshotId,
-                          password: finalPassword,
-                        );
-
+                        final DecryptedSnapshot? snapshotData = await readSnapshot(context, snapshotId, password: finalPassword);
                         if (snapshotData != null) {
-                          final Map<String, String> extractedMap = Map<String, String>.from(snapshotData.fingerprint);
-
-                          await IndexService.saveSnapshotIndex(
-                            remoteRepoDir: remoteRepoDir,
-                            snapshotId: snapshotId,
-                            fileMap: extractedMap,
-                          );
-                          print('    ${"✔".green} Fast-Diff Index regenerated for snapshot: ${snapshotId.cyan}');
-                        } else {
-                          print('    ${"❌".red} Snapshot data could not be decrypted or found for ID: $snapshotId');
+                          await IndexService.saveSnapshotIndex(remoteRepoDir: remoteRepoDir, snapshotId: snapshotId, fileMap: Map<String, String>.from(snapshotData.fingerprint));
+                          print('    ${"✔".green} Fast-Diff Index regenerated for: ${snapshotId.cyan}');
                         }
                       } catch (e) {
-                        print('    ${"❌".red} Error building delta-index for snapshot $snapshotId: $e');
+                        print('    ${"❌".red} Error building index $snapshotId: $e');
                       }
                     }));
                   }
-
-                  check(true, 'Fast-Diff Optimization', details: 'All missing delta indices regenerated successfully.');
+                  check(true, 'Fast-Diff Optimization', details: 'All missing delta indices regenerated.');
                 } else {
-                  check(false, 'Fast-Diff Optimization',
-                    details: '${snapshotsLackingIndex.length} snapshots lack metadata indices. Run "vcs doctor --reindex" to fix retroactively.');
+                  check(false, 'Fast-Diff Optimization', details: '${snapshotsLackingIndex.length} snapshots lack indices. Run "vcs doctor --reindex".');
                 }
               } else {
                 check(true, 'Fast-Diff Optimization', details: 'All snapshots have valid delta indices.');
@@ -3535,7 +3572,6 @@ class PortableVcs {
 
               final List<File> indexFiles = indexDir.existsSync() ? indexDir.listSync().whereType<File>().toList() : [];
               final orphans = <String>[];
-
               for (var f in snapshotsFiles) {
                 final name = p.basename(f.path);
                 if (name.startsWith('.tmp_') || name == 'vcs_aliases.json') continue;
@@ -3548,7 +3584,7 @@ class PortableVcs {
               }
 
               if (orphans.isNotEmpty) {
-                check(false, 'Storage optimization', details: 'Found ${orphans.length} unlinked (orphan) files. Run "vcs prune --garbage" to optimize space.');
+                check(false, 'Storage optimization', details: 'Found ${orphans.length} orphans. Run "vcs prune --garbage".');
               } else {
                 check(true, 'Storage optimized', details: 'No orphan files detected.');
               }
@@ -3564,16 +3600,23 @@ class PortableVcs {
     print('─' * 60);
     print('  ${"OK:".green} $okCount');
     print('  ${"Warnings/Errors:".red} $warnCount');
+    reporter.log('\n---\n### 📊 Summary');
+    reporter.log('- ✅ **Total OK:** $okCount');
+    reporter.log('- ⚠️ **Total Issues:** $warnCount');
 
     if (warnCount == 0) {
       print('\n✨ ${"Everything looks perfect. Your portable vault is healthy.".green.bold}');
     } else {
       if (reindexMode && snapshotsLackingIndex.isNotEmpty) {
-        print('\n⚡ ${"Reindexing completed successfully. Core storage indices are now aligned.".magenta.bold}');
+        print('\n⚡ ${"Reindexing completed successfully.".magenta.bold}');
       }
-      print('\n⚠️  ${"Diagnostics found remaining issues (like missing .gitignore). Review logs above.".yellow.bold}');
-      if (rebuildMode) print('ℹ️  ${"Recovery attempted. Check if your tracks are back.".blue}');
+      print('\n⚠️  ${"Diagnostics found remaining issues. Review logs above.".yellow.bold}');
     }
+
+    final fileName = 'vcs_doctor_report_${DateTime.now().millisecondsSinceEpoch}.md';
+    await reporter.save(fileName);
+    
+    print('\n📄 ${"Report saved to:".cyan} $fileName');
   }
 
   Future<void> stats({Map<String, dynamic>? command, List<String> args = const []}) async {
@@ -3878,8 +3921,7 @@ class PortableVcs {
     if (toDeleteFiles.isNotEmpty) print('🗑️  Physical files to delete (Snapshots & Indices): ${toDeleteFiles.length}');
     if (tagsToClean.isNotEmpty) print('🏷️  Orphan tags to remove: ${tagsToClean.length}');
 
-    stdout.write('\nProceed? (y/N): ');
-    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') return;
+    if (!confirmAction('\nProceed?')) return;
 
     await _withLock(context.remoteRepoDir, () async {
       for (final file in toDeleteFiles) {
@@ -4134,12 +4176,11 @@ class PortableVcs {
     );
     if (snapshot == null) return;
 
-    stdout.write(
+    if (!confirmAction(
       '⚠️ This will replace tracked content in the current working directory.\n'
       'A local backup will be created first.\n'
-      'Continue? (y/N): ',
-    );
-    if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') {
+      'Continue?'
+    )) {
       print('Cancelled.');
       return;
     }
