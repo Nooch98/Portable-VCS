@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.2--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.3--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
