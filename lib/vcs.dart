@@ -44,7 +44,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.3-Experimental.1';
+const String vcsBaseVersion = '0.4.3-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -236,8 +236,17 @@ class PortableVcs {
       }
 
       if (Platform.isWindows) {
-        print('💡 ${"Note:".yellow} A ${".old".cyan} file was created. You can delete it now.');
+        final backupExe = File('$currentExePath.old');
+        if (await backupExe.exists()) {
+          try {
+            await backupExe.delete();
+            print('🧹 ${"Cleaned up legacy binary.".grey}');
+          } catch (e) {
+            print('💡 ${"Note:".yellow} Could not auto-delete ${".old".cyan} file. You can delete it manually. Use command `rm ${currentExePath}.old`');
+          }
+        }
       }
+      
       print('Restart VCS to apply changes.\n');
 
     } catch (e) {
@@ -1943,15 +1952,26 @@ class PortableVcs {
       int freeBytes = -1;
 
       if (Platform.isWindows) {
-        final drive = path.contains(':') ? path.split(':').first + ':' : path;
-        final result = await Process.run('wmic', ['logicaldisk', 'where', 'DeviceID="$drive"', 'get', 'FreeSpace']);
-        if (result.exitCode == 0) {
-          final lines = result.stdout.toString().split('\n');
-          for (var line in lines) {
-            final trimmed = line.trim();
-            if (trimmed.isNotEmpty && RegExp(r'^\d+$').hasMatch(trimmed)) {
-              freeBytes = int.tryParse(trimmed) ?? -1;
-              break;
+        if (path.startsWith(r'\\')) {
+          final result = await Process.run('fsutil', ['volume', 'diskfree', path], runInShell: true);
+          if (result.exitCode == 0) {
+            final output = result.stdout.toString();
+            final freeMatch = RegExp(r':\s+([\d.]+)\s+\(').firstMatch(output);
+            if (freeMatch != null) {
+              freeBytes = int.tryParse(freeMatch.group(1)!.replaceAll('.', '')) ?? -1;
+            }
+          }
+        } else {
+          final drive = path.split(':').first + ':';
+          final result = await Process.run('wmic', ['logicaldisk', 'where', 'DeviceID="$drive"', 'get', 'FreeSpace']);
+          if (result.exitCode == 0) {
+            final lines = result.stdout.toString().split('\n');
+            for (var line in lines) {
+              final trimmed = line.trim();
+              if (trimmed.isNotEmpty && RegExp(r'^\d+$').hasMatch(trimmed)) {
+                freeBytes = int.tryParse(trimmed) ?? -1;
+                break;
+              }
             }
           }
         }
@@ -1961,23 +1981,21 @@ class PortableVcs {
           final lines = result.stdout.toString().split('\n');
           if (lines.length >= 2) {
             final parts = lines[1].split(RegExp(r'\s+'));
-            if (parts.length >= 4) {
-              freeBytes = int.tryParse(parts[3]) ?? -1;
-            }
+            if (parts.length >= 4) freeBytes = int.tryParse(parts[3]) ?? -1;
           }
         }
       }
 
       if (freeBytes != -1 && freeBytes < requiredBytes) {
-        final double freeMb = freeBytes / (1024 * 1024);
-        final double reqMb = requiredBytes / (1024 * 1024);
-        print('\n❌ ${"STORAGE ERROR: Insufficient disk space.".red.bold}');
+        final freeMb = freeBytes / (1024 * 1024);
+        final reqMb = requiredBytes / (1024 * 1024);
+        print('\n❌ ${"STORAGE ERROR: Insufficient disk space on ${path.startsWith(r'\\') ? 'Network' : 'Local'} drive.".red.bold}');
         print('   Required: ${reqMb.toStringAsFixed(2).yellow} MB');
         print('   Available: ${freeMb.toStringAsFixed(2).red} MB');
         print('   Target: ${path.grey}\n');
         return false;
       }
-    } catch (_) {
+    } catch (e) {
       // Silent Error
       return true; 
     }
@@ -3704,6 +3722,19 @@ class PortableVcs {
     print('${"Total Snapshots:".yellow.padRight(22)} ${totalLogs.toString().green}');
     print('${"Snapshot Data:".yellow.padRight(22)} ${_formatBytes(totalBytes).green}');
     
+    if (totalLogs > 0) {
+      final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
+      allLogs.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final firstDate = DateTime.parse(allLogs.first.createdAt);
+      final lastDate = DateTime.parse(allLogs.last.createdAt);
+      final diffDays = lastDate.difference(firstDate).inDays;
+      final growthRate = diffDays > 0 ? totalLogs / diffDays : totalLogs.toDouble();
+
+      print('\n${"PREDICTIVE ANALYSIS".bold.cyan}');
+      print('${"Avg. Item Size:".yellow.padRight(22)} ${_formatBytes(totalBytes ~/ totalLogs).white}');
+      print('${"Growth Trend:".yellow.padRight(22)} ${growthRate.toStringAsFixed(2)} snapshots/day'.green);
+    }
+    
     if (indexCount > 0) {
       print('${"Delta Indices:".yellow.padRight(22)} ${_formatBytes(indexBytes).blue} ($indexCount files)');
       final ratio = (indexBytes / (totalBytes > 0 ? totalBytes : 1) * 100).toStringAsFixed(2);
@@ -3713,7 +3744,6 @@ class PortableVcs {
     print('${"Integrity Coverage:".yellow.padRight(22)} ${((verifiedWithHash / (totalLogs > 0 ? totalLogs : 1)) * 100).toStringAsFixed(1)}% verified');
     
     if (totalLogs > 0) {
-      print('${"Average Item Size:".yellow.padRight(22)} ${_formatBytes(totalBytes ~/ totalLogs).white}');
       print('${"Largest Snapshot:".yellow.padRight(22)} ${largestId?.green ?? "N/A"} (${_formatBytes(largestBytes)})');
     }
 

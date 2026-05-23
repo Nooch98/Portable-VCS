@@ -1,5 +1,25 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.3-Experimental.2': r'''
+  # 🧠 OPERATIONAL INTELLIGENCE & STORAGE SAFEGUARDS
+
+  This release shifts the focus from basic repository management to proactive infrastructure awareness, introducing predictive analytics for lifecycle management and critical storage safety buffers.
+  ---
+
+  ## 📈 NEW FEATURE: SNAPSHOT INSIGHT ENGINE [[ TAG: STATS-PREDICTIVE ]]
+
+  • **Predictive Growth Analytics**: Expanded the `vcs stats` engine to calculate the operational lifecycle of the vault.
+    - **Velocity Mapping**: Integrated a growth trend analyzer that calculates `snapshots`/`day` based on the delta between the vault creation date and current activity, allowing for accurate storage exhaustion forecasting.
+    - **Density Metrics**: Added comprehensive data on metadata overhead vs. raw blob storage, providing users with transparent insights into indexing efficiency and repository health.
+
+  ---
+
+  ## 💾 NEW FEATURE: PRE-FLIGHT STORAGE VALIDATOR [[ TAG: STORAGE-GUARD ]]
+
+  • **Capacity Check**: Implemented a mandatory pre-flight disk space verification engine triggered before any destructive write operation (`push`) or data reconstruction (`pull`).
+    - **Cross-Platform Drive Scanner**: Engineered a native bridge to `fsutil`/`wmic` on Windows and `df` on POSIX systems to accurately query available volume capacity before transaction initiation.
+    - **Fail-Safe Abort Protocol**: Added a non-intrusive safety gate that calculates required allocation bytes vs. available system space, blocking operations with high-fidelity error reporting before potential data corruption caused by disk full errors.
+  ''',
     '0.4.3-Experimental.1': r'''
   # 🩺 INTELLIGENT INITIALIZATION & MARKDOWN DIAGNOSTICS
 
