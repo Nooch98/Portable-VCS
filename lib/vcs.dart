@@ -37,14 +37,17 @@ import 'package:vcs/models/update_cache.dart';
 import 'package:vcs/models/version_history.dart';
 import 'package:highlight/highlight.dart';
 import 'package:highlight/languages/all.dart';
+import 'package:vcs/services/cleanup_service.dart';
+import 'package:vcs/services/history_parser.dart';
 import 'package:vcs/services/release_service.dart';
 import 'package:vcs/services/roadmap_manager.dart';
+import 'package:vcs/services/snapshot_snadbox.dart';
 import 'package:vcs/utils/progress_visualizer.dart';
 import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.3-Experimental.2';
+const String vcsBaseVersion = '0.4.4-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -447,9 +450,11 @@ class PortableVcs {
     - `summary` Summary of messages to help create Git|GitHub commits.
     - `diff` Compare latest snapshot vs current live files.
       - `-f, --fast` Use high-speed mode using **Delta-Index**.
+      - `--sandbox` Extract snapshots to temporary folders for manual audit.
     - `diff [id1] [id2|.]` Compare snapshots or snapshot vs working tree.
       - `-f, --fast` Enable index-based acceleration.
       - `-t, --tracks <tk1> <tk2>` Compare the last snapshot between two tracks.
+      - `--sandbox` Provision isolated audit folders for 3-way conflict resolution.
     - `log` Show history of snapshots (includes **🏷️ Tags** and **📝 Notes**).
       - `--graph, -g` Visual representation of the snapshot timeline.
       - `--full` Show extended details (IDs, dates, metadata).
@@ -487,6 +492,7 @@ class PortableVcs {
       - `--keep N` Keep only the newest N snapshots.
       - `--older-than N` Delete snapshots older than N days.
       - `--garbage` Deep clean: Remove orphaned data blobs and unused indices.
+    - `clean` Purge all temporary audit sandboxes from the system.
     - `storage-check` Hardware diagnostic and latency test of the device.
       - `--full` Perform a more intensive read|write integrity check.
     - `migrate` Move your vault to a new drive or NAS:
@@ -1656,7 +1662,12 @@ class PortableVcs {
     if (context == null) return;
 
     final bool isFast = args.contains('--fast') || args.contains('-f');
-    final cleanArgs = args.where((a) => a != '--fast' && a != '-f').toList();
+    final bool useSandbox = args.contains('--sandbox');
+    final cleanArgs = args.where((a) => 
+      a != '--fast' && 
+      a != '-f' && 
+      a != '--sandbox'
+    ).toList();
 
     String? resolveId(String input) {
       if (context.remoteMeta.tracks.containsKey(input)) {
@@ -1750,7 +1761,11 @@ class PortableVcs {
 
         if (idLeft == null || idRight == null) return;
 
-        idBase ??= _findCommonAncestor(context, idLeft, idRight);
+        if (idBase == null) {
+          final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
+          final analyzer = HistoryParser(allLogs);
+          idBase = analyzer.findCommonAncestor(idLeft, idRight);
+        }
 
         if (idBase == null) {
           print('⚠️ No common ancestor found. Falling back to standard diff.'.yellow);
@@ -1763,6 +1778,19 @@ class PortableVcs {
           final rightSnap = await readSnapshot(context, idRight, password: finalPassword);
 
           if (baseSnap == null || leftSnap == null || rightSnap == null) return;
+
+          if (useSandbox) {
+            print('🏗️ ${"Provisioning sandboxes for audit...".cyan}');
+            final sandbox = SnapshotSandbox(context.remoteRepoDir);            
+            final dirBase = await sandbox.provision(idBase!, baseSnap);
+            final dirLeft = await sandbox.provision(idLeft!, leftSnap);
+            final dirRight = await sandbox.provision(idRight!, rightSnap);
+            
+            print('📍 Base Sandbox: ${dirBase.path.grey}');
+            print('📍 Left Sandbox: ${dirLeft.path.grey}');
+            print('📍 Right Sandbox: ${dirRight.path.grey}');
+            print('✨ ${"Sandboxes ready.".green}');
+          }
 
           await _print3WayDiff(
             await _decodeSnapshotFiles(baseSnap),
@@ -8527,6 +8555,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('status', ArgParser()
       ..addFlag('ignored', abbr: 'i', help: 'List all files currently bypassed by active exclusion structures.', negatable: false)
     )
+    ..addCommand('clean', ArgParser()
+      ..addFlag('all', help: 'Force remove all temporary sandboxes.')
+    )
     ..addCommand('update')
     ..addCommand('changelog', ArgParser()..addFlag('list', abbr: 'l', negatable: false))
     ..addCommand('storage-check', ArgParser()
@@ -8594,6 +8625,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('bind')
     ..addCommand('diff', ArgParser(allowTrailingOptions: true)
       ..addFlag('fast', abbr: 'f', negatable: false, help: 'Quick comparison using metadata index.')
+      ..addFlag('sandbox', negatable: false, help: 'Extract snapshots to temporary folders for manual audit.')
     )
     ..addCommand('info', ArgParser()
       ..addFlag('charts', negatable: false, help: 'Show activity histogram for the last 7 days')
@@ -8743,6 +8775,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'clean':
+        print('🧹 Cleaning up temporary sandboxes...'.cyan);
+        final count = await CleanupService.removeAllSandboxes();
+        print('✨ ${"Successfully removed $count sandbox directories.".green}');
+        break;
 
       case 'release':
         final subCommand = command?.command?.name;
