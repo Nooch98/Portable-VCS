@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.3--experimental.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.4--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -495,8 +495,10 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs di` | Implementation of the **Delta-Index Viewer**. Allows for near-instant inspection of any snapshot's file structure without requiring decryption of the data blobs. |
 | | `vcs di --ext <extension>` | High-precision filtering. Isolate specific file families (e.g., `.dart`, `.json`) in large repositories using the `--ext` flag. |
 | | `vcs diff [id]` | Compare working tree vs latest or specific ID in **active track**. |
+| | `vcs diff [id] [--sandbox]` | Compare working tree vs latest or specific ID + Sandbox audit |
 | | `vcs diff [id] [-f]` | Compare snapshots or tree. `-f` enables **Delta-Index**. |
 | | `vcs diff <id1> <id2>` | Compare two specific snapshots using split-view. |
+| | `vcs diff <id1> <id2> [--sandbox]` | Compare two specific snapshots using split-view + Sandbox audit. |
 | | `vcs log` | Show history of snapshots.|
 | | `vcs log --graph/-g` | Visual representation of the snapshot timeline. |
 | | `vcs log --full` | Show extended details (IDs, dates, metadata). |
@@ -544,6 +546,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs migrate` | Move your vault to a new drive. |
 | | `vcs migrate --to <path>` | Target destination path for the migration. |
 | | `vcs migrate --delete-source` | Remove data from old drive after success. |
+| | `vcs clean` | Purge all temporary audit sandboxes from the system. |
 | **Automation** | `vcs hook create <name> [-c/--config auto\|man]` | Create a new automation script (.ps1, .bat, .sh). |
 | | `vcs hook edit <name> [-c/--config auto\|man]` | Edit hook code or toggle execution mode. |
 | | `vcs hook exec <name>` | Run a specific hook manually. |
