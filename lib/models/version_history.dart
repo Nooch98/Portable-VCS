@@ -1,5 +1,25 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.4-Experimental.1': r'''
+  # 🔍 HISTORICAL INTELLIGENCE & AUDIT SANDBOXING
+
+  This release introduces a paradigm shift in how `vcs` handles historical divergence. By implementing graph-based lineage analysis and isolated temporary workspaces, i have evolved from simple snapshots to more complex historical auditing.
+  ---
+
+  ## 🧬 NEW FEATURE: DAG-BASED LINEAGE PARSER [[ TAG: HISTORY-PARSER ]]
+
+  • **Divergence Detection Engine**: Introduced a robust directed acyclic graph (DAG) analyzer to navigate snapshot ancestry.
+    - **LCA Resolution**: Implemented a sophisticated Lowest Common Ancestor (LCA) algorithm to automatically detect divergence points in parallel branches.
+    - **3-Way Diff Intelligence**: The system now provides automated, high-precision reporting on side-by-side modifications and potential conflict hotspots during multi-track comparisons.
+
+  ---
+
+  ## 🏗️ NEW FEATURE: AUDIT SANDBOX SYSTEM [[ TAG: SNAPSHOT-SANDBOX ]]
+
+  • **Volatile Reconstruction**: Added the capability to materialize any historical snapshot into an isolated, temporary system environment for manual review.
+    - **Zero-Footprint Auditing**: Snapshots are provisioned to volatile system storage, ensuring the integrity of the live repository while allowing full IDE compatibility for visual merge conflict resolution.
+    - **Safe Lifecycle Management**: Introduced the `vcs clean` utility, a transparent management tool designed to reclaim storage by purging obsolete sandbox environments with detailed operational feedback.
+  ''',
     '0.4.3-Experimental.2': r'''
   # 🧠 OPERATIONAL INTELLIGENCE & STORAGE SAFEGUARDS
 
