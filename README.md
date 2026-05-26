@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.4--experimental.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.4--experimental.2-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -271,30 +271,51 @@ The UI is designed to be lightweight and portable, requiring no external depende
 When prompted for a password in the Web UI, it is used only for the duration of the current command's execution and is never stored on disk or in the server logs, keeping your AES-256 encryption keys completely secure.
 
 # Automation & Hooks (Local CI/CD)
-Portable VCS now includes an automation engine that allows you to run custom scripts before every `push`. This acts as a **Local Continuous Integration (CI)**, ensuring you don't save snapshots with compilation errors or failing tests.
+Portable VCS includes an automation engine that allows you to run custom scripts before every `push`. This acts as a **Local Continuous Integration (CI)**, ensuring your snapshots meet project standards before they are committed to the vault.
 
 ### How it works
-The system is **language-agnostic**. You can write your hooks using:
-* **Windows:** `.ps1` (PowerShell), `.bat`, `.cmd`.
-* **Linux/macOS:** `.sh` (Bash).
+The system is **language-agnostic**. The VCS injects **environment variables** into your scripts, allowing them to make intelligent decisions based on the current transaction.
+
+* **Windows:** `.ps1` (PowerShell), `.bat`, `.cmd`
+* **Linux/macOS:** `.sh` (Bash)
+
+### Metadata Injection (Contextual Awareness)
+When a hook runs (manually or automatically), it receives the following context via environment variables:
+
+| Variable | Description |
+| :--- | :--- |
+| `VCS_SNAPSHOT_ID` | Unique ID of the current (or manual) transaction. |
+| `VCS_TRACK` | The active track name (e.g., `main`). |
+| `VCS_AUTHOR` | The author of the snapshot. |
+| `VCS_TIMESTAMP` | ISO 8601 timestamp of the operation. |
+| `VCS_VERSION` | Current VCS engine version. |
+| `VCS_REPO_ROOT` | Absolute path to the repository directory. |
 
 ### Execution Modes
-1. **`auto`**: The hook runs automatically every time you perform a `vcs push`. If the hook fails (exit code != 0), the push is aborted.
-2. **`man` (Manual)**: The hook only runs when you explicitly invoke it.
+1. **`auto`**: Runs automatically during `vcs push`. If the script exits with code `!= 0`, the push is aborted.
+2. **`man`**: Only runs when explicitly triggered via `vcs hook exec`.
 
-### Hook Commands
+### Commands
 | Command | Description |
 | :--- | :--- |
-| `vcs hook create <name>` | Create a new script in the USB repository folder. |
-| `vcs hook edit <name>` | Open the script in VS Code or Notepad to edit code or toggle the mode (`auto/man`). |
-| `vcs hook exec <name>` | Manually run a specific hook to test its functionality. |
+| `vcs hook list` | Displays all configured hooks and their execution mode. |
+| `vcs hook create <name>` | Initializes a new script template. |
+| `vcs hook edit <name>` | Opens the script in your system editor. |
+| `vcs hook exec <name>` | Manually triggers a hook with full context injection. |
+| `vcs hook delete <name>` | Removes the hook configuration and its script file. |
 
-### Example: Automatic Build Hook
-You can create a hook named `build_test` to ensure your project is always valid before being saved:
+### Example: Validation Hook
+Create a hook that validates the project only if it's on the `main` track:
 
-1. Create the hook: `vcs hook create build_test --config auto`
-2. Edit the script to include your test command (e.g., `dart analyze` or `flutter test`).
-3. When running `vcs push "message"`, you will see:
+1. **Create:** `vcs hook create validate --config auto`
+2. **Edit:** Add this logic (Bash example):
+   ```bash
+   if [ "$VCS_TRACK" == "main" ]; then
+       echo "Running full validation for $VCS_SNAPSHOT_ID..."
+       dart analyze || exit 1
+   fi
+   ```
+3. Now, your `vcs push` will automatically abort if the analysis fails.
    
 https://github.com/user-attachments/assets/4766a2ca-5eb7-49b6-9d4a-ea5fe006bcfc
 
