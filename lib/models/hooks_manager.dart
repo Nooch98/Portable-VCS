@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 import 'package:vcs/vcs.dart';
 
@@ -7,13 +9,19 @@ class HookManager {
   static Future<void> handleCommand(List<String> args, dynamic context) async {
     if (context == null) return;
     
-    if (args.length < 2) {
-      print('Usage: vcs hook <create|edit|exec> <name> [-c auto|man]');
+    if (args.isEmpty) {
+      print('Usage: vcs hook <create|edit|exec|list|delete> [name] [-c auto|man]');
       return;
     }
 
     final String action = args[0].toLowerCase();
-    final String hookName = args[1];
+
+    if (action != 'list' && args.length < 2) {
+      print('❌ Error: Missing hook name. Usage: vcs hook $action <name>');
+      return;
+    }
+
+    final String hookName = args.length > 1 ? args[1] : '';
     
     String mode = 'man';
     int configIdx = args.indexWhere((arg) => arg == '-c' || arg == '--config');
@@ -37,7 +45,30 @@ class HookManager {
       } catch (_) {}
     }
 
+    final String execId = 'MANUAL-${DateTime.now().millisecondsSinceEpoch}';
+    final meta = context.remoteMeta;
+    final lastAuthor = meta.logs.isNotEmpty ? meta.logs.first.author : 'unknown';
+
     switch (action) {
+      case 'list':
+        print('\n📋 ${"Configured Hooks:".bold}\n');
+        if (configMap.isEmpty) {
+          print('   ${"No hooks configured.".italic}');
+        } else {
+          for (final entry in configMap.entries) {
+            final name = entry.key;
+            final mode = entry.value['mode'] ?? 'man';
+            final scriptFile = _findExistingScript(hooksPath, name);
+            final exists = scriptFile.existsSync();
+            
+            final statusIcon = exists ? '✅' : '❌';
+            final modeColor = mode == 'auto' ? '\x1B[32m$mode\x1B[0m' : '\x1B[33m$mode\x1B[0m';
+            
+            print('   $statusIcon ${name.padRight(15)} [Mode: $modeColor]');
+          }
+        }
+        print('');
+        break;
       case 'create':
       case 'edit':
         configMap[hookName] = {'mode': mode};
@@ -60,16 +91,45 @@ class HookManager {
           print('❌ Error: Script file not found: ${scriptFile.path}');
           return;
         }
-        await _executeHook(scriptFile, isManual: true);
+
+        final Map<String, String> manualEnv = {
+          'VCS_SNAPSHOT_ID': execId,
+          'VCS_TRACK': meta.activeTrack,
+          'VCS_AUTHOR': lastAuthor ?? 'unknown',
+          'VCS_TIMESTAMP': DateTime.now().toIso8601String(),
+          'VCS_VERSION': vcsBaseVersion,
+          'VCS_REPO_ROOT': context.remoteRepoDir.path,
+        };
+
+        await _executeHook(scriptFile, isManual: true, extraEnv: manualEnv);
+        break;
+      case 'delete':
+        if (configMap.containsKey(hookName)) {
+          configMap.remove(hookName);
+          configFile.writeAsStringSync(JsonEncoder.withIndent('  ').convert(configMap));
+        }
+
+        final fileToDelete = _findExistingScript(hooksPath, hookName);
+        if (fileToDelete.existsSync()) {
+          fileToDelete.deleteSync();
+          print('✅ Hook "$hookName" deleted successfully.'.green);
+        } else {
+          print('⚠️ Hook "$hookName" removed from config, but no script file found.'.yellow);
+        }
         break;
     }
   }
 
-  static Future<bool> runAutoHooks(dynamic context) async {
+  static Future<bool> runAutoHooks(dynamic context, {Map<String, String>? extraEnv}) async {
     if (context == null) return true;
 
     final String hooksPath = p.join(context.remoteRepoDir.path, 'hooks');
     final configFile = File(p.join(hooksPath, 'hooks.json'));
+    final String currentTrack = context.remoteMeta.activeTrack ?? 'main';
+    final trackData = context.remoteMeta.tracks[currentTrack];
+    final String currentId = (trackData != null && trackData.logs.isNotEmpty) 
+        ? trackData.logs.first.id 
+        : 'N/A';
     
     if (!configFile.existsSync()) return true;
 
@@ -87,7 +147,12 @@ class HookManager {
         if (scriptFile.existsSync()) {
           print('🪝  ${"Executing auto hook:".cyan} ${name.bold}...');
           
-          final success = await _executeHook(scriptFile, isManual: false);
+          final success = await _executeHook(
+            scriptFile, 
+            isManual: false,
+            extraEnv: extraEnv
+          );
+          
           if (!success) {
             print('\n❌ ${"Push aborted:".red} Hook "$name" failed.');
             return false;
@@ -115,8 +180,16 @@ class HookManager {
     return File(p.join(hooksPath, '$name$defaultExt'));
   }
 
-  static Future<bool> _executeHook(File script, {required bool isManual}) async {
+  static Future<bool> _executeHook(File script, {
+    required bool isManual,
+    Map<String, String>? extraEnv
+    }) async {
     final absolutePath = p.normalize(script.absolute.path);
+
+    final Map<String, String> environment = Map.from(Platform.environment);
+    if (extraEnv != null) {
+      environment.addAll(extraEnv);
+    }
     
     String executable;
     List<String> procArgs;
@@ -137,7 +210,8 @@ class HookManager {
       executable, 
       procArgs, 
       runInShell: true, 
-      mode: ProcessStartMode.inheritStdio
+      mode: ProcessStartMode.inheritStdio,
+      environment: environment
     );
 
     final exitCode = await process.exitCode;
