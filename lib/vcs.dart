@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.4-Experimental.1';
+const String vcsBaseVersion = '0.4.4-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -410,6 +410,7 @@ class PortableVcs {
     - `hook edit <name>` Open a hook in the editor to modify code or config.
       - `-c, --config <auto|man>` Update the execution mode.
     - `hook exec <name>` Manually run a specific hook.
+    - `hook delete <name>` Remove a hook configuration and its script file.
 
     ## 📝 SNAPSHOT ANNOTATIONS
     - `note "text"` Add a technical note or comment to a snapshot.
@@ -2093,7 +2094,20 @@ class PortableVcs {
     }
 
     await _withLock(context.remoteRepoDir, () async {
-      final currentFingerprint = await buildFingerprint(workingDir);
+      final cacheFile = File(p.join(context.remoteRepoDir.path, '.vcs_cache.json'));
+      Map<String, String>? cache;
+      if (cacheFile.existsSync()) {
+        try {
+          final Map<String, dynamic> rawData = jsonDecode(await cacheFile.readAsString());
+          cache = rawData.map((key, value) => MapEntry(key, value.toString()));
+        } catch (_) {}
+      }
+
+      final currentFingerprint = await buildFingerprint(
+        workingDir, 
+        previousFingerprint: cache,
+      );  
+      await cacheFile.writeAsString(jsonEncode(currentFingerprint));
 
       Map<String, String> lastFingerprint = {};
       if (trackData.logs.isNotEmpty) {
@@ -2150,19 +2164,14 @@ class PortableVcs {
         stdout.write('\nDo you want to proceed? (y/N): ');
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
       }
-
-      if (!(await HookManager.runAutoHooks(context))) {
-        print('❌ Push aborted by automation hook.');
-        return;
-      }
-
+      
       String? parentId;
       if (amend) {
         parentId = trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId;
       } else {
         parentId = trackData.logs.isNotEmpty ? trackData.logs.first.id : trackData.originSnapshotId;
       }
-
+      
       if (amend) {
         final oldSnapshot = trackData.logs.first;
         final oldFile = File(p.join(context.remoteRepoDir.path, 'snapshots', oldSnapshot.fileName));
@@ -2179,6 +2188,18 @@ class PortableVcs {
         } catch (e) {
           // No critic error
         }
+      }
+
+      final hookContext = {
+        'VCS_SNAPSHOT_ID': DateTime.now().millisecondsSinceEpoch.toString(),
+        'VCS_TRACK': targetTrackName,
+        'VCS_AUTHOR': author ?? 'unknown',
+        'VCS_VERSION': vcsBaseVersion,
+      };
+
+      if (!(await HookManager.runAutoHooks(context, extraEnv: hookContext))) {
+        print('❌ Push aborted by automation hook.');
+        return;
       }
 
       print('📦 Packing and encrypting...');
