@@ -1,5 +1,44 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.4-Experimental.2': r'''
+  # 🚀 PERFORMANCE OPTIMIZATION & HOOKS EXTENSIBILITY
+
+  This update brings significant improvements to operational latency and expands the automation capabilities of the VCS engine.
+  ---
+
+  ## ⚡ PUSH PERFORMANCE ENGINE [[ TAG: CACHE-OPTIMIZATION ]]
+
+  • **Metadata Caching**: Implemented a content-aware caching layer (`.vcs_cache.json`).
+    - **Optimized Scanning**: Bypasses expensive SHA-256 recalculations by comparing file sizes and modification timestamps.
+
+  ---
+
+  ## 🪝 ENHANCED HOOKS ECOSYSTEM [[ TAG: AUTOMATION-CONTROLS ]]
+
+  • **Expanded Environment Variables**: Enhanced hook execution context with full lineage awareness. Scripts can now leverage the following environment variables:
+
+  | Variable | Description |
+  | :--- | :--- |
+  | `VCS_SNAPSHOT_ID` | Unique ID of the current (or manual) transaction. |
+  | `VCS_PARENT_SNAPSHOT_ID` | ID of the parent snapshot (enables lineage tracking). |
+  | `VCS_LATEST_SNAPSHOT_ID` | ID of the most recent snapshot in the current track. |
+  | `VCS_TRACK` | The active track name (e.g., `main`). |
+  | `VCS_AUTHOR` | The author of the snapshot. |
+  | `VCS_TIMESTAMP` | ISO 8601 timestamp of the operation. |
+  | `VCS_VERSION` | Current VCS engine version. |
+  | `VCS_REPO_ROOT` | Absolute path to the repository directory. |
+
+  • **Hook Management Suite**:
+    - **`vcs hook list`**: Visual oversight of configured hooks, modes, and script availability.
+    - **`vcs hook delete <name>`**: Streamlined cleanup utility for managing script assets and configurations.
+
+  ---
+
+  ## 🛠️ STABILITY & COMPATIBILITY
+
+  • **Refactored Context Access**: Sanitized hook execution logic, removing legacy dependencies on non-existent `RepoContext` properties.
+  • **Toolchain Compatibility**: Updated internal collection accessors to ensure full functionality across all Dart SDK versions.
+  ''',
     '0.4.4-Experimental.1': r'''
   # 🔍 HISTORICAL INTELLIGENCE & AUDIT SANDBOXING
 
