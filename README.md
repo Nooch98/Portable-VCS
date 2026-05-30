@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.4--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.5--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -504,11 +504,14 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs pull --dry-run` | Preview changes without applying |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
+| | `vcs export --to <file.zip>` | Package a snapshot into a portable .zip archive. |
+| | `vcs import --from <file.zip>` | Import, initialize, and track a project from a .zip file. |
 | **Releases** | `vcs release create "msg"` | Create a portable, encrypted archive for distribution. |
 | | `vcs release list` | List all registered release versions and their IDs. |
 | | `vcs release public [id]` | Extract and run an isolated VS Code instance from a release. |
 | | `vcs release rm [id]` | Remove a release and its physical data from the vault. |
 | **Inspection & UI** | `vcs ui` | **Launch the local web dashboard** for visual history & diffs. |
+| | `vcs inspect [id]` | Detailed insight into snapshot metadata, fingerprint anomalies, and notes. |
 | | `vcs info` | Show detailed information about the current project and linked vault (includes activity charts). |
 | | `vcs status` | Summary of messages to help create Git/GitHub commits. |
 | | `vcs summary` | Compare tree against latest of the **active track**. |
