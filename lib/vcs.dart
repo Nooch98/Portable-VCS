@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.4-Experimental.2';
+const String vcsBaseVersion = '0.4.5-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -70,7 +70,8 @@ class PortableVcs {
     localMetaDirName,
   ];
 
-  Directory get _cwd => Directory.current;
+  Directory? _forcedCwd;
+  Directory get _cwd => _forcedCwd ?? Directory.current;
   Directory get _localMetaDir => Directory(p.join(_cwd.path, localMetaDirName));
   File get _localRepoFile => File(p.join(_localMetaDir.path, localRepoFileName));
   File get _gitignoreFile => File(p.join(_cwd.path, '.gitignore'));
@@ -82,6 +83,10 @@ class PortableVcs {
     else if (Platform.isMacOS) osName = 'macOS';
     
     return '🚀 Portable VCS Version $vcsBaseVersion ($osName)';
+  }
+
+  void setShadowContext(String path) {
+    _forcedCwd = Directory(path);
   }
 
   Future<UpdateCache?> _loadCache() async {
@@ -395,6 +400,10 @@ class PortableVcs {
     - `revert <id|tag>` Quick restore of a specific version from active track.
     - `restore <id|tag>` Restore a specific snapshot into another folder.
       - `--to <dir>` Destination path for the restored files.
+    - `export --to <file.zip>` Package a snapshot into a portable .zip archive.
+      - `-i, --id <id>` Target snapshot ID to export (defaults to latest).
+    - `import --from <file.zip>` Import and track a project from a .zip file.
+      - `-t, --track <name>` Target track for the imported project.
 
     ## 🚀 RELEASES (Public/Distribution)
     - `release create "message"` Create a portable, encrypted archive for distribution.
@@ -432,6 +441,7 @@ class PortableVcs {
 
     ## 🔍 INSPECTION & PERFORMANCE
     - `ui` Launch the Web Dashboard (Split-view diff support).
+    - `inspect [id]` Deep audit of a snapshot's metadata, changes, and notes.
     - `status` Compare local tree vs latest of the active track.
     - `di` Inspect the pre-computed **Delta-Index** of a snapshot.
       - `-i, --id <id>` Target a specific snapshot (defaults to latest).
@@ -702,7 +712,17 @@ class PortableVcs {
       'composer.json': 'vendor/\n.env\n*.log',
       'index.php': 'vendor/\nnode_modules/\n.env\n*.log',
       'CMakeLists.txt': 'build/\n*.o\n*.a\n*.so\n*.out',
-      'Makefile': '*.o\n*.out\n*.exe\nbuild/'
+      'Makefile': '*.o\n*.out\n*.exe\nbuild/',
+      'Gemfile': '.bundle/\nvendor/bundle/\nlog/\n*.log\n.env',
+      '*.csproj': 'bin/\nobj/\n*.user\n*.suo\n.vs/',
+      'docker-compose.yml': '.env\n*.log\ndata/\nvolumes/',
+      'Assets/': 'Library/\nTemp/\nObj/\nBuild/\nLogs/',
+      'pyproject.toml': '.venv/\n.pytest_cache/\n.tox/\nbuild/\ndist/',
+      'tsconfig.json': 'node_modules/\ndist/\nbuild/\n*.tsbuildinfo',
+      'podfile': 'Pods/\n*.framework\n*.xcworkspace/',
+      'app.json': '.expo/\n.next/\nout/\n.env',
+      '*.sql': '*.log\n*.dump\n*.sqlite\n*.sqlite-journal',
+      'nuxt.config.js': '.nuxt/\n.output/\n.env\nnode_modules/'
     };
 
     final gitIgnoreFile = File(p.join(_cwd.path, '.gitignore'));
@@ -2044,6 +2064,9 @@ class PortableVcs {
     if (context == null) return;
 
     Directory workingDir = _cwd;
+    if (overrideSourcePath != null) {
+      workingDir = Directory(overrideSourcePath);
+    }
     String targetTrackName = track ?? context.remoteMeta.activeTrack;
 
     final sessionFile = File(p.join(context.remoteRepoDir.path, 'session.json'));
@@ -8350,6 +8373,197 @@ class PortableVcs {
     final service = await getReleaseService(context.remoteRepoDir);
     await service.deleteRelease(releaseId);
   }
+
+  Future<void> inspect([String? snapshotId]) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+    final meta = context.remoteMeta;
+
+    SnapshotLogEntry? entry;
+    String? foundTrack;
+
+    if (snapshotId == null) {
+      final activeTrackName = meta.activeTrack;
+      final trackData = meta.tracks[activeTrackName];
+      
+      if (trackData != null && trackData.logs.isNotEmpty) {
+        entry = trackData.logs.first;
+        foundTrack = activeTrackName;
+      } else {
+        print('❌ ${"Error:".red} No snapshots found in active track "$activeTrackName".');
+        return;
+      }
+    } else {
+      for (final track in meta.tracks.entries) {
+        final match = track.value.logs.firstWhere(
+          (log) => log.id == snapshotId,
+          orElse: () => null as SnapshotLogEntry,
+        );
+        
+        if (match != null && match.id == snapshotId) {
+          entry = match;
+          foundTrack = track.key;
+          break;
+        }
+      }
+    }
+
+    if (entry == null) {
+      print('\n❌ ${"Error:".red} Snapshot "${snapshotId ?? 'N/A'}" not found.');
+      return;
+    }
+
+    print('\n${"══════════════════════════════════════════════════════".magenta}');
+    print('   🔍 ${"VCS INSPECTION REPORT".bold.cyan}');
+    print('${"══════════════════════════════════════════════════════".magenta}\n');
+
+    print('${"Project:".padRight(16).bold.blue} ${meta.projectName}');
+    print('${"Repo ID:".padRight(16).bold.blue} ${meta.repoId.gray}');
+    print('${"Format Ver:".padRight(16).bold.blue} ${meta.formatVersion}');
+    print('${"Total Tracks:".padRight(16).bold.blue} ${meta.tracks.length}');
+    print('${"Global Tags:".padRight(16).bold.blue} ${meta.tags.isEmpty ? "None" : meta.tags.keys.join(", ")}');
+    print('');
+
+    print('${"Snapshot ID:".padRight(16).bold.yellow} ${entry.id}');
+    print('${"Track:".padRight(16).bold} ${foundTrack?.blue ?? 'unknown'}');
+    print('${"Message:".padRight(16).bold} ${entry.message.green}');
+    print('${"Author:".padRight(16).bold} ${entry.author?.white ?? 'unknown'}');
+    print('${"Date:".padRight(16).bold} ${entry.createdAt.italic}');
+    print('${"Parent ID:".padRight(16).bold} ${entry.parentId?.yellow ?? 'None'}');
+    print('${"File Name:".padRight(16).bold} ${entry.fileName.gray}');
+    
+    if (entry.hasIntegrityData) {
+      print('${"Hash (SHA256):".padRight(16).bold} ${entry.hash!.magenta}');
+    }
+
+    print('\n${"Change Summary:".bold.yellow}');
+    if (entry.changeSummary.isEmpty) {
+      print('  ${"No changes recorded".gray}');
+    } else {
+      for (var change in entry.changeSummary) {
+        if (change.contains('[M]')) print('  • ${"[M]".yellow} ${change.substring(3).trim()}');
+        else if (change.contains('[N]')) print('  • ${"[N]".green} ${change.substring(3).trim()}');
+        else if (change.contains('[D]')) print('  • ${"[D]".red} ${change.substring(3).trim()}');
+        else print('  • $change');
+      }
+    }
+
+    print('\n${"Notes:".bold.yellow}');
+    if (entry.notes.isEmpty) {
+      print('  ${"No notes available".gray}');
+    } else {
+      for (var note in entry.notes) {
+        print('  • ${note.createdAt.italic.gray} | ${note.text}');
+      }
+    }
+    print('\n${"══════════════════════════════════════════════════════".magenta}\n');
+  }
+
+  Future<void> export(String snapshotId, String outputPath) async {
+    String finalPath = outputPath;
+    if (!finalPath.toLowerCase().endsWith('.zip')) {
+      finalPath += '.zip';
+    }
+
+    final file = File(finalPath);
+    if (await file.exists()) {
+      print('⚠️  ${"File already exists:".yellow} $finalPath');
+      if (!confirmAction('Overwrite existing file?')) {
+        print('❌ ${"Export cancelled.".red}');
+        return;
+      }
+    }
+
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    print('⏳ ${"Preparing export for snapshot:".yellow} $snapshotId');
+    final password = askPassword();
+    if (password == null) return;
+
+    final snapshot = await readSnapshot(context, snapshotId, password: password);
+    if (snapshot == null) {
+      print('❌ ${"Failed to decrypt snapshot.".red}');
+      return;
+    }
+
+    final files = await _decodeSnapshotFiles(snapshot);
+    
+    final encoder = ZipFileEncoder();
+    encoder.create(finalPath);
+
+    print('📦 ${"Compressing files...".cyan}');
+    for (final entry in files.entries) {
+      encoder.addArchiveFile(ArchiveFile(entry.key, entry.value.length, entry.value));
+    }
+    encoder.close();
+
+    print('✅ ${"Export completed successfully!".green}');
+    print('   ${"Location:".grey} $finalPath');
+  }
+
+  Future<void> import(String zipPath, String targetTrack) async {
+    final zipFile = File(zipPath);
+    if (!await zipFile.exists()) {
+      print('❌ ${"File not found:".red} $zipPath');
+      return;
+    }
+
+    final zipName = p.basenameWithoutExtension(zipPath);
+    print('📦 ${"Starting import of:".cyan} $zipName');
+
+    final tempDir = Directory(p.join(Directory.systemTemp.path, '$zipName'));
+    if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    await tempDir.create();
+
+    try {
+      print('⏳ ${"Extracting contents...".yellow}');
+      final bytes = await zipFile.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      
+      for (final file in archive) {
+        if (file.isFile) {
+          final outFile = File(p.join(tempDir.path, file.name));
+          await outFile.create(recursive: true);
+          await outFile.writeAsBytes(file.content as List<int>);
+        }
+      }
+
+      final contents = tempDir.listSync();
+      if (contents.length == 1 && contents.first is Directory) {
+        final subDir = contents.first as Directory;
+        print('🔍 ${"Detected nested folder, flattening structure...".cyan}');
+        for (var item in subDir.listSync()) {
+          final newPath = p.join(tempDir.path, p.basename(item.path));
+          await item.rename(newPath);
+        }
+        await subDir.delete();
+      }
+
+      setShadowContext(tempDir.path);
+
+      final vcsDir = Directory(p.join(tempDir.path, localMetaDirName));
+      if (!await vcsDir.exists()) {
+        print('🏗️ ${"Initializing repository structure...".yellow}');
+        await init();
+      }
+
+      print('🚀 ${"Syncing to Vault...".cyan}');
+      await push(
+        "Imported from $zipPath",
+        track: targetTrack,
+        overrideSourcePath: tempDir.path,
+        skipConfirm: true,
+      );
+
+      print('✅ ${"Import completed successfully!".green}');
+    } catch (e) {
+      print('❌ ${"Import failed:".red} $e');
+    } finally {
+      _forcedCwd = null;
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    }
+  }
 }
 
 class RoadmapCommand {
@@ -8573,8 +8787,17 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
   final parser = ArgParser()
     ..addCommand('setup')
     ..addCommand('init')
+    ..addCommand('inspect', ArgParser())
     ..addCommand('status', ArgParser()
       ..addFlag('ignored', abbr: 'i', help: 'List all files currently bypassed by active exclusion structures.', negatable: false)
+    )
+    ..addCommand('export', ArgParser()
+      ..addOption('to', abbr: 'o', help: 'The destination path for the exported .zip file.')
+      ..addOption('id', abbr: 'i', help: 'The specific snapshot ID to export. Defaults to latest.')
+    )
+    ..addCommand('import', ArgParser()
+      ..addOption('from', abbr: 'f', help: 'Path to the .zip file.')
+      ..addOption('track', abbr: 't', help: 'Target track for import. Defaults to active track.')
     )
     ..addCommand('clean', ArgParser()
       ..addFlag('all', help: 'Force remove all temporary sandboxes.')
@@ -8796,6 +9019,33 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'export':
+        final outputPath = command!['to']?.toString();
+        final snapshotId = command['id']?.toString() ?? 'latest';
+
+        if (outputPath == null) {
+          print('❌ Usage: vcs export --to <path/to/file.zip> [--id <snapshot_id>]');
+        } else {
+          await app.export(snapshotId, outputPath);
+        }
+        break;
+
+      case 'import':
+        final fromPath = command!['from'];
+        final targetTrack = command['track'] ?? 'main';
+
+        if (fromPath == null) {
+          print('❌ Usage: vcs import --from <path/to/file.zip> [--track <name>]');
+        } else {
+          await app.import(fromPath, targetTrack);
+        }
+        break;
+
+      case 'inspect':
+        final String? snapshotId = args.length > 1 ? args[1] : null;
+        await app.inspect(snapshotId);
+        break;
 
       case 'clean':
         print('🧹 Cleaning up temporary sandboxes...'.cyan);
