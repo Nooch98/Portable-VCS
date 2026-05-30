@@ -1,5 +1,36 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.5-Experimental.1': r'''
+  # 📦 PROJECT TRANSPORT & AUDIT MATURITY
+
+  This update introduces robust project portability and enhanced audit capabilities, transforming the VCS from a local snapshot engine into a complete project transport suite.
+  ---
+
+  ## 🚀 PROJECT PORTABILITY [[ TAG: IMPORT-EXPORT ]]
+
+  • **Portable Archives**: Added native support for project migration via ZIP archives.
+    - **`vcs export --to <file.zip>`**: Creates a standalone, portable snapshot of your project. Automatically flattens structure and handles encryption-aware export.
+    - **`vcs import --from <file.zip>`**: Ingests external project structures.
+      - **Auto-Bootstrap**: Automatically detects and initializes missing repositories.
+      - **Structure Flattening**: Intelligent detection of nested root folders to ensure clean workspace imports.
+      - **Shadow-Context Execution**: Processes imports in isolated temp sandboxes, ensuring zero impact on your current directory during the operation.
+
+  ---
+
+  ## 🔍 DEEP AUDIT & CONFIGURATION [[ TAG: VISIBILITY-AND-CONTROL ]]
+
+  • **`vcs inspect`**: Added deep audit functionality. Provides detailed insights into snapshot metadata, fingerprint anomalies, and associated technical notes for precise repository health assessment.
+
+  • **Expanded `.gitignore` Coverage**: Updated the base initialization engine to support 10 additional language-specific ignore patterns, ensuring cleaner snapshots and optimized storage footprint for modern development stacks.
+
+  ---
+
+  ## 🛡️ STABILITY & UX
+
+  • **Safety Guards**: Implemented overwrite-verification prompts for all export operations, preventing accidental data loss in destination paths.
+  • **Progress Communication**: Enhanced CLI logging for import processes, providing real-time feedback on extraction, initialization, and vault synchronization phases.
+  • **Context Sanitization**: Implemented `_forcedCwd` logic to allow thread-safe, isolated execution of VCS commands without requiring shell directory changes.
+  ''',
     '0.4.4-Experimental.2': r'''
   # 🚀 PERFORMANCE OPTIMIZATION & HOOKS EXTENSIBILITY
 
