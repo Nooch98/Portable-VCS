@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.5--experimental.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.5--experimental.2-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -502,6 +502,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
 | | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
 | | `vcs pull --dry-run` | Preview changes without applying |
+| | `vcs merge-apply <track>` | Merge a target track into the active one using 3-way conflict resolution. |
+| | `vcs merge-apply --id <id>` | Force a manual ancestor ID for 3-way merge resolution. |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
 | | `vcs restore <id> --to <dir>` | Restore a specific snapshot into another folder. |
 | | `vcs export --to <file.zip>` | Package a snapshot into a portable .zip archive. |
@@ -659,8 +661,45 @@ vcs track switch Brainstorming
 vcs pull
 ```
 
+---
+
+### 🔀 Merge & Conflict Resolution Engine
+
+The `merge-apply` engine is designed to reconcile project states between different *tracks* without abandoning your local development environment. Unlike traditional Git merges, this system prioritizes **state safety** by utilizing an isolated audit process before applying any changes.
+
+#### How it works
+1. **Ancestor Identification:** The system calculates the most recent common ancestor (Base) between your current track (`Local`) and the target track (`Remote`). This enables a classic 3-way merge structure.
+2. **Change Analysis:** The engine compares the `fingerprints` (hashes) of all tracked files:
+    * **Safe Files:** If a file is identical in both `Local` and `Remote`, or if the change is verified as safe, it is queued for merge.
+    * **Conflicts:** If both sides have modified the same file divergently, or if the `Base` snapshot metadata is missing (legacy snapshots), the system reports a conflict.
+3. **Sandbox Audit (Safety First):** Before touching your working directory, VCS creates a temporary sandbox (`vcs_merge_sandbox_...`) and applies the safe changes.
+
+
+
+#### How to use it
+To merge a target track into your active one, run:
+
+```bash
+vcs merge-apply <target_track_name>
+```
+
+### Handling Conflicts
+If the engine detects divergent modifications:
+
+1. **Review the Report**: The console will display a detailed breakdown of the conflicted files, including the `Base`, `Local`, and `Remote` hashes.
+2. **Verify Ancestry**: If you encounter many "NULL" hashes, it indicates the base snapshot predates the `hash-index` system. You can force a more recent ancestor ID to resolve the ambiguity:
+```bash
+vcs merge-apply <target_track> --id <snapshot_id>
+```
+3. **Audit in VS Code**: Upon successful analysis, the tool automatically opens the sandbox in VS Code. You can inspect the merged state, make manual adjustments, and then confirm the operation in your terminal:
+    * `y`: Apply changes to the main project.
+    * `n`: Abort and discard sandbox.
+
+> [!TIP]
+If you abort the merge, the sandbox remains available briefly for manual investigation before the system purges it. Use vcs clean if you need to manually remove audit sandboxes from your system.
+
+
 # Current Limitations
-* Tracks exist, but advanced branch merge workflows are not supported yet
 * No merge conflict resolution
 * Full snapshot storage (not incremental yet)
 * Large projects consume more storage
@@ -715,7 +754,7 @@ Planned improvements:
 - [ ] smarter line-ending normalization (Implicitly handled in memory)
 - [ ] incremental snapshots
 - [ ] advanced track merging
-- [ ] export/import bundle mode
+- [x] export/import bundle mode
 - [ ] snapshot compression optimization
 
 # Contributing
