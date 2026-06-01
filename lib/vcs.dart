@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.5-Experimental.1';
+const String vcsBaseVersion = '0.4.5-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -397,6 +397,9 @@ class PortableVcs {
     - `pull [id|tag]` Restore latest, specific ID or **tagged** snapshot.
       - `-t, --track <name>` Source snapshot from a specific track.
       - `--dry-run` Preview changes without applying.
+    - `merge-apply <track>` Merge a target track into the active one.
+      - `--id <id>` Specify a manual ancestor ID for 3-way merge.
+      - Uses temporary sandboxes for 3-way conflict resolution and auditing.
     - `revert <id|tag>` Quick restore of a specific version from active track.
     - `restore <id|tag>` Restore a specific snapshot into another folder.
       - `--to <dir>` Destination path for the restored files.
@@ -2468,7 +2471,7 @@ class PortableVcs {
   
   static final RegExp _stringLiteralRegExp = RegExp(r'("([^"\\]|\\.)*"|' "'" r"([^'\\]|\\.)*')");
   static final RegExp _pathRegExp = RegExp(r'(?<!:)(\.?\/[\w\d\/\.\-_]+)');
-  static final RegExp _badgeRegExp = RegExp(r'\[\[\s?(?:(\w+):)?\s?([^\]]+)\s?\]\]');
+  static final RegExp _badgeRegExp = RegExp(r'\[\[\s?!?(?:(\w+):)?\s?([^\]]+)\s?\]\]');
   static final RegExp _admonitionRegExp = RegExp(r'> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', caseSensitive: false);
 
   static const Map<String, Set<String>> _langKeywordsMap = {
@@ -2843,9 +2846,9 @@ class PortableVcs {
     return result.join('\n');
   }
 
-  String _applyInlineFormatting(String text, [String? restoreColor]) {
-    String res = _renderBadges(text, restoreColor);
-    String restore = restoreColor ?? "\x1B[0m";
+  String _applyInlineFormatting(String text, [String? contextColor]) {
+    String res = text;
+    final restore = contextColor ?? "\x1B[0m";
 
     res = res.replaceAllMapped(_pathRegExp, (m) => m.group(1)!.white.italic + restore);
     res = res.replaceAllMapped(RegExp(r'\[\s?([A-Z0-9_-]{3,})\s?\]'), (m) => '[ '.grey + m.group(1)!.white.bold + ' ]'.grey + restore);
@@ -2853,7 +2856,7 @@ class PortableVcs {
     res = res.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1)!.bold + restore);
     res = res.replaceAllMapped(RegExp(r'(https?:\/\/[^\s]+)'), (m) => m.group(1)!.blue.underline + restore);
 
-    return res;
+    return _renderBadges(res, contextColor);
   }
 
   String _renderBadges(String text, [String? contextColor]) {
@@ -4672,7 +4675,9 @@ class PortableVcs {
   }
 
   String _normalizeRelativePath(String input) {
-    return input.replaceAll('\\', '/');
+    String path = input.replaceAll('\\', '/');    
+    if (path.startsWith('/')) path = path.substring(1);
+    return p.posix.normalize(path);
   }
 
   Future<Map<String, String>> buildFingerprint(Directory dir, {Map<String, String>? previousFingerprint}) async {
@@ -4696,18 +4701,15 @@ class PortableVcs {
 
         if (previousFingerprint != null && previousFingerprint.containsKey(rel)) {
           final cachedData = previousFingerprint[rel]!;
-          
           final parts = cachedData.split('|');
-          if (parts.length == 3) {
+          
+          if (parts.length >= 2) {
             final cachedHash = parts[0];
             final cachedSize = int.tryParse(parts[1]) ?? -1;
-            final cachedMtime = int.tryParse(parts[2]) ?? -1;
 
-            if (currentSize == cachedSize && currentMtime == cachedMtime) {
+            if (currentSize == cachedSize) {
               computedHash = cachedHash;
             }
-          } else if (parts.length == 1) {
-            // Retrocompatibility
           }
         }
 
@@ -4779,19 +4781,22 @@ class PortableVcs {
     final conflicts = <MergeConflict>[];
     final safeFiles = <String>[];
 
-    final allChangedPaths = {...localMap.keys, ...remoteMap.keys};
+    final allPaths = {...baseFingerprint.keys, ...localFingerprint.keys, ...remoteFingerprint.keys};
 
-    for (final path in allChangedPaths) {
+    for (final path in allPaths) {
       final hasLocalChange = localMap.containsKey(path);
       final hasRemoteChange = remoteMap.containsKey(path);
 
       if (hasLocalChange && hasRemoteChange) {
         if (localFingerprint[path] == remoteFingerprint[path]) {
           safeFiles.add(path);
-        } else {
+        } else {          
           conflicts.add(MergeConflict(
             filePath: path,
-            conflictedScopes: [],
+            conflictedScopes: ["Divergent content modification"],
+            baseHash: baseFingerprint[path],
+            localHash: localFingerprint[path],
+            remoteHash: remoteFingerprint[path],
           ));
         }
       } 
@@ -4857,15 +4862,35 @@ class PortableVcs {
   }
 
   String? findCommonAncestor(RepoMeta meta, String trackA, String trackB) {
-    final dataA = meta.tracks[trackA];
-    final dataB = meta.tracks[trackB];
-    if (dataA == null || dataB == null) return null;
-    final historyA = dataA.logs.map((e) => e.id).toSet();
+    final logsA = meta.tracks[trackA]?.logs ?? [];
+    final logsB = meta.tracks[trackB]?.logs ?? [];
 
-    for (final entryB in dataB.logs) {
-      if (historyA.contains(entryB.id)) {
-        return entryB.id;
+    if (logsA.isEmpty || logsB.isEmpty) return null;
+
+    SnapshotLogEntry? findLogById(String id) {
+      for (final track in meta.tracks.values) {
+        final log = track.logs.firstWhere((l) => l.id == id, orElse: () => 
+                    SnapshotLogEntry(id: 'dummy', message: '', author: null, createdAt: '', fileName: '', changeSummary: []));
+        if (log.id != 'dummy') return log;
       }
+      return null;
+    }
+
+    final Set<String> ancestorsA = {};
+    String? currentA = logsA.first.id;
+    
+    while (currentA != null) {
+      ancestorsA.add(currentA);
+      final log = findLogById(currentA);
+      currentA = (log != null) ? log.parentId : null;
+    }
+
+    String? currentB = logsB.first.id;
+    while (currentB != null) {
+      if (ancestorsA.contains(currentB)) return currentB;
+      
+      final log = findLogById(currentB);
+      currentB = (log != null) ? log.parentId : null;
     }
 
     return null;
@@ -4948,6 +4973,159 @@ class PortableVcs {
     print('\n${'ℹ️  PREVIEW MODE:'.cyan} No changes have been written to disk.');
     print('To complete the merge after checking, use: ${'vcs merge apply <track>'.bold}');
     print('════════════════════════════════════════════════════════════\n');
+  }
+
+  Future<MergeReport?> generateMergeReport(
+    String targetTrackName, 
+    {String? password, String? forcedBaseId}
+  ) async {
+    print('📂 ${"Initializing repository context...".grey}');
+    final context = await loadRepoContext();
+    if (context == null) {
+      print('❌ ${"Error: Could not load repository context. Ensure you are in a valid VCS project.".red}');
+      return null;
+    }
+
+    final currentTrack = context.remoteMeta.activeTrack;
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null) {
+      print('❌ ${"Authentication failed: Password required.".red}');
+      return null;
+    }
+
+    String? baseSnapshotId;
+
+    if (forcedBaseId != null) {
+      print('💡 ${"Using manual ancestor ID:".cyan} $forcedBaseId');
+      baseSnapshotId = forcedBaseId;
+    } else {
+      print('🔍 ${"Analyzing lineage between".grey} ${currentTrack.cyan} ${"and".grey} ${targetTrackName.yellow}...');
+      baseSnapshotId = findCommonAncestor(context.remoteMeta, currentTrack, targetTrackName);
+      
+      if (baseSnapshotId == null) {
+        print('⚠️ ${"No common ancestor found.".yellow}');
+        print('   ${"Hint: Only tracks with a shared snapshot history can be merged.".grey}');
+        print('   ${"Use --id <snapshot_id> to manually specify an ancestor.".grey}');
+        return null;
+      }
+    }
+
+    print('🔗 ${"Common ancestor identified:".green} $baseSnapshotId');
+
+    final localSnapshotId = context.remoteMeta.tracks[currentTrack]!.logs.first.id;
+    final remoteSnapshotId = context.remoteMeta.tracks[targetTrackName]!.logs.first.id;
+
+    print('⚡ ${"Computing snapshot fingerprints...".grey}');
+    
+    final results = await Future.wait([
+      _getSnapshotFingerprint(context, baseSnapshotId, finalPassword),
+      _getSnapshotFingerprint(context, localSnapshotId, finalPassword),
+      _getSnapshotFingerprint(context, remoteSnapshotId, finalPassword),
+    ]);
+
+    print('✅ ${"Analysis complete.".green}');
+
+    return analyzeMerge(
+      baseFingerprint: results[0],
+      localFingerprint: results[1],
+      remoteFingerprint: results[2],
+      baseId: baseSnapshotId,
+      targetId: remoteSnapshotId,
+    );
+  }
+
+  Future<Uint8List> _getRemoteFileContent(String trackName, String filePath, String password) async {
+    final context = await loadRepoContext();
+    final log = context!.remoteMeta.tracks[trackName]!.logs.first;
+    
+    final snap = await readSnapshotByMeta(
+      remoteRepoDir: context.remoteRepoDir,
+      remoteMeta: context.remoteMeta,
+      snapshotId: log.id,
+      password: password,
+      silent: true
+    );
+
+    final files = await _decodeSnapshotFiles(snap!);
+    return files[filePath]!;
+  }
+
+  Future<void> mergeApply(String targetTrackName, {String? password, String? manualBaseId}) async {
+    final pwd = password ?? askPassword();
+    if (pwd == null) return;
+
+    final report = await generateMergeReport(
+      targetTrackName, 
+      password: pwd, 
+      forcedBaseId: manualBaseId
+    );
+    
+    if (report == null) return;
+
+    if (report.hasConflicts) {
+      print('❌ ${"Merge aborted: Conflicts detected.".red}');
+      print('\n📝 ${"Conflict details for files:".yellow.bold}');
+      print('----------------------------------------------------');
+      
+      for (final conflict in report.conflicts) {
+        print('📂 ${"File:".cyan} ${conflict.filePath}');
+        print('   ${"Hashes:".grey}');
+        print('    • Base:   ${conflict.baseHash ?? "NULL"}');
+        print('    • Local:  ${conflict.localHash ?? "NULL"}');
+        print('    • Remote: ${conflict.remoteHash ?? "NULL"}');
+
+        if (conflict.conflictedScopes.isNotEmpty) {
+          print('   ${"Reasons:".grey}');
+          for (final scope in conflict.conflictedScopes) {
+            print('    • $scope');
+          }
+        } else {
+          print('   ${"Reasons:".grey} ${"Irreconcilable divergent modifications.".italic}');
+        }
+        print('');
+      }
+      
+      print('----------------------------------------------------');
+      print('💡 ${"Tip: Review the listed files or use --id to verify the merge base.".grey}');
+      return;
+    }
+
+    final sandboxDir = Directory.systemTemp.createTempSync('vcs_merge_sandbox_');
+    print('🏗️ ${"Staging merge in sandbox...".cyan} ${sandboxDir.path}');
+
+    await _copyDirectory(_cwd, sandboxDir);
+
+    for (final path in report.safeFiles) {
+      final content = await _getRemoteFileContent(targetTrackName, path, pwd);
+      final file = File(p.join(sandboxDir.path, path));
+      await file.create(recursive: true);
+      await file.writeAsBytes(content);
+    }
+
+    print('🚀 ${"Opening sandbox in VS Code...".cyan}');
+    final result = await Process.run('code', [sandboxDir.path]);
+    if (result.exitCode != 0) {
+      print('⚠️ ${"Could not open VS Code. Please ensure 'code' is in your system PATH.".yellow}');
+      print('   ${"Sandbox location:".grey} ${sandboxDir.path}');
+    }
+
+    stdout.write('\n❓ ${"Review the changes. Apply to main project? (y/N): ".yellow}');
+    final input = stdin.readLineSync()?.toLowerCase();
+
+    if (input == 'y') {
+      for (final path in report.safeFiles) {
+        final content = await File(p.join(sandboxDir.path, path)).readAsBytes();
+        final targetFile = File(p.join(_cwd.path, path));
+        await targetFile.create(recursive: true);
+        await targetFile.writeAsBytes(content);
+      }
+      print('\n✅ ${"Merge successfully applied!".green}');
+      print('📄 ${"Summary:".bold} ${report.safeFiles.length} ${"files updated from".grey} $targetTrackName.');
+    } else {
+      print('🚫 ${"Merge aborted by user.".red}');
+    }
+
+    await sandboxDir.delete(recursive: true);
   }
 
   Future<List<String>> _detectConflictingScopes(
@@ -8909,6 +9087,10 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('merge-check', ArgParser()
         ..addOption('password', abbr: 'p', help: 'Repository password')
     )
+    ..addCommand('merge-apply', ArgParser()
+      ..addOption('password', abbr: 'p', help: 'Repository password')
+      ..addOption('id', abbr: 'i', help: 'Manually specify ancestor snapshot ID for merge')
+    )
     ..addCommand('version')
     ..addCommand('ui')
     ..addCommand('stash', ArgParser()
@@ -9048,9 +9230,24 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         break;
 
       case 'clean':
-        print('🧹 Cleaning up temporary sandboxes...'.cyan);
-        final count = await CleanupService.removeAllSandboxes();
-        print('✨ ${"Successfully removed $count sandbox directories.".green}');
+        final context = await app.loadRepoContext();
+        final List<String> pathsToClean = [];
+        
+        if (context != null) {
+          pathsToClean.add(context.remoteRepoDir.path);
+        }
+        
+        if (app._localMetaDir.existsSync()) {
+          pathsToClean.add(app._localMetaDir.path);
+        }
+
+        if (pathsToClean.isEmpty) {
+          print('⚠️ No repository context or local metadata found to clean.'.yellow);
+          break;
+        }
+
+        print('🧹 Starting cleanup service...'.cyan);
+        await CleanupService.removeAllSandboxes(extraPaths: pathsToClean);
         break;
 
       case 'release':
@@ -9152,6 +9349,23 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         
         final pass = result.command?['password'];
         await app.mergeCheck(targetTrack, password: pass);
+        break;
+
+      case 'merge-apply':
+        final targetTrack = result.command?.rest.firstOrNull;
+        if (targetTrack == null) {
+          print('❌ ${"Missing track name.".red} Usage: vcs merge-apply <track-name> [--id <snapshot-id>]');
+          return;
+        }
+        
+        final pass = result.command?['password'];
+        final manualId = result.command?['id'];
+        
+        await app.mergeApply(
+          targetTrack, 
+          password: pass, 
+          manualBaseId: manualId
+        );
         break;
 
       case 'doctor':
