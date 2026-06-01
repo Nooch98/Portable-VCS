@@ -1,5 +1,41 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.5-Experimental.2': r'''
+  # 🔀 3-WAY MERGE, CONFLICT ENGINE & STABILITY IMPROVEMENTS
+
+  This update introduces a sophisticated merge system and critical stability enhancements for cross-platform repository management.
+  ---
+
+  ## ⚙️ MERGE & CONFLICT ENGINE [[ TAG: 3-WAY-MERGE ]]
+
+  • **3-Way Merge Logic**: Implemented an automated reconciliation engine that identifies common ancestors and computes differences between branches.
+    - **Ancestor Identification**: Automatically detects the most recent common ancestor between local and remote snapshots.
+    - **Safe-Merge Analysis**: Distinguishes between identical changes (safe) and divergent modifications (conflicts) using fingerprint comparisons.
+  
+  • **Sandbox Audit System**: Introduced isolated staging for merge operations.
+    - **Visual Audit**: Automatically opens a temporary sandbox in VS Code for final verification before applying changes to the main project.
+    - [[ WARNING: Beta ]]: The `merge-apply` engine is currently in a very early experimental state. It is strongly recommended to meticulously review all changes within the VS Code sandbox before confirming the final application to your main workspace.
+    - **Non-Destructive**: Changes are only committed to the main project upon manual user confirmation (y/N), ensuring zero-risk merging.
+
+  ---
+
+  ## 🔍 CONFLICT FORENSICS [[ TAG: AUDIT-AND-DIAGNOSIS ]]
+
+  • **Advanced Conflict Reporting**: Replaced generic debug logs with a structured, color-coded terminal report.
+    - **Hash Comparison**: Clearly displays `Base`, `Local`, and `Remote` hashes for every conflicting file, enabling rapid forensic diagnosis.
+    - **Legacy Compatibility**: Added support for handling "legacy" snapshots (pre-hash index) through manual ancestor ID override (`--id`).
+
+  ---
+
+  ## 🛠️ STABILITY & HYGIENE [[ TAG: REPO-STABILITY ]]
+
+  • **Deterministic Fingerprinting**: 
+    - Transitioned to POSIX-compliant path normalization and size+content-hash validation. Removed reliance on filesystem `mtime` to prevent "all-files-modified" false positives when moving repositories across devices.
+  
+  • **Automated Cleanup Service**: Introduced a high-safety utility for repository maintenance.
+    - **Interactive Audit**: Scans system temp and local metadata directories for stale sandboxes and restore backups, requiring manual user verification before deletion.
+    - **UI Enhancements**: Implemented dynamic single-line progress indicators during scan operations for improved terminal readability.
+  ''',
     '0.4.5-Experimental.1': r'''
   # 📦 PROJECT TRANSPORT & AUDIT MATURITY
 
