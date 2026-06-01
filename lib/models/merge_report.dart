@@ -17,6 +17,15 @@ class MergeReport {
 class MergeConflict {
   final String filePath;
   final List<String> conflictedScopes;
+  final String? baseHash;
+  final String? localHash;
+  final String? remoteHash;
 
-  MergeConflict({required this.filePath, this.conflictedScopes = const []});
+  MergeConflict({
+    required this.filePath, 
+    this.conflictedScopes = const [],
+    this.baseHash,
+    this.localHash,
+    this.remoteHash,
+  });
 }
