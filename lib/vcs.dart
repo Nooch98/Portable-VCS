@@ -1241,7 +1241,6 @@ class PortableVcs {
             final basename = p.basename(relativePath);
             
             bool isIgnored = false;
-
             for (final rule in compiledRules) {
               if (rule.matches(relativePath, basename)) {
                 isIgnored = !rule.negated;
@@ -1252,12 +1251,11 @@ class PortableVcs {
               if (showIgnored) explicitlyIgnoredFiles.add(relativePath);
               return false;
             }
-
             return true;
           }),
         );
-        } catch (e) {
-          print('⚠️ ${"Warning: Error evaluating exclusion rules: $e".yellow}');
+      } catch (e) {
+        print('⚠️ ${"Warning: Error evaluating exclusion rules: $e".yellow}');
       }
     }
 
@@ -1275,37 +1273,26 @@ class PortableVcs {
     }
 
     final lastEntry = trackData.logs.first;
-    Map<String, String>? lastFingerprint;
-
-    lastFingerprint = await IndexService.loadSnapshotIndex(
+    Map<String, String>? lastFingerprint = await IndexService.loadSnapshotIndex(
       context.remoteRepoDir, 
       lastEntry.id
     );
 
     if (lastFingerprint == null) {
       print('ℹ️  ${"Fast-index missing. Reconstructing from snapshot...".grey}');
-      
       String? finalPassword = password;
       if (finalPassword == null && context.remoteMeta.formatVersion >= 3) {
         finalPassword = askPassword();
       }
-
       if (finalPassword == null && context.remoteMeta.formatVersion >= 3) {
         print('❌ ${"Password required for legacy snapshots in v3+ repositories.".red}');
         return;
       }
-
-      final snapshot = await readSnapshot(
-        context,
-        lastEntry.id,
-        password: finalPassword ?? '',
-      );
-
+      final snapshot = await readSnapshot(context, lastEntry.id, password: finalPassword ?? '');
       if (snapshot == null) {
         print('❌ ${"Could not read snapshot data for comparison.".red}');
         return;
       }
-      
       lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
     }
 
@@ -1314,20 +1301,36 @@ class PortableVcs {
     );
 
     final changes = diffFingerprints(cleanLastFingerprint, currentFingerprint);
+    final lastSnapshotDate = DateTime.parse(lastEntry.createdAt);
+    final daysOld = DateTime.now().difference(lastSnapshotDate).inDays;
 
-    if (changes.isEmpty) {
+    bool hasDrift = changes.isNotEmpty;
+
+    int totalBytes = 0;
+    for (final change in changes) {
+      if (change.kind == ChangeKind.added || change.kind == ChangeKind.modified) {
+        try {
+          final file = File(p.join(_cwd.path, change.path));
+          if (file.existsSync()) totalBytes += await file.length();
+        } catch (_) {}
+      }
+    }
+    String sizeLabel = totalBytes < 1024 * 1024 
+        ? '${(totalBytes / 1024).toStringAsFixed(1)} KB' 
+        : '${(totalBytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+
+    if (hasDrift) {
+      print(' ⚠️  ${"DRIFT DETECTED: Workspace is out of sync with HEAD".red.bold}');
+      print('    ${"Some files have diverged from the last snapshot.".grey}');
+    } else {
       print('\n✨ ${"Working tree clean.".green}');
       print('${"Your project is up to date with track".grey} ${targetTrackName.cyan}.');
       return;
     }
 
     Map<String, List<FileChange>> groups = {
-      '🛠️   LOGIC': [],
-      '🧪   TESTS': [],
-      '🎨   ASSETS': [],
-      '⚙️   CONFIG': [],
-      'ℹ️ DOCS': [],
-      '📄   OTHER': [],
+      '🛠️  LOGIC': [], '🧪  TESTS': [], '🎨  ASSETS': [],
+      '⚙️  CONFIG': [], 'ℹ️ DOCS': [], '📄  OTHER': [],
     };
 
     for (final change in changes) {
@@ -1336,35 +1339,27 @@ class PortableVcs {
       final pathSegments = p.split(change.path).map((s) => s.toLowerCase()).toList();
 
       if (fileName.contains('_test.') || fileName.contains('.spec.') || pathSegments.contains('test') || pathSegments.contains('test_driver')) {
-        groups['🧪   TESTS']!.add(change);
-      } 
-      else if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs', '.php', '.c', '.java', '.kt', '.swift', '.cs'].contains(ext)) {
-        groups['🛠️   LOGIC']!.add(change);
-      } 
-      else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico', '.mp4', '.wav', '.mp3', '.ttf', '.otf', '.woff', '.woff2'].contains(ext)) {
-        groups['🎨   ASSETS']!.add(change);
-      } 
-      else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.plist', '.properties', '.conf', '.ini', '.env'].contains(ext) || fileName == 'dockerfile' || fileName == 'makefile') {
-        groups['⚙️   CONFIG']!.add(change);
-      } 
-      else if (['.md', '.adoc', '.rst', '.txt'].contains(ext) || fileName == 'license' || fileName == 'changelog' || fileName == 'readme') {
+        groups['🧪  TESTS']!.add(change);
+      } else if (['.dart', '.js', '.py', '.cpp', '.h', '.ts', '.go', '.rs', '.php', '.c', '.java', '.kt', '.swift', '.cs'].contains(ext)) {
+        groups['🛠️  LOGIC']!.add(change);
+      } else if (['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.ico', '.mp4', '.wav', '.mp3', '.ttf', '.otf', '.woff', '.woff2'].contains(ext)) {
+        groups['🎨  ASSETS']!.add(change);
+      } else if (['.yaml', '.json', '.xml', '.toml', '.lock', '.gradle', '.plist', '.properties', '.conf', '.ini', '.env'].contains(ext) || fileName == 'dockerfile' || fileName == 'makefile') {
+        groups['⚙️  CONFIG']!.add(change);
+      } else if (['.md', '.adoc', '.rst', '.txt'].contains(ext) || fileName == 'license' || fileName == 'changelog' || fileName == 'readme') {
         groups['ℹ️ DOCS']!.add(change);
-      } 
-      else {
-        groups['📄   OTHER']!.add(change);
+      } else {
+        groups['📄  OTHER']!.add(change);
       }
     }
 
     if (showIgnored) {
       print('\n${'--- 🚫 Ignored Files ---'.cyan}');
-      
       if (explicitlyIgnoredFiles.isEmpty) {
         print('   ${"(No bypassed files detected in the workspace)".grey.italic}');
       } else {
         explicitlyIgnoredFiles.sort();
-        for (final path in explicitlyIgnoredFiles) {
-          print('   ${'[I]'.grey} ${path.gray}');
-        }
+        for (final path in explicitlyIgnoredFiles) print('   ${'[I]'.grey} ${path.gray}');
         print('\n   ${explicitlyIgnoredFiles.length.toString().grey} files currently excluded by rules.');
       }
       print('  ' + '─' * 45 + '\n');
@@ -1374,7 +1369,6 @@ class PortableVcs {
     print('  ${"(use \"vcs push <message>\" to save these changes)".grey}\n');
 
     int added = 0, modified = 0, deleted = 0;
-
     groups.forEach((groupName, groupChanges) {
       if (groupChanges.isEmpty) return;
       print('  $groupName'.bold.underline);
@@ -1398,6 +1392,8 @@ class PortableVcs {
     if (modified > 0) summaryParts.add('${modified} modified'.yellow);
     if (deleted > 0) summaryParts.add('${deleted} deleted'.red);
     print('  ${"Summary:".cyan} ${summaryParts.join(', ')}');
+    print('  ${"Stale:".magenta} ${"$daysOld days since last snapshot".yellow}');
+    print('  ${"Impact:".magenta} ${"~$sizeLabel for next push".yellow}');
     print('  ' + '─' * 45 + '\n');
   }
 
@@ -2066,6 +2062,14 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
+    final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+    try {
+      if (metaFile.existsSync()) jsonDecode(await metaFile.readAsString());
+    } catch (_) {
+      print('❌ ${"Repository metadata is corrupt. Run 'vcs doctor' before pushing.".red}');
+      return;
+    }
+
     Directory workingDir = _cwd;
     if (overrideSourcePath != null) {
       workingDir = Directory(overrideSourcePath);
@@ -2146,7 +2150,11 @@ class PortableVcs {
             password: finalPassword,
           );
           if (lastSnapshot != null) {
-            lastFingerprint = Map<String, String>.from(lastSnapshot.fingerprint);
+            lastFingerprint = lastSnapshot.fingerprint.map((key, value) {
+              final parts = value.split('|');
+              final normalizedValue = parts.length >= 3 ? '${parts[0]}|${parts[1]}' : value;
+              return MapEntry(p.normalize(key).replaceAll('\\', '/'), normalizedValue);
+            });
           }
         } catch (e) {
           print('⚠️ Warning: Error reading base snapshot for diff.');
@@ -2212,7 +2220,7 @@ class PortableVcs {
             snapshotId: oldSnapshot.id,
           );
         } catch (e) {
-          // No critic error
+          // No critical error
         }
       }
 
@@ -2230,10 +2238,20 @@ class PortableVcs {
 
       print('📦 Packing and encrypting...');
       final zipBytes = await _createZipFromCurrentProject(sourcePath: workingDir);
+
+      try {
+        print('🛡️ Running integrity verification...');
+        ZipDecoder().decodeBytes(zipBytes, verify: true);
+        print('✅ ${"Integrity check passed (ZIP valid).".green}');
+      } catch (e) {
+        print('\n❌ ${"CRITICAL: Integrity check failed!".red} $e');
+        return;
+      }
+
       final int estimatedEncryptedSize = zipBytes.length + (64 * 1024);
 
       if (!await _hasEnoughStorageSpace(context.remoteRepoDir, estimatedEncryptedSize)) {
-        print('❌ Push aborted: Storage drive is full. No data was modified.'.red);
+        print('❌ Push aborted: Storage drive is full.'.red);
         return;
       }
 
@@ -2252,7 +2270,6 @@ class PortableVcs {
       if (!snapshotsDir.existsSync()) await snapshotsDir.create(recursive: true);
 
       final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
-
       String? fileHash;
 
       final visualizer = ProgressVisualizer(
@@ -2318,13 +2335,13 @@ class PortableVcs {
         tracks: updatedTracks,
       );
 
-      final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
-      if (metaFile.existsSync()) {
-        await metaFile.copy(p.join(context.remoteRepoDir.path, 'meta.json.bak'));
+      final metaFileToWrite = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+      if (metaFileToWrite.existsSync()) {
+        await metaFileToWrite.copy(p.join(context.remoteRepoDir.path, 'meta.json.bak'));
       }
 
       await _atomicWriteString(
-          metaFile, const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()));
+          metaFileToWrite, const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()));
 
       print('🧠 Indexing snapshot files...');
       try {
@@ -4075,9 +4092,9 @@ class PortableVcs {
   }
 
   Future<void> pull({
-    String? track, 
-    String? snapshotId, 
-    String? password, 
+    String? track,
+    String? snapshotId,
+    String? password,
     bool dryRun = false,
   }) async {
     final context = await loadRepoContext();
@@ -4112,9 +4129,9 @@ class PortableVcs {
     );
 
     if (entry.id.isEmpty) {
-      final errorMsg = isTag 
-        ? '❌ The tag "$snapshotId" points to a snapshot ID ($finalSnapshotId) that no longer exists.'
-        : '❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".';
+      final errorMsg = isTag
+          ? '❌ The tag "$snapshotId" points to a snapshot ID ($finalSnapshotId) that no longer exists.'
+          : '❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".';
       print(errorMsg);
       return;
     }
@@ -4122,18 +4139,18 @@ class PortableVcs {
     final headerLabel = dryRun ? '--- PULL DRY RUN (PREVIEW) ---' : '--- PULL/RESTORE PREVIEW ---';
     print('\n${headerLabel.black.onCyan}');
     print('${'Source Track:'.padRight(15)} $targetTrackName');
-    
+
     if (isTag) {
       print('${'Active Tag:'.padRight(15)} ${snapshotId?.cyan}');
     }
-    
+
     print('${'Snapshot ID:'.padRight(15)} ${entry.id.green}');
     print('${'Message:'.padRight(15)} ${entry.message.yellow}');
     print('${'Author:'.padRight(15)} ${entry.author ?? 'Unknown'}');
     print('');
 
     final snapshotFile = File(p.join(context.remoteRepoDir.path, 'snapshots', entry.fileName));
-    
+
     if (!snapshotFile.existsSync()) {
       print('❌ ${"CRITICAL:".red} Snapshot file missing at ${snapshotFile.path.grey}');
       return;
@@ -4175,7 +4192,7 @@ class PortableVcs {
     print('\n${'⚠️  WARNING:'.red.bold} This will overwrite local files and delete those not present in the snapshot.');
     stdout.write('Proceed with pull? (y/N): ');
     String? confirm = stdin.readLineSync()?.trim().toLowerCase();
-    
+
     if (confirm != 'y' && confirm != 'yes') {
       print('🚫 Pull aborted.');
       return;
@@ -4188,11 +4205,20 @@ class PortableVcs {
     }
 
     print('\n📥 Processing snapshot ${finalSnapshotId.green}...');
-    
+
     try {
       final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
       if (snapshot == null) {
         print('❌ Failed to read or decrypt snapshot data. Check your password.');
+        return;
+      }
+
+      try {
+        print('🛡️ Running integrity verification...');
+        ZipDecoder().decodeBytes(snapshot.zipBytes, verify: true);
+        print('✅ ${"Integrity check passed (ZIP valid).".green}');
+      } catch (e) {
+        print('\n❌ ${"CRITICAL: Snapshot integrity check failed!".red} $e');
         return;
       }
 
@@ -4203,7 +4229,7 @@ class PortableVcs {
       }
 
       if (!await _hasEnoughStorageSpace(Directory.current, totalRequiredBytes)) {
-        print ('🚫 Pull aborted to safeguard workspace consistency.'.red);
+        print('🚫 Pull aborted to safeguard workspace consistency.'.red);
         return;
       }
 
@@ -4230,7 +4256,6 @@ class PortableVcs {
         totalBytes: totalRequiredBytes,
       );
 
-      final totalFiles = filesInSnapshot.length;
       for (final sEntry in filesInSnapshot.entries) {
         final path = sEntry.key;
         final bytes = sEntry.value;
@@ -4245,9 +4270,9 @@ class PortableVcs {
         restoredCount++;
 
         visualizer.update(bytes.length);
-        await Future.delayed(Duration.zero); 
+        await Future.delayed(Duration.zero);
       }
-      
+
       visualizer.complete();
 
       print('\n✅ Pull complete!');
@@ -4256,7 +4281,6 @@ class PortableVcs {
         print('   ${deletedCount.toString().red} files removed as per snapshot.');
       }
       print('');
-
     } catch (e) {
       print('\n❌ ${'CRITICAL ERROR during pull:'.red} $e');
       print('ℹ️  Suggestion: Verify your drive connection and try pulling again.');
@@ -4695,8 +4719,6 @@ class PortableVcs {
         if (stat.size == 0 && rel.endsWith('.old')) continue;
 
         final currentSize = stat.size;
-        final currentMtime = stat.modified.millisecondsSinceEpoch;
-
         String? computedHash;
 
         if (previousFingerprint != null && previousFingerprint.containsKey(rel)) {
@@ -4718,7 +4740,7 @@ class PortableVcs {
           computedHash = hash.sha256.convert(bytes).toString();
         }
 
-        out[rel] = '$computedHash|$currentSize|$currentMtime';
+        out[rel] = '$computedHash|$currentSize';
 
       } catch (e) {
         continue; 
@@ -9671,7 +9693,6 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
             currentId: targetId,
             extensionFilter: extensionFilter,
           );
-          
           print(app._renderMarkdown(report));
           
         } catch (e) {
