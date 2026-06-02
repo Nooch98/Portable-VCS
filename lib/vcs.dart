@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.5-Experimental.2';
+const String vcsBaseVersion = '0.4.6-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
