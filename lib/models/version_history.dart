@@ -1,5 +1,46 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.6-Experimental.1': r'''
+  # 🛡️ DATA INTEGRITY GUARDIAN & DRIFT DETECTION
+
+  This update introduces a robust security layer for snapshot operations, ensuring data consistency from end-to-end, and adds proactive drift monitoring to the status workflow.
+  ---
+
+  ## 🛡️ INTEGRITY VERIFICATION SUITE [[ TAG: DATA-SAFETY ]]
+
+  • **Pre-Push Validation**: 
+    - Implemented strict ZIP structure validation *before* encryption. The system now aborts the process immediately if the packed data is malformed, ensuring no corrupted snapshots reach the vault.
+  
+  • **Post-Pull Verification**:
+    - Added automated integrity checks *post-decryption*. The system verifies the integrity and validity of the recovered archive before touching a single file in your local workspace.
+    - Prevents "dirty" restores by detecting potential tampering or decryption failures at the byte level.
+
+  ---
+
+  ## 🔍 PROACTIVE DRIFT DETECTION [[ TAG: WORKSPACE-HYGIENE ]]
+
+  • **Drift Monitoring in `status` & `push`**:
+    - Real-time fingerprinting against the latest snapshot. 
+    - **Drift Reporting**: Clearly identifies files that have been modified, created, or deleted externally, preventing "blind pushes" that could lead to unintended data loss.
+
+  ---
+
+  ## 🛠️ STABILITY & HYGIENE [[ TAG: REPO-STABILITY ]]
+
+  • **Verification Refactoring**:
+    - Optimized internal verification logic to eliminate reliance on the `meta.json` index during the snapshot write process, resolving historical "Snapshot ID not found" race conditions.
+  
+  • **Atomic Operation Safeguards**:
+    - Enhanced file system interactions to ensure that if any stage of the integrity check (pre-push or post-pull) fails, the repository state remains perfectly preserved without partial or corrupt modifications.
+
+  • **Deterministic Consistency Fix**:
+    - Resolved the "Ghost Drift" bug where changes were incorrectly detected in unmodified files due to filesystem timestamp (`mtime`) variations. The engine is now purely content-and-size based across all commands, ensuring 100% accuracy in `status` and `push`.
+
+  • **[[ WARNING: MIGRATION NOTICE  ]]**:
+    - Due to the removal of the timestamp (`mtime`) from fingerprint calculations, the format of `.vcs_cache.json` has changed.
+    - **Action Required**: Please delete the `.vcs_cache.json` file located at the **root of each of your VCS-tracked repositories** after updating. 
+    - The system will automatically regenerate a clean, deterministic cache for each repository upon its next `status` or `push` command.
+  ''',
     '0.4.5-Experimental.2': r'''
   # 🔀 3-WAY MERGE, CONFLICT ENGINE & STABILITY IMPROVEMENTS
 
