@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.6-Experimental.1';
+const String vcsBaseVersion = '0.4.6-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -396,6 +396,7 @@ class PortableVcs {
       - `-t, --track <name>` Target a snapshot in a specific track.
     - `pull [id|tag]` Restore latest, specific ID or **tagged** snapshot.
       - `-t, --track <name>` Source snapshot from a specific track.
+      - `-f, --file <path>` Pull only a specific file from the snapshot.
       - `--dry-run` Preview changes without applying.
     - `merge-apply <track>` Merge a target track into the active one.
       - `--id <id>` Specify a manual ancestor ID for 3-way merge.
@@ -407,6 +408,7 @@ class PortableVcs {
       - `-i, --id <id>` Target snapshot ID to export (defaults to latest).
     - `import --from <file.zip>` Import and track a project from a .zip file.
       - `-t, --track <name>` Target track for the imported project.
+    - `blame <file>` Audit file history and identify the snapshot that last modified it.
 
     ## 🚀 RELEASES (Public/Distribution)
     - `release create "message"` Create a portable, encrypted archive for distribution.
@@ -4096,6 +4098,7 @@ class PortableVcs {
     String? snapshotId,
     String? password,
     bool dryRun = false,
+    String? fileFilter,
   }) async {
     final context = await loadRepoContext();
     if (context == null) return;
@@ -4175,11 +4178,25 @@ class PortableVcs {
     if (entry.changeSummary.isEmpty) {
       print('   ${"(No file changes recorded)".grey.italic}');
     } else {
-      for (final c in entry.changeSummary) {
-        if (c.startsWith('[N]')) print('   ${'[+]'.green} ${c.substring(3).trim()}');
-        else if (c.startsWith('[M]')) print('   ${'[~]'.yellow} ${c.substring(3).trim()}');
-        else if (c.startsWith('[D]')) print('   ${'[-]'.red} ${c.substring(3).trim()}');
-        else print('   $c');
+      if (fileFilter != null) {
+        final normalizedFilter = p.normalize(fileFilter).replaceAll('\\', '/');
+        final match = entry.changeSummary.firstWhere(
+          (c) => c.substring(3).trim() == normalizedFilter, 
+          orElse: () => ''
+        );
+        
+        if (match.isNotEmpty) {
+          print('   ${'[~]'.yellow} ${match.substring(3).trim()}');
+        } else {
+          print('   ${'ℹ️'.cyan} No changes recorded for ${fileFilter.grey} in this snapshot.');
+        }
+      } else {
+        for (final c in entry.changeSummary) {
+          if (c.startsWith('[N]')) print('   ${'[+]'.green} ${c.substring(3).trim()}');
+          else if (c.startsWith('[M]')) print('   ${'[~]'.yellow} ${c.substring(3).trim()}');
+          else if (c.startsWith('[D]')) print('   ${'[-]'.red} ${c.substring(3).trim()}');
+          else print('   $c');
+        }
       }
     }
 
@@ -4234,19 +4251,35 @@ class PortableVcs {
       }
 
       final filesInSnapshot = await _decodeSnapshotFiles(snapshot);
+      
+      final Map<String, List<int>> filesToRestore = {};
+      if (fileFilter != null) {
+        final normalizedFilter = p.normalize(fileFilter).replaceAll('\\', '/');
+        final found = filesInSnapshot.entries.where((e) => e.key == normalizedFilter);
+        if (found.isEmpty) {
+          print('❌ File "$fileFilter" not found in snapshot.');
+          return;
+        }
+        filesToRestore.addAll(Map.fromEntries(found));
+      } else {
+        filesToRestore.addAll(filesInSnapshot);
+      }
+
       int restoredCount = 0;
       int deletedCount = 0;
 
-      final deletions = entry.changeSummary.where((c) => c.startsWith('[D]'));
-      for (final change in deletions) {
-        final pathToDelete = change.substring(3).trim();
-        final file = File(pathToDelete);
-        if (await file.exists()) {
-          try {
-            await file.delete();
-            deletedCount++;
-          } catch (e) {
-            print('⚠️  Could not delete ${pathToDelete.grey}: $e');
+      if (fileFilter == null) {
+        final deletions = entry.changeSummary.where((c) => c.startsWith('[D]'));
+        for (final change in deletions) {
+          final pathToDelete = change.substring(3).trim();
+          final file = File(pathToDelete);
+          if (await file.exists()) {
+            try {
+              await file.delete();
+              deletedCount++;
+            } catch (e) {
+              print('⚠️  Could not delete ${pathToDelete.grey}: $e');
+            }
           }
         }
       }
@@ -4256,9 +4289,9 @@ class PortableVcs {
         totalBytes: totalRequiredBytes,
       );
 
-      for (final sEntry in filesInSnapshot.entries) {
+      for (final sEntry in filesToRestore.entries) {
         final path = sEntry.key;
-        final bytes = sEntry.value;
+        final bytes = Uint8List.fromList(sEntry.value.cast<int>());
         final file = File(path);
 
         final directory = Directory(file.parent.path);
@@ -4277,7 +4310,7 @@ class PortableVcs {
 
       print('\n✅ Pull complete!');
       print('   ${restoredCount.toString().green} files updated/restored.');
-      if (deletedCount > 0) {
+      if (fileFilter == null && deletedCount > 0) {
         print('   ${deletedCount.toString().red} files removed as per snapshot.');
       }
       print('');
@@ -7951,6 +7984,54 @@ class PortableVcs {
     print('');
   }
 
+  Future<void> blame(String filePath, {String? track}) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    if (trackData == null) {
+      print('❌ Track "$targetTrackName" not found.');
+      return;
+    }
+
+    final normalizedPath = p.normalize(filePath).replaceAll('\\', '/');
+    final history = trackData.logs;
+    final results = <SnapshotLogEntry>[];
+
+    for (final entry in history) {
+      final match = entry.changeSummary.any((c) => c.endsWith(normalizedPath));
+      if (match) {
+        results.add(entry);
+      }
+    }
+
+    if (results.isEmpty) {
+      print('ℹ️ ${"No history found for:".yellow} ${filePath.cyan}');
+      return;
+    }
+
+    print('\n🔍 ${"BLAME REPORT FOR:".black.onCyan} ${filePath.bold}');
+    print('═' * 60);
+
+    for (final entry in results) {
+      final date = _formatDateForList(entry.createdAt);
+      final change = entry.changeSummary.firstWhere((c) => c.endsWith(normalizedPath));
+      
+      String typeLabel = "MODIFIED".yellow;
+      if (change.startsWith('[N]')) typeLabel = "CREATED ".green;
+      if (change.startsWith('[D]')) typeLabel = "DELETED ".red;
+
+      print('${'Snapshot:'.padRight(12)} ${entry.id.cyan}');
+      print('${'Date:'.padRight(12)} $date');
+      print('${'Author:'.padRight(12)} ${entry.author ?? 'unknown'}');
+      print('${'Action:'.padRight(12)} $typeLabel');
+      print('${'Message:'.padRight(12)} ${entry.message}');
+      print('─' * 60);
+    }
+  }
+
   Future<void> checkStorageHealth() async {
     final context = await loadRepoContext();
     if (context == null) return;
@@ -9044,6 +9125,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('pull', ArgParser()
       ..addOption('track', abbr: 't', help: 'Pull from a specific track')
       ..addOption('id', help: 'Pull a specific snapshot ID')
+      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot') // <-- NUEVA OPCIÓN
       ..addFlag('dry-run', negatable: false, help: 'Preview changes without modifying files'),
     )
     ..addCommand('list')
@@ -9152,6 +9234,9 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addCommand('delete')
       ..addCommand('list')
     )
+    ..addCommand('blame', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Target track name')
+    )
     ..addCommand('publish', ArgParser()
       ..addOption('branch', defaultsTo: 'main', abbr: 'b')
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
@@ -9223,6 +9308,21 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+
+      case 'blame':
+        final argResults = result.command;
+        final rest = argResults?.rest ?? [];
+        
+        if (rest.isEmpty) {
+          print('❌ ${"Error:".red} Please specify a file path. Usage: vcs blame <path>');
+          break;
+        }
+        
+        final filePath = rest[0];
+        final track = argResults?['track'] as String?;
+        
+        await app.blame(filePath, track: track);
+        break;
 
       case 'export':
         final outputPath = command!['to']?.toString();
@@ -9495,6 +9595,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         await app.pull(
           track: command!['track']?.toString(),
           snapshotId: command['id']?.toString(),
+          fileFilter: command['file']?.toString(),
           dryRun: command['dry-run'] == true,
         );
         break;

@@ -1,5 +1,40 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.6-Experimental.2': r'''
+  # 🔍 FORENSIC AUDIT & SURGICAL RECOVERY
+
+  This update brings powerful investigative tools to the VCS engine, allowing for deep history exploration and surgical file recovery without the need to restore full repository states.
+  ---
+
+  ## 🕵️ NEW FEATURE: FILE BLAME SYSTEM [[ TAG: HISTORY-AUDIT ]]
+
+  • **`vcs blame <file>`**: 
+    - Introduces native file-level history auditing. 
+    - The engine traverses the snapshot timeline to identify the exact Snapshot ID that last modified a specific file.
+    - **Contextual Insight**: Displays the Author, Timestamp, and commit message associated with the last known change, enabling rapid forensic debugging.
+
+  ---
+
+  ## ✂️ NEW FEATURE: SURGICAL PULL [[ TAG: RECOVERY-CONTROL ]]
+
+  • **Surgical File Extraction**:
+    - **`vcs pull --file <path>`**: You can now perform targeted recoveries. Instead of restoring an entire project snapshot, the system extracts only the requested file from the vault.
+    - **Non-Destructive**: The system checks for potential collisions before overwriting local files, ensuring your current workspace remains safe during the surgical operation.
+
+  ---
+
+  ## 🛠️ STABILITY & ENGINE OPTIMIZATION [[ TAG: REPO-STABILITY ]]
+
+  • **Fingerprint Cache Refinement**:
+    - Optimized the `.vcs_cache.json` interaction to reduce I/O overhead during `status` checks.
+  
+  • **Error Handling & UX**:
+    - Enhanced terminal feedback for failed `blame` queries (e.g., file not found in history).
+    - Improved path normalization logic for the `--file` argument to support deep-nested directory structures flawlessly across Windows and POSIX environments.
+
+  • **Vault Health**:
+    - Tightened internal locking mechanisms during `pull` operations to prevent race conditions when the system is under heavy I/O load.
+  ''',
     '0.4.6-Experimental.1': r'''
   # 🛡️ DATA INTEGRITY GUARDIAN & DRIFT DETECTION
 
