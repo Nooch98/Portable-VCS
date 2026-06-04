@@ -44,7 +44,6 @@ import 'package:vcs/services/roadmap_manager.dart';
 import 'package:vcs/services/snapshot_snadbox.dart';
 import 'package:vcs/utils/progress_visualizer.dart';
 import 'package:vcs/utils/reporter.dart';
-import 'package:vcs/utils/zip_results.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
@@ -2196,7 +2195,6 @@ class PortableVcs {
         return;
       }
 
-      // --- CORRECCIÓN: Empaquetamos ANTES de la confirmación para tener los datos ---
       print('📦 Packing and encrypting...');
       final result = await _createZipFromCurrentProject(sourcePath: workingDir);
       final zipBytes = result.bytes;
@@ -2374,8 +2372,17 @@ class PortableVcs {
         await metaFileToWrite.copy(p.join(context.remoteRepoDir.path, 'meta.json.bak'));
       }
 
+      final encoder = const JsonEncoder.withIndent('  ');
+      final jsonString = encoder.convert(updatedMeta.toJson());
+      
+      await metaFileToWrite.writeAsBytes(
+        utf8.encode(jsonString), 
+        mode: FileMode.write,
+        flush: true,
+      );
+
       await _atomicWriteString(
-          metaFileToWrite, const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()));
+          metaFileToWrite, const JsonEncoder.withIndent(' ').convert(updatedMeta.toJson()));
 
       print('🧠 Indexing snapshot files...');
       try {
@@ -5661,15 +5668,22 @@ class PortableVcs {
 
   Future<({Uint8List bytes, Map<String, String> origins})> _createZipFromCurrentProject({Directory? sourcePath}) async {
     final archive = Archive();
-    final Map<String, String> fileOrigins = {}; // Mapa para rastrear el origen
-    final Directory targetDir = sourcePath ?? _cwd;
+    final Map<String, String> fileOrigins = {};
+    final Directory targetDir = sourcePath ?? _cwd;    
     final context = await loadRepoContext();
-    final stagingDir = Directory(p.join(context!.remoteRepoDir.path, '.staging'));
+    
+    Directory? stagingDir;
+    if (context != null) {
+      stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
+    }
 
     final stagedFiles = <String, File>{};
-    if (stagingDir.existsSync()) {
+    
+    if (stagingDir != null && stagingDir.existsSync()) {
       await for (final entity in stagingDir.list(recursive: true, followLinks: false)) {
-        if (entity is File) stagedFiles[p.relative(entity.path, from: stagingDir.path)] = entity;
+        if (entity is File) {
+          stagedFiles[p.relative(entity.path, from: stagingDir.path)] = entity;
+        }
       }
     }
 
@@ -9187,7 +9201,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('pull', ArgParser()
       ..addOption('track', abbr: 't', help: 'Pull from a specific track')
       ..addOption('id', help: 'Pull a specific snapshot ID')
-      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot') // <-- NUEVA OPCIÓN
+      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot')
       ..addFlag('dry-run', negatable: false, help: 'Preview changes without modifying files'),
     )
     ..addCommand('list')
