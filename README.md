@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.6--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.7--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -510,6 +510,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
 | | `vcs open` | Smart, context-unbound opener tool. Execute from any terminal path without requiring a local initialized repository. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
+| | `vcs push --file <path>` | Add a specific file to the staging area before push. |
 | | `vcs tag <name>` | Assign a friendly label to a snapshot |
 | | `vcs tag <name> -i, --id <id>` | Target a specific ID (defaults to latest). |
 | | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
@@ -590,6 +591,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | **Automation** | `vcs hook create <name> [-c/--config auto\|man]` | Create a new automation script (.ps1, .bat, .sh). |
 | | `vcs hook edit <name> [-c/--config auto\|man]` | Edit hook code or toggle execution mode. |
 | | `vcs hook exec <name>` | Run a specific hook manually. |
+| | `vcs hook log` | Display execution history and output logs of hooks. |
+| | `vcs hook clean` | Clear all generated logs from hook history. |
 | | `vcs roadmap init` | Initialize template for strategic milestones schema. |
 | | `vcs roadmap edit` | Open roadmap configuration in system standard editor. |
 | | `vcs roadmap add <v> "t"` | Append a milestone release block directly. |

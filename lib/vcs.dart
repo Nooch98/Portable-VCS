@@ -44,6 +44,7 @@ import 'package:vcs/services/roadmap_manager.dart';
 import 'package:vcs/services/snapshot_snadbox.dart';
 import 'package:vcs/utils/progress_visualizer.dart';
 import 'package:vcs/utils/reporter.dart';
+import 'package:vcs/utils/zip_results.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
@@ -391,6 +392,7 @@ class PortableVcs {
       - `-a, --author <name>` Override the author name for this snapshot.
       - `-t, --track <name>` Target a specific track instead of active.
       - `--amend` Overwrite the last snapshot (preserves lineage).
+      - `--file` Files are stored in a secure `.staging` buffer, allowing you to prepare multi-file updates incrementally.
     - `tag <name>` Assign a friendly label to a snapshot.
       - `-i, --id <id>` Target a specific ID (defaults to latest).
       - `-t, --track <name>` Target a snapshot in a specific track.
@@ -419,10 +421,14 @@ class PortableVcs {
     - `release delete [id]` Remove a release and its physical data from the vault.
 
     ## 🪝 AUTOMATION & HOOKS
+    - `hook list` Show all configured hooks and their status.
     - `hook create <name>` Create a new automation script (.ps1, .bat, .sh).
       - `-c, --config <auto|man>` Set execution mode (default: man).
     - `hook edit <name>` Open a hook in the editor to modify code or config.
       - `-c, --config <auto|man>` Update the execution mode.
+    - `hook log [name]` View the execution log of a hook.
+      - If no name is provided, an interactive menu will be displayed.
+    - `hook clean` Remove all hook execution logs.
     - `hook exec <name>` Manually run a specific hook.
     - `hook delete <name>` Remove a hook configuration and its script file.
 
@@ -2060,9 +2066,29 @@ class PortableVcs {
     String? overrideSourcePath,
     bool skipConfirm = false,
     bool amend = false,
+    String? fileToStage,
   }) async {
     final context = await loadRepoContext();
     if (context == null) return;
+
+    if (fileToStage != null) {
+      final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
+      if (!stagingDir.existsSync()) stagingDir.createSync(recursive: true);
+
+      final sourceFile = File(fileToStage);
+      if (!sourceFile.existsSync()) {
+        print('❌ ${"Error:".red} File not found: $fileToStage');
+        return;
+      }
+      
+      final relPath = p.relative(sourceFile.path, from: _cwd.path);
+      final destFile = File(p.join(stagingDir.path, relPath));
+      await destFile.parent.create(recursive: true);
+      await sourceFile.copy(destFile.path);
+      
+      print('✅ Added $fileToStage to staging area.');
+      return; 
+    }
 
     final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
     try {
@@ -2113,7 +2139,7 @@ class PortableVcs {
 
       if (tagsLinked.isNotEmpty) {
         print('❌ ${"Amend Blocked:".red} Latest snapshot is immutable because it is tagged.');
-        print('🏷️  Tags found: ${tagsLinked.join(', ').magenta}');
+        print('🏷️  Tags found: ${tagsLinked.join(', ').magenta}');
         print('💡 Tip: Remove the tags or create a new snapshot instead.');
         return;
       }
@@ -2170,6 +2196,12 @@ class PortableVcs {
         return;
       }
 
+      // --- CORRECCIÓN: Empaquetamos ANTES de la confirmación para tener los datos ---
+      print('📦 Packing and encrypting...');
+      final result = await _createZipFromCurrentProject(sourcePath: workingDir);
+      final zipBytes = result.bytes;
+      final fileOrigins = result.origins;
+
       if (!skipConfirm) {
         print('\n${(amend ? '--- 🛠️ Amending Last Snapshot ---' : '--- Snapshot Preview ---').cyan}');
         print('${'Source:'.padRight(12)} ${workingDir.path}');
@@ -2179,18 +2211,21 @@ class PortableVcs {
         int added = 0, modified = 0, deleted = 0;
 
         for (var change in changes) {
+          final origin = fileOrigins[change.path] ?? 'Disk';
+          final originLabel = origin == 'Staging' ? ' (Staging)'.cyan : ' (Disk)'.blue;
+
           switch (change.kind) {
             case ChangeKind.added:
               added++;
-              print('  ${"[+]".green} ${change.path}');
+              print('  ${"[+]".green} ${change.path.padRight(40)} $originLabel');
               break;
             case ChangeKind.modified:
               modified++;
-              print('  ${"[~]".yellow} ${change.path}');
+              print('  ${"[~]".yellow} ${change.path.padRight(40)} $originLabel');
               break;
             case ChangeKind.deleted:
               deleted++;
-              print('  ${"[-]".red} ${change.path}');
+              print('  ${"[-]".red} ${change.path.padRight(40)} $originLabel');
               break;
           }
         }
@@ -2221,9 +2256,7 @@ class PortableVcs {
             remoteRepoDir: context.remoteRepoDir,
             snapshotId: oldSnapshot.id,
           );
-        } catch (e) {
-          // No critical error
-        }
+        } catch (e) {}
       }
 
       final hookContext = {
@@ -2238,8 +2271,7 @@ class PortableVcs {
         return;
       }
 
-      print('📦 Packing and encrypting...');
-      final zipBytes = await _createZipFromCurrentProject(sourcePath: workingDir);
+      await HookManager.clearLogs(context.remoteRepoDir.path);
 
       try {
         print('🛡️ Running integrity verification...');
@@ -2343,7 +2375,7 @@ class PortableVcs {
       }
 
       await _atomicWriteString(
-          metaFileToWrite, const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()));
+          metaFileToWrite, const JsonEncoder.withIndent('  ').convert(updatedMeta.toJson()));
 
       print('🧠 Indexing snapshot files...');
       try {
@@ -2354,6 +2386,12 @@ class PortableVcs {
         );
       } catch (e) {
         print('⚠️ Warning: Metadata index could not be saved: $e');
+      }
+
+      final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
+      if (stagingDir.existsSync()) {
+        await stagingDir.delete(recursive: true);
+        print('🧹 Staging area cleared.');
       }
 
       print('✅ Snapshot ${amend ? "amended" : "saved"} successfully in track ${targetTrackName.cyan}.');
@@ -5621,22 +5659,45 @@ class PortableVcs {
     }
   }
 
-  Future<Uint8List> _createZipFromCurrentProject({Directory? sourcePath}) async {
+  Future<({Uint8List bytes, Map<String, String> origins})> _createZipFromCurrentProject({Directory? sourcePath}) async {
     final archive = Archive();
+    final Map<String, String> fileOrigins = {}; // Mapa para rastrear el origen
     final Directory targetDir = sourcePath ?? _cwd;
+    final context = await loadRepoContext();
+    final stagingDir = Directory(p.join(context!.remoteRepoDir.path, '.staging'));
+
+    final stagedFiles = <String, File>{};
+    if (stagingDir.existsSync()) {
+      await for (final entity in stagingDir.list(recursive: true, followLinks: false)) {
+        if (entity is File) stagedFiles[p.relative(entity.path, from: stagingDir.path)] = entity;
+      }
+    }
 
     await for (final entity in targetDir.list(recursive: true, followLinks: false)) {
       if (entity is! File) continue;
-
-      final rel = _normalizeRelativePath(p.relative(entity.path, from: targetDir.path));      
+      final rel = _normalizeRelativePath(p.relative(entity.path, from: targetDir.path));
       if (await _isIgnoredPath(rel)) continue;
 
-      final bytes = await entity.readAsBytes();
+      File finalFile = entity;
+      String origin = 'Disk';
+
+      if (stagedFiles.containsKey(rel)) {
+        final stagedFile = stagedFiles[rel]!;
+        if (stagedFile.lastModifiedSync().isAfter(entity.lastModifiedSync()) || 
+            stagedFile.lastModifiedSync().isAtSameMomentAs(entity.lastModifiedSync())) {
+          finalFile = stagedFile;
+          origin = 'Staging';
+        }
+      }
+
+      final bytes = await finalFile.readAsBytes();
       archive.addFile(ArchiveFile(rel, bytes.length, bytes));
+      fileOrigins[rel] = origin;
     }
 
-    final zip = ZipEncoder().encode(archive);
-    return Uint8List.fromList(zip!);
+    final zipBytes = Uint8List.fromList(ZipEncoder().encode(archive)!);
+    
+    return (bytes: zipBytes, origins: fileOrigins);
   }
 
   Future<Uint8List> _encryptSnapshot({
@@ -8581,7 +8642,8 @@ class PortableVcs {
 
     print('📦 Preparing release archive using existing VCS rules...');
 
-    final zipBytes = await _createZipFromCurrentProject(sourcePath: _cwd);
+    final (:bytes, :origins) = await _createZipFromCurrentProject(sourcePath: _cwd);
+    final zipBytes = bytes;
 
     final password = askPassword();
     if (password == null) {
@@ -9163,6 +9225,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         ..addOption('author', abbr: 'a')
         ..addOption('track', abbr: 't', help: 'Push to a specific track instead of the active one')
         ..addFlag('amend', negatable: false, help: 'Overwrite the last snapshot in the track')
+        ..addOption('file', abbr: 'f', help: 'Stage a specific file for a future snapshot')
     )
     ..addCommand('revert')
     ..addCommand('restore', ArgParser()..addOption('to'))
@@ -9450,13 +9513,20 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
           print('❌ ${"Error:".red} USB storage context not found. Cannot manage hooks.');
           return;
         }
+        
         List<String> hookArgs = [...command!.rest];
         if (command.options.contains('config') && command['config'] != null) {
           hookArgs.addAll(['-c', command['config']]);
         }
 
-        if (hookArgs.isEmpty) {
-          print('❌ Usage: vcs hook <create|edit|exec> <name> [-c auto|man]');
+        final action = hookArgs.isNotEmpty ? hookArgs[0].toLowerCase() : '';
+        
+        if (hookArgs.isEmpty || 
+            (action != 'list' && 
+             action != 'log' && 
+             action != 'clean' &&
+             hookArgs.length < 2)) {
+          print('❌ Usage: vcs hook <create|edit|exec|list|log|clean|delete> [name] [-c auto|man]');
         } else {
           await HookManager.handleCommand(hookArgs, context);
         }
@@ -9634,14 +9704,17 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         break;
 
       case 'push':
-        if (command!.rest.isEmpty) {
-          print('❌ You must provide a message.');
+        final fileToStage = command!['file']?.toString();
+        
+        if (command.rest.isEmpty && fileToStage == null) {
+          print('❌ You must provide a message (or use -f to stage a file).');
         } else {
           await app.push(
             command.rest.join(' '),
             author: command['author']?.toString(),
             track: command['track']?.toString(),
             amend: command['amend'] as bool,
+            fileToStage: fileToStage,
           );
         }
         break;
