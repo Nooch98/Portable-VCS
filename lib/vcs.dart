@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.7-Experimental.1';
+const String vcsBaseVersion = '0.4.7-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -2195,6 +2195,7 @@ class PortableVcs {
         return;
       }
 
+      // --- CORRECCIÓN: Empaquetamos ANTES de la confirmación para tener los datos ---
       print('📦 Packing and encrypting...');
       final result = await _createZipFromCurrentProject(sourcePath: workingDir);
       final zipBytes = result.bytes;
@@ -3449,15 +3450,26 @@ class PortableVcs {
   }
 
   Future<void> doctor({bool rebuildMode = false, bool reindexMode = false}) async {
+    final stopwatch = Stopwatch()..start();
     final reporter = DoctorReporter();
+    final reportTimestamp = DateTime.now().millisecondsSinceEpoch;
+    final fileName = 'vcs_doctor_report_$reportTimestamp.md';
+
     reporter.log('# 🛠️ VCS Diagnostic Report\n*Generated on: ${DateTime.now().toLocal()}*\n');
 
     print('\n🔬 ${"Repository diagnostics".cyan}');
     print('═' * 60);
 
+    bool isJsonClean(List<int> bytes) {
+      if (bytes.isEmpty) return false;
+      if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return false;
+      return bytes[0] == 123; // '{'
+    }
+
     final snapshotsLackingIndex = <String>[];
     var okCount = 0;
     var warnCount = 0;
+    var corruptCount = 0;
 
     String stripAnsi(String input) {
       return input.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '');
@@ -3488,7 +3500,6 @@ class PortableVcs {
 
     print('\n${"Local project".yellow}');
     print('─' * 60);
-
     final localInitialized = _localRepoFile.existsSync();
     check(localInitialized, 'Local repository metadata', 
         details: localInitialized ? _localRepoFile.path : 'Run "vcs init" to start.');
@@ -3551,11 +3562,18 @@ class PortableVcs {
         final localMetaRaw = jsonDecode(await _localRepoFile.readAsString());
         final repoId = localMetaRaw['repo_id']?.toString() ?? '';
         final remoteRepoDir = Directory(p.normalize(p.join(usb.path, remoteReposDir, repoId)));
+        final metaFile = File(p.normalize(p.join(remoteRepoDir.path, remoteMetaFileName)));
+
+        if (metaFile.existsSync()) {
+          final metaBytes = await metaFile.readAsBytes();
+          final isClean = isJsonClean(metaBytes);
+          check(isClean, 'Metadata encoding health', 
+              details: isClean ? 'File structure is clean.' : '⚠️ Corruption detected: Invalid header or hidden characters found.');
+        }
 
         if (!remoteRepoDir.existsSync()) {
           check(false, 'Remote repository binding', details: 'Repo ID "$repoId" not found on this drive.');
         } else {
-          final metaFile = File(p.normalize(p.join(remoteRepoDir.path, remoteMetaFileName)));
           final backupFile = File('${metaFile.path}.bak');
           final snapshotsDir = Directory(p.normalize(p.join(remoteRepoDir.path, 'snapshots')));
           final indexDir = Directory(p.normalize(p.join(remoteRepoDir.path, 'index')));
@@ -3658,7 +3676,6 @@ class PortableVcs {
 
             if (snapshotsDir.existsSync()) {
               final List<File> snapshotsFiles = snapshotsDir.listSync().whereType<File>().toList();
-              int corruptCount = 0;
               int verifiedCount = 0;
               snapshotsLackingIndex.clear();
 
@@ -3691,7 +3708,7 @@ class PortableVcs {
               if (verifiedCount > 0) stdout.write('\n');
 
               check(corruptCount == 0, 'Data Content Health', 
-                details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount snapshots securely.');
+                  details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount snapshots securely.');
 
               if (snapshotsLackingIndex.isNotEmpty) {
                 if (reindexMode) {
@@ -3755,8 +3772,9 @@ class PortableVcs {
 
     print('\n${"Summary".yellow}');
     print('─' * 60);
-    print('  ${"OK:".green} $okCount');
-    print('  ${"Warnings/Errors:".red} $warnCount');
+    print('   ${"OK:".green} $okCount');
+    print('   ${"Warnings/Errors:".red} $warnCount');
+    
     reporter.log('\n---\n### 📊 Summary');
     reporter.log('- ✅ **Total OK:** $okCount');
     reporter.log('- ⚠️ **Total Issues:** $warnCount');
@@ -3768,9 +3786,21 @@ class PortableVcs {
         print('\n⚡ ${"Reindexing completed successfully.".magenta.bold}');
       }
       print('\n⚠️  ${"Diagnostics found remaining issues. Review logs above.".yellow.bold}');
+      
+      print('\n${"Next Steps:".magenta}');
+      if (snapshotsLackingIndex.isNotEmpty) {
+        print('  ${'▶'.gray} Ejecuta ${'vcs doctor --reindex'.bold} para reparar los índices.');
+      }
+      if (corruptCount > 0) {
+        print('  ${'▶'.gray} Revisa el log detallado: ${fileName.underline}');
+      }
     }
 
-    final fileName = 'vcs_doctor_report_${DateTime.now().millisecondsSinceEpoch}.md';
+    stopwatch.stop();
+    final elapsed = (stopwatch.elapsedMilliseconds / 1000).toStringAsFixed(2);
+    print('⏱️ ${"Diagnosis completed in:".gray} ${elapsed}s');
+    
+    reporter.log('\n*Diagnosis took ${elapsed} seconds.*');
     await reporter.save(fileName);
     
     print('\n📄 ${"Report saved to:".cyan} $fileName');
@@ -7570,6 +7600,22 @@ class PortableVcs {
         .btn-action:hover { border-color: var(--accent); background: #1c2128; transform: translateY(-1px); }
         .btn-action:active { transform: translateY(0); }
 
+        #monaco-diff-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .monaco-editor .monaco-diff-editor {
+            border: none !important;
+        }
+
+        .monaco-editor .scrollbar.vertical, 
+        .monaco-editor .scrollbar.horizontal {
+            background: transparent !important;
+        }
+
         .workspace { flex: 1; display: flex; flex-direction: column; height: 100vh; position: relative; }
         .main-content { flex: 1; overflow-y: auto; padding: 40px; scroll-behavior: smooth; }
         
@@ -7678,6 +7724,7 @@ class PortableVcs {
         <meta charset="UTF-8">
         <title>VCS Terminal Dashboard</title>
         <style>""" + css + r"""</style>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
       </head>
       <body>
         <div class="sidebar">
@@ -7762,10 +7809,8 @@ class PortableVcs {
             </div>
             <button onclick="closeCode()" style="background:#30363d; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-weight:600;">Close View</button>
           </div>
-          <div class="diff-container">
-              <div class="diff-pane" id="leftPane"></div>
-              <div class="diff-pane" id="rightPane"></div>
-          </div>
+          
+          <div id="monaco-diff-container" style="flex: 1; overflow: hidden; background: var(--term-bg);"></div>
         </div>
 
         <script>
@@ -7773,9 +7818,30 @@ class PortableVcs {
           let pendingCommand = null;
           let pendingTrackName = null;
           let restoreDecision = false;
+          let diffEditor;
           
           let cmdHistory = [];
           let historyIndex = -1;
+
+          async function initMonaco() {
+            return new Promise((resolve) => {
+              require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' }});
+              require(['vs/editor/editor.main'], function () {
+                // Configuramos el DiffEditor con opciones optimizadas para visualización
+                diffEditor = monaco.editor.createDiffEditor(document.getElementById('monaco-diff-container'), {
+                  theme: 'vs-dark',
+                  readOnly: true,
+                  renderSideBySide: true,
+                  automaticLayout: true, // Crucial para que se adapte al contenedor
+                  minimap: { enabled: true },
+                  scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 }
+                });
+                resolve();
+              });
+            });
+          }
+
+          document.addEventListener('DOMContentLoaded', initMonaco);
 
           function setCmd(c) {
             const input = document.getElementById('cmdIn');
@@ -7977,39 +8043,56 @@ class PortableVcs {
           }
 
           async function viewCode(file) {
-            const left = document.getElementById('leftPane');
-            const right = document.getElementById('rightPane');
-            
-            left.innerHTML = '<div style="padding:20px; color:var(--text-dim)">Loading diff...</div>';
-            right.innerHTML = '';
-            
+            if (!diffEditor) return;
+
+            const viewer = document.getElementById('codeViewer');
+            viewer.style.display = 'flex';
             document.getElementById('fileNameDisplay').innerText = file;
-            document.getElementById('codeViewer').style.display = 'flex';
-
+            
             try {
-              const resp = await fetch(`/api/content?id=${currentId}&password=${encodeURIComponent(currentPass)}&file=${encodeURIComponent(file)}`);
-              const data = await resp.json();
-              
-              left.innerHTML = data.left || '<div class="diff-line empty" style="padding:15px; text-align:center;">(File did not exist)</div>';
-              right.innerHTML = data.right;
+                const resp = await fetch(`/api/content?id=${currentId}&password=${encodeURIComponent(currentPass)}&file=${encodeURIComponent(file)}`);
+                const data = await resp.json();
 
-              left.onscroll = () => { right.scrollTop = left.scrollTop; right.scrollLeft = left.scrollLeft; };
-              right.onscroll = () => { left.scrollTop = right.scrollTop; left.scrollLeft = right.scrollLeft; };
+                const cleanText = (htmlString) => {
+                    if (!htmlString) return '';
+                    const temp = document.createElement('div');
+                    temp.innerHTML = htmlString;
+                    return temp.textContent || temp.innerText || "";
+                };
 
+                const lang = file.split('.').pop() === 'dart' ? 'dart' : 'plaintext';
+                
+                const originalModel = monaco.editor.createModel(cleanText(data.left), lang);
+                const modifiedModel = monaco.editor.createModel(cleanText(data.right), lang);
+
+                diffEditor.setModel({
+                    original: originalModel,
+                    modified: modifiedModel
+                });
+                
+                diffEditor.layout();
             } catch(e) { 
-              left.innerHTML = '<div style="padding:20px; color:var(--error)">Error loading file content.</div>';
+                console.error("Error:", e);
             }
-          }
+        }
           
-          function closeCode() { document.getElementById('codeViewer').style.display = 'none'; }
+        function closeCode() {
+          document.getElementById('codeViewer').style.display = 'none';
           
-          function filterLogs(q) {
-            const query = q.toLowerCase();
-            document.querySelectorAll('#snapshotList .snapshot-card').forEach(c => {
-              c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
-            });
+          const models = diffEditor ? diffEditor.getModel() : null;
+          if (models) {
+            if (models.original) models.original.dispose();
+            if (models.modified) models.modified.dispose();
           }
-        </script>
+        }
+          
+        function filterLogs(q) {
+          const query = q.toLowerCase();
+          document.querySelectorAll('#snapshotList .snapshot-card').forEach(c => {
+            c.style.display = c.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
+          });
+        }
+      </script>
       </body>
       </html>
       """;
@@ -9201,7 +9284,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('pull', ArgParser()
       ..addOption('track', abbr: 't', help: 'Pull from a specific track')
       ..addOption('id', help: 'Pull a specific snapshot ID')
-      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot')
+      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot') // <-- NUEVA OPCIÓN
       ..addFlag('dry-run', negatable: false, help: 'Preview changes without modifying files'),
     )
     ..addCommand('list')

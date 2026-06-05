@@ -1,5 +1,100 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.7-Experimental.2': r'''
+  # 🚀 HOOK EDITOR & INTELLIGENT ENVIRONMENT
+
+  This update introduces a NEW integrated IDE experience and improves the VCS diagnostic engine to perform metadata file checks to prevent corruption caused by invisible characters and other factors.
+  ---
+
+  ## 🩺 NEW FEATURE: SELF-HEALING DIAGNOSTICS [[ TAG: DOCTOR-RECOVERY ]]
+
+  • **Metadata Integrity & Recovery**:
+    - The `vcs doctor` engine now performs deep-scan validation of `meta.json` files, detecting corruption or invalid character encoding.
+
+  • **Performance & Reporting**:
+    - Added high-precision diagnostic timing (benchmarking) to monitor repository health efficiency.
+    - Improved reporting: Full diagnostic logs are now serialized with completion timestamps for better auditability.
+
+  ---
+
+  ## 💻 NEW FEATURE: EMBEDDED MONACO EDITOR [[ TAG: IDE-INTEGRATION ]]
+
+  • **VS Code-Powered Editing**:
+    - Replaced the simple `textarea` interface with the **Monaco Editor**. 
+    - Full syntax highlighting for PowerShell/Bash and an integrated minimap.
+
+  • **Context-Aware Workflow**:
+    - Automatic language detection and live testing terminal buffer.
+    - Served entirely from memory via a local `shelf` server for zero-dependency portability.
+
+  ---
+
+  ## ⚡ NEW FEATURE: INTELLIGENT WORKFLOW [[ TAG: DEV-EXPERIENCE ]]
+
+  • **Minimalist App-Mode**:
+    - Hooks now spawn in dedicated, clean windows using Chromium `--app` mode, preventing tab clutter and ensuring a focused development environment.
+
+  • **Lifecycle Management**:
+    - Robust `heartbeat` mechanism that monitors editor activity; the server clears resources and shuts down automatically upon closing the editor.
+
+  ---
+
+  ## 🛠️ STABILITY & ENGINE OPTIMIZATION [[ TAG: ENGINE-STABILITY ]]
+
+  • **Cross-Platform Harmony**:
+    - Standardized process execution and browser-spawning logic to ensure a consistent diagnostic experience across Windows, Linux, and macOS.
+''',
+    '0.4.7-Experimental.1': r'''
+  # 🪝 AUTOMATION DIAGNOSTICS & LOGGING ENGINE
+
+  This update transforms the automation subsystem from a "black-box" executor into a high-visibility diagnostic platform and introduces a granular file staging system for surgical control over repository updates.
+  ---
+
+  ## 📋 NEW FEATURE: HOOK OBSERVABILITY SYSTEM [[ TAG: DIAGNOSTIC-DIAG ]]
+
+  • **Automated Hook Logging**:
+    - Every hook execution now generates a structured `.log` file in the `/hooks` directory, capturing `STDOUT` and `STDERR` with high fidelity.
+  
+  • **`vcs hook log [name]`**: 
+    - Dedicated diagnostic interface for log inspection.
+    - **Visual Rendering**: Color-coded output highlighting errors and system headers.
+    - **Interactive Menu**: Chronological log navigation.
+
+  ---
+
+  ## 📦 NEW FEATURE: STAGING & INCREMENTAL PUSH [[ TAG: WORKFLOW-CONTROL ]]
+
+  • **`vcs push --file <path>` (Staging Area)**:
+    - New capability to stage specific files without triggering a full snapshot.
+    - Files are stored in a secure `.staging` buffer, allowing you to prepare multi-file updates incrementally.
+  
+  • **Integrated Snapshot Consolidation**:
+    - Executing a standard `vcs push` now automatically merges staged files with your current workspace, ensuring the resulting snapshot contains the complete project state while maintaining repository history clean.
+  
+  • **Auto-Cleanup**:
+    - The staging area is automatically purged after every successful snapshot to keep the vault footprint minimal.
+
+  ---
+
+  ## 🧹 NEW FEATURE: AUTOMATED CLEANUP [[ TAG: REPO-HYGIENE ]]
+
+  • **Lifecycle Management**:
+    - **`vcs hook clean`**: Manually purge all accumulated execution logs.
+    - **Automatic Success Cleanup**: Logs are cleared automatically upon successful `push`.
+
+  ---
+
+  ## 🛠️ STABILITY & ENGINE OPTIMIZATION [[ TAG: ENGINE-STABILITY ]]
+
+  • **Execution Engine Refinement**:
+    - Improved stream interception for hooks without compromising performance.
+  
+  • **Error Analysis**:
+    - Added semantic detection to flag critical errors ("Failed", "Exception") during build hooks.
+    
+  • **Vault Integrity**:
+    - Updated command validation to ensure safe UX for new staging and hook commands, maintaining strict context constraints.
+  ''',
     '0.4.6-Experimental.2': r'''
   # 🔍 FORENSIC AUDIT & SURGICAL RECOVERY
 

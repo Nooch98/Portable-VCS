@@ -1,9 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:async';
 import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
+import 'package:vcs/utils/editor.dart';
 import 'package:vcs/vcs.dart';
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart' as io;
+import 'package:shelf_static/shelf_static.dart';
 
 class HookManager {
   static Future<void> handleCommand(List<String> args, dynamic context) async {
@@ -38,8 +43,7 @@ class HookManager {
     if (!hooksDir.existsSync()) hooksDir.createSync(recursive: true);
 
     final configFile = File(p.join(hooksPath, 'hooks.json'));
-    final ext = Platform.isWindows ? '.ps1' : '.sh';
-    final scriptFile = File(p.join(hooksPath, '$hookName$ext'));
+    final scriptFile = _findExistingScript(hooksPath, hookName);
 
     Map<String, dynamic> configMap = {};
     if (configFile.existsSync()) {
@@ -86,7 +90,7 @@ class HookManager {
         }
         
         print('✅ Hook "$hookName" set to [$mode]. Opening editor...');
-        await _openSystemEditor(scriptFile.path);
+        await _openEmbeddedEditor(scriptFile);
         break;
 
       case 'exec':
@@ -127,6 +131,83 @@ class HookManager {
         await clearLogs(context.remoteRepoDir.path);
         break;
     }
+  }
+
+  static Future<void> _openEmbeddedEditor(File file) async {
+    final completer = Completer<void>();
+    Timer? heartbeatTimer;
+    
+    void resetHeartbeat() {
+      heartbeatTimer?.cancel();
+      heartbeatTimer = Timer(Duration(seconds: 5), () {
+        if (!completer.isCompleted) {
+          print('\n⚠️ Editor connection lost. Shutting down server...');
+          completer.complete();
+        }
+      });
+    }
+
+    Future<void> launchMinimal(String url) async {
+      final chromiumBrowsers = Platform.isWindows 
+        ? ['chrome.exe', 'msedge.exe', 'brave.exe', 'opera.exe']
+        : ['google-chrome', 'microsoft-edge', 'brave-browser', 'opera'];
+
+      for (final browser in chromiumBrowsers) {
+        try {
+          final result = await Process.run(browser, ['--app=$url'], runInShell: true);
+          if (result.exitCode == 0) return;
+        } catch (_) {}
+      }
+
+      if (Platform.isWindows) await Process.run('start', [url], runInShell: true);
+      else if (Platform.isMacOS) await Process.run('open', [url]);
+      else await Process.run('xdg-open', [url]);
+    }
+
+    final handler = (Request request) async {
+      final path = request.url.path;
+      if (path == '' || path == 'index.html') return Response.ok(EditorAssets.html, headers: {'content-type': 'text/html'});
+      if (path == 'api/heartbeat') { resetHeartbeat(); return Response.ok('OK'); }
+      
+      if (path == 'api/get-content') {
+        final String lang = file.path.endsWith('.ps1') || file.path.endsWith('.bat') ? 'powershell' : 'shell';
+        return Response.ok(jsonEncode({'content': await file.readAsString(), 'language': lang}));
+      }
+      
+      if (path == 'api/save') {
+        final data = jsonDecode(await request.readAsString());
+        await file.writeAsString(data['content']);
+        completer.complete();
+        return Response.ok('Saved');
+      }
+      
+      if (path == 'api/test') {
+        final data = jsonDecode(await request.readAsString());
+        final ext = Platform.isWindows ? '.ps1' : '.sh';
+        final tempFile = File(p.join(Directory.systemTemp.path, 'vcs_test_${DateTime.now().millisecondsSinceEpoch}$ext'));
+        await tempFile.writeAsString(data['content']);
+        
+        final proc = await Process.run(
+          Platform.isWindows ? 'powershell' : 'bash',
+          Platform.isWindows ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tempFile.path] : [tempFile.path]
+        );
+        
+        if (await tempFile.exists()) await tempFile.delete();
+        return Response.ok(jsonEncode({'output': proc.stdout + proc.stderr}));
+      }
+      return Response.notFound('Not found');
+    };
+
+    final server = await io.serve(handler, 'localhost', 8080);    
+    print('\n🚀 Editor ready: http://localhost:8080');
+    
+    await launchMinimal('http://localhost:8080');    
+    resetHeartbeat();
+
+    await completer.future;
+    heartbeatTimer?.cancel();
+    await server.close();
+    print('✅ Editor closed. Server stopped.');
   }
 
   static Future<void> clearLogs(String remoteRepoDir) async {
@@ -232,9 +313,6 @@ class HookManager {
     final configFile = File(p.join(hooksPath, 'hooks.json'));
     final String currentTrack = context.remoteMeta.activeTrack ?? 'main';
     final trackData = context.remoteMeta.tracks[currentTrack];
-    final String currentId = (trackData != null && trackData.logs.isNotEmpty) 
-        ? trackData.logs.first.id 
-        : 'N/A';
     
     if (!configFile.existsSync()) return true;
 
@@ -343,36 +421,6 @@ class HookManager {
     } else {
       print('\n⚠️ Hook failed (Exit: $exitCode). Check log: ${p.basename(logFile.path)}');
       return false;
-    }
-  }
-
-  static Future<void> _openSystemEditor(String filePath) async {
-    final file = File(filePath);
-    final absolutePath = p.normalize(file.absolute.path);
-
-    if (!await file.exists()) {
-      print('❌ VCS Error: The file does not exist at path: $absolutePath');
-      return;
-    }
-
-    if (Platform.isWindows) {
-      try {
-        final result = await Process.run('code', [absolutePath], runInShell: true);
-        
-        if (result.exitCode != 0) {
-          throw Exception('VS Code not found');
-        }
-      } catch (e) {
-        await Process.run('notepad.exe', [absolutePath]);
-      }
-    } else if (Platform.isMacOS) {
-      await Process.run('open', [absolutePath]);
-    } else {
-      try {
-        await Process.run('xdg-open', [absolutePath]);
-      } catch (_) {
-        await Process.start('nano', [absolutePath], mode: ProcessStartMode.inheritStdio);
-      }
     }
   }
 }
