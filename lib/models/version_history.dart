@@ -1,5 +1,43 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.8-Experimental.1': r'''
+  # 🎨 NERD FONTS & CLI POLISH
+
+  This release focuses on refining the visual language of the VCS terminal interface and hardening the core push engine for better reliability.
+  ---
+
+  ## ⚡ PUSH ENGINE HARDENING [[ TAG: STABILITY ]]
+
+  • **Transactional Reliability**:
+    - Enhanced data integrity checks during the `push` process, ensuring atomic snapshots even under high-latency USB conditions.
+    - Optimized memory management for large file batches during encryption to reduce memory pressure on the host machine.
+
+  ---
+
+  ## 🖥️ VISUAL REVOLUTION: NERD FONTS [[ TAG: UX-UI ]]
+
+  • **Iconic Interface**:
+    - Completely overhauled file and folder icons using **Nerd Fonts** (MDI|Unicode).
+    - Replaced generic ASCII|Emoji markers with technical, high-resolution glifs for improved scanability.
+    - Coordinated color scheme: Files and folders now utilize context-aware color mapping (Cyan, Yellow, Green, Magenta, etc.) to match modern CLI tools like `eza` and `lsd`.
+
+  ---
+
+  ## 🚀 INIT EXPANSION [[ TAG: DEV-EXPERIENCE ]]
+
+  • **Increased Compatibility**:
+    - Added 10 new project templates to `vcs init`, covering modern frameworks and infrastructure:
+      - Next.js, Svelte, Vite, Rust-toolchain, Elixir (Mix), Deno, Tailwind, Dev-Python, Jenkins, and Fastlane.
+    - Improved detection logic for multi-format configurations.
+
+  ---
+
+  ## 🩺 DOCTOR DIAGNOSTICS [[ TAG: MAINTENANCE ]]
+
+  • **Health Checks**:
+    - Refined `vcs doctor` feedback loop. The diagnostic output now provides clearer, color-coded status reports for repo synchronization and meta-data validation.
+    - Streamlined the output to focus on actionable insights, helping users identify potential issues before they impact push/pull cycles.
+''',
     '0.4.7-Experimental.2': r'''
   # 🚀 HOOK EDITOR & INTELLIGENT ENVIRONMENT
 

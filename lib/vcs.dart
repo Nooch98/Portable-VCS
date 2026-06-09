@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.7-Experimental.2';
+const String vcsBaseVersion = '0.4.8-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -87,18 +87,6 @@ class PortableVcs {
 
   void setShadowContext(String path) {
     _forcedCwd = Directory(path);
-  }
-
-  Future<UpdateCache?> _loadCache() async {
-    if (!_cacheFile.existsSync()) return null;
-    try {
-      final lines = await _cacheFile.readAsLines();
-      return UpdateCache(lines[0], DateTime.parse(lines[1]));
-    } catch (_) { return null; }
-  }
-
-  Future<void> _saveCache(String version) async {
-    await _cacheFile.writeAsString('$version\n${DateTime.now().toIso8601String()}');
   }
 
   Future<void> update() async {
@@ -732,7 +720,17 @@ class PortableVcs {
       'podfile': 'Pods/\n*.framework\n*.xcworkspace/',
       'app.json': '.expo/\n.next/\nout/\n.env',
       '*.sql': '*.log\n*.dump\n*.sqlite\n*.sqlite-journal',
-      'nuxt.config.js': '.nuxt/\n.output/\n.env\nnode_modules/'
+      'nuxt.config.js': '.nuxt/\n.output/\n.env\nnode_modules/',
+      'next.config.js': '.next/\nout/\n.env*\n*.local\nnode_modules/\nbuild/',
+      'svelte.config.js': '.svelte-kit/\nbuild/\n.env\nnode_modules/',
+      'rust-toolchain': 'target/\n*.rs.bk\n*.log',
+      'mix.exs': '_build/\ndeps/\n.elixir_ls/\ncover/\n*.log',
+      'deno.json': 'target/\nvendor/\n.deno_cache/',
+      'vite.config.ts': 'node_modules/\ndist/\n.output/\n.env*',
+      'tailwind.config.js': 'node_modules/\n.cache/\n.output/',
+      'requirements-dev.txt': '.venv/\nvenv/\n__pycache__/\n.pytest_cache/\n.coverage',
+      'Jenkinsfile': '.jenkins/\nbuild/\n*.log\nnode_modules/',
+      'fastlane/Fastfile': 'fastlane/report.xml\nfastlane/screenshots/\nfastlane/test_output/\n*.log'
     };
 
     final gitIgnoreFile = File(p.join(_cwd.path, '.gitignore'));
@@ -2070,25 +2068,24 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
+    // 1. Manejo de Staging
     if (fileToStage != null) {
       final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
       if (!stagingDir.existsSync()) stagingDir.createSync(recursive: true);
-
       final sourceFile = File(fileToStage);
       if (!sourceFile.existsSync()) {
         print('❌ ${"Error:".red} File not found: $fileToStage');
         return;
       }
-      
       final relPath = p.relative(sourceFile.path, from: _cwd.path);
       final destFile = File(p.join(stagingDir.path, relPath));
       await destFile.parent.create(recursive: true);
       await sourceFile.copy(destFile.path);
-      
       print('✅ Added $fileToStage to staging area.');
-      return; 
+      return;
     }
 
+    // 2. Validación de Metadata y Contexto
     final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
     try {
       if (metaFile.existsSync()) jsonDecode(await metaFile.readAsString());
@@ -2098,23 +2095,16 @@ class PortableVcs {
     }
 
     Directory workingDir = _cwd;
-    if (overrideSourcePath != null) {
-      workingDir = Directory(overrideSourcePath);
-    }
+    if (overrideSourcePath != null) workingDir = Directory(overrideSourcePath);
     String targetTrackName = track ?? context.remoteMeta.activeTrack;
-
     final sessionFile = File(p.join(context.remoteRepoDir.path, 'session.json'));
 
-    if (overrideSourcePath != null) {
-      workingDir = Directory(overrideSourcePath);
-    } else if (sessionFile.existsSync()) {
+    if (overrideSourcePath == null && sessionFile.existsSync()) {
       try {
         final sessionData = jsonDecode(await sessionFile.readAsString());
         workingDir = Directory(sessionData['shadow_path']);
         targetTrackName = track ?? sessionData['active_shadow_track'];
-        if (!skipConfirm) {
-          print('🔍 ${"Shadow Session detected:".cyan} Pushing from ${workingDir.path}');
-        }
+        if (!skipConfirm) print('🔍 ${"Shadow Session detected:".cyan} Pushing from ${workingDir.path}');
       } catch (_) {}
     }
 
@@ -2129,17 +2119,10 @@ class PortableVcs {
         print('❌ ${"Cannot use --amend:".red} Track "$targetTrackName" has no history.');
         return;
       }
-
       final lastId = trackData.logs.first.id;
-      final tagsLinked = context.remoteMeta.tags.entries
-          .where((e) => e.value == lastId)
-          .map((e) => e.key)
-          .toList();
-
+      final tagsLinked = context.remoteMeta.tags.entries.where((e) => e.value == lastId).map((e) => e.key).toList();
       if (tagsLinked.isNotEmpty) {
         print('❌ ${"Amend Blocked:".red} Latest snapshot is immutable because it is tagged.');
-        print('🏷️  Tags found: ${tagsLinked.join(', ').magenta}');
-        print('💡 Tip: Remove the tags or create a new snapshot instead.');
         return;
       }
     }
@@ -2151,6 +2134,7 @@ class PortableVcs {
     }
 
     await _withLock(context.remoteRepoDir, () async {
+      // 3. Fingerprinting y Diff
       final cacheFile = File(p.join(context.remoteRepoDir.path, '.vcs_cache.json'));
       Map<String, String>? cache;
       if (cacheFile.existsSync()) {
@@ -2160,10 +2144,7 @@ class PortableVcs {
         } catch (_) {}
       }
 
-      final currentFingerprint = await buildFingerprint(
-        workingDir, 
-        previousFingerprint: cache,
-      );  
+      final currentFingerprint = await buildFingerprint(workingDir, previousFingerprint: cache);
       await cacheFile.writeAsString(jsonEncode(currentFingerprint));
 
       Map<String, String> lastFingerprint = {};
@@ -2171,23 +2152,12 @@ class PortableVcs {
         final baseEntryIndex = (amend && trackData.logs.length > 1) ? 1 : 0;
         final baseEntry = trackData.logs[baseEntryIndex];
         try {
-          final lastSnapshot = await readSnapshot(
-            context,
-            baseEntry.id,
-            password: finalPassword,
-          );
+          final lastSnapshot = await readSnapshot(context, baseEntry.id, password: finalPassword);
           if (lastSnapshot != null) {
-            lastFingerprint = lastSnapshot.fingerprint.map((key, value) {
-              final parts = value.split('|');
-              final normalizedValue = parts.length >= 3 ? '${parts[0]}|${parts[1]}' : value;
-              return MapEntry(p.normalize(key).replaceAll('\\', '/'), normalizedValue);
-            });
+            lastFingerprint = lastSnapshot.fingerprint.map((k, v) => MapEntry(p.normalize(k).replaceAll('\\', '/'), v.split('|').length >= 3 ? '${v.split('|')[0]}|${v.split('|')[1]}' : v));
           }
-        } catch (e) {
-          print('⚠️ Warning: Error reading base snapshot for diff.');
-        }
+        } catch (_) {}
       }
-
       final changes = diffFingerprints(lastFingerprint, currentFingerprint);
 
       if (changes.isEmpty && trackData.logs.isNotEmpty && !amend) {
@@ -2195,212 +2165,80 @@ class PortableVcs {
         return;
       }
 
-      // --- CORRECCIÓN: Empaquetamos ANTES de la confirmación para tener los datos ---
+      // 4. Empaquetado y Vista Previa
       print('📦 Packing and encrypting...');
       final result = await _createZipFromCurrentProject(sourcePath: workingDir);
       final zipBytes = result.bytes;
-      final fileOrigins = result.origins;
 
       if (!skipConfirm) {
-        print('\n${(amend ? '--- 🛠️ Amending Last Snapshot ---' : '--- Snapshot Preview ---').cyan}');
+        print('\n${(amend ? '--- 🛠️ Amending Last Snapshot ---' : '--- 📦 Snapshot Preview ---').cyan}');
         print('${'Source:'.padRight(12)} ${workingDir.path}');
         print('${'Track:'.padRight(12)} $targetTrackName');
         print('${'Message:'.padRight(12)} $message');
-
+        
         int added = 0, modified = 0, deleted = 0;
-
         for (var change in changes) {
-          final origin = fileOrigins[change.path] ?? 'Disk';
-          final originLabel = origin == 'Staging' ? ' (Staging)'.cyan : ' (Disk)'.blue;
-
-          switch (change.kind) {
-            case ChangeKind.added:
-              added++;
-              print('  ${"[+]".green} ${change.path.padRight(40)} $originLabel');
-              break;
-            case ChangeKind.modified:
-              modified++;
-              print('  ${"[~]".yellow} ${change.path.padRight(40)} $originLabel');
-              break;
-            case ChangeKind.deleted:
-              deleted++;
-              print('  ${"[-]".red} ${change.path.padRight(40)} $originLabel');
-              break;
-          }
+          if (change.kind == ChangeKind.added) added++;
+          else if (change.kind == ChangeKind.modified) modified++;
+          else if (change.kind == ChangeKind.deleted) deleted++;
         }
 
-        print('\nSummary: ${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
+        print('\n${'Changes to apply:'.underline}');
+        for (var change in changes) {
+          final originLabel = (result.origins[change.path] ?? 'Disk') == 'Staging' ? ' (Staging)'.cyan : ' (Disk)'.blue;
+          final symbol = change.kind == ChangeKind.added ? "[+]".green : change.kind == ChangeKind.modified ? "[~]".yellow : "[-]".red;
+          print('  $symbol ${change.path.padRight(40)} $originLabel');
+        }
 
-        stdout.write('\nDo you want to proceed? (y/N): ');
+        print('\n${'Summary:'.bold}');
+        print('${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
+        print('${'Estimated size:'.padRight(15)} ${(result.bytes.length / 1024).toStringAsFixed(2)} KB');
+        
+        stdout.write('\n${'Do you want to proceed?'.bold} (y/N): ');
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
       }
-      
-      String? parentId;
-      if (amend) {
-        parentId = trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId;
-      } else {
-        parentId = trackData.logs.isNotEmpty ? trackData.logs.first.id : trackData.originSnapshotId;
-      }
+
+      // 5. Preparación de Amend y Hooks
+      String? parentId = amend ? (trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId) : (trackData.logs.isNotEmpty ? trackData.logs.first.id : trackData.originSnapshotId);
       
       if (amend) {
         final oldSnapshot = trackData.logs.first;
         final oldFile = File(p.join(context.remoteRepoDir.path, 'snapshots', oldSnapshot.fileName));
-        
-        if (oldFile.existsSync()) {
-          await oldFile.delete();
-        }
-
-        try {
-          await IndexService.deleteSnapshotIndex(
-            remoteRepoDir: context.remoteRepoDir,
-            snapshotId: oldSnapshot.id,
-          );
-        } catch (e) {}
+        try { if (await oldFile.exists()) await oldFile.delete(); } catch (_) {}
+        try { await IndexService.deleteSnapshotIndex(remoteRepoDir: context.remoteRepoDir, snapshotId: oldSnapshot.id); } catch (_) {}
       }
 
-      final hookContext = {
-        'VCS_SNAPSHOT_ID': DateTime.now().millisecondsSinceEpoch.toString(),
-        'VCS_TRACK': targetTrackName,
-        'VCS_AUTHOR': author ?? 'unknown',
-        'VCS_VERSION': vcsBaseVersion,
-      };
-
-      if (!(await HookManager.runAutoHooks(context, extraEnv: hookContext))) {
-        print('❌ Push aborted by automation hook.');
-        return;
-      }
-
+      final hookContext = {'VCS_SNAPSHOT_ID': DateTime.now().millisecondsSinceEpoch.toString(), 'VCS_TRACK': targetTrackName, 'VCS_AUTHOR': author ?? 'unknown', 'VCS_VERSION': vcsBaseVersion};
+      if (!(await HookManager.runAutoHooks(context, extraEnv: hookContext))) { print('❌ Push aborted by automation hook.'); return; }
       await HookManager.clearLogs(context.remoteRepoDir.path);
 
+      // 6. Integridad y Escritura
       try {
         print('🛡️ Running integrity verification...');
         ZipDecoder().decodeBytes(zipBytes, verify: true);
-        print('✅ ${"Integrity check passed (ZIP valid).".green}');
-      } catch (e) {
-        print('\n❌ ${"CRITICAL: Integrity check failed!".red} $e');
-        return;
-      }
+      } catch (e) { print('\n❌ ${"CRITICAL: Integrity check failed!".red} $e'); return; }
 
-      final int estimatedEncryptedSize = zipBytes.length + (64 * 1024);
+      if (!await _hasEnoughStorageSpace(context.remoteRepoDir, zipBytes.length + 65536)) { print('❌ Push aborted: Storage drive is full.'.red); return; }
 
-      if (!await _hasEnoughStorageSpace(context.remoteRepoDir, estimatedEncryptedSize)) {
-        print('❌ Push aborted: Storage drive is full.'.red);
-        return;
-      }
-
-      final encrypted = await _encryptSnapshot(
-        zipBytes: zipBytes,
-        message: message,
-        author: author,
-        fingerprint: currentFingerprint,
-        password: finalPassword,
-        trackName: targetTrackName,
-        parentId: parentId,
-      );
-
+      final encrypted = await _encryptSnapshot(zipBytes: zipBytes, message: message, author: author, fingerprint: currentFingerprint, password: finalPassword, trackName: targetTrackName, parentId: parentId);
       final snapshotId = DateTime.now().millisecondsSinceEpoch.toString();
-      final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
-      if (!snapshotsDir.existsSync()) await snapshotsDir.create(recursive: true);
-
-      final finalFile = File(p.join(snapshotsDir.path, '$snapshotId.vcs'));
-      String? fileHash;
-
+      final finalFile = File(p.join(context.remoteRepoDir.path, 'snapshots', '$snapshotId.vcs'));
+      
       final visualizer = ProgressVisualizer(
         label: 'Writing to Vault',
         totalBytes: encrypted.length,
       );
-
-      Stream<List<int>> chunkedStream(List<int> data, int chunkSize) async* {
-        for (var i = 0; i < data.length; i += chunkSize) {
-          final end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
-          yield data.sublist(i, end);
-          await Future.delayed(Duration.zero); 
-        }
-      }
-
-      try {
-        final sink = finalFile.openWrite();
-        await chunkedStream(encrypted, 64 * 1024)
-            .withProgress(visualizer)
-            .pipe(sink);
-
-        fileHash = sha256.convert(encrypted).toString();
-      } catch (e) {
-        print('\n❌ Error writing snapshot: $e');
-        if (finalFile.existsSync()) await finalFile.delete();
-        return;
-      }
-
-      final List<SnapshotNote> existingNotes = amend ? trackData.logs.first.notes : [];
-
-      final entry = SnapshotLogEntry(
-        id: snapshotId,
-        message: message,
-        author: author,
-        createdAt: DateTime.now().toUtc().toIso8601String(),
-        fileName: '$snapshotId.vcs',
-        changeSummary: changes.map((e) => e.toTag()).toList(),
-        hash: fileHash,
-        notes: existingNotes,
-        parentId: parentId,
-      );
-
-      final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
-
-      if (amend) {
-        final newLogs = List<SnapshotLogEntry>.from(trackData.logs);
-        newLogs[0] = entry;
-        updatedTracks[targetTrackName] = TrackState(
-          logs: newLogs,
-          originSnapshotId: trackData.originSnapshotId,
-          originTrackName: trackData.originTrackName,
-        );
-      } else {
-        updatedTracks[targetTrackName] = TrackState(
-          logs: [entry, ...trackData.logs],
-          originSnapshotId: trackData.originSnapshotId,
-          originTrackName: trackData.originTrackName,
-        );
-      }
-
-      final updatedMeta = context.remoteMeta.copyWith(
-        updatedAt: DateTime.now().toUtc().toIso8601String(),
-        tracks: updatedTracks,
-      );
-
-      final metaFileToWrite = File(p.join(context.remoteRepoDir.path, 'meta.json'));
-      if (metaFileToWrite.existsSync()) {
-        await metaFileToWrite.copy(p.join(context.remoteRepoDir.path, 'meta.json.bak'));
-      }
-
-      final encoder = const JsonEncoder.withIndent('  ');
-      final jsonString = encoder.convert(updatedMeta.toJson());
+      await finalFile.openWrite().addStream(Stream.value(encrypted).withProgress(visualizer));
       
-      await metaFileToWrite.writeAsBytes(
-        utf8.encode(jsonString), 
-        mode: FileMode.write,
-        flush: true,
-      );
-
-      await _atomicWriteString(
-          metaFileToWrite, const JsonEncoder.withIndent(' ').convert(updatedMeta.toJson()));
-
-      print('🧠 Indexing snapshot files...');
-      try {
-        await IndexService.saveSnapshotIndex(
-          remoteRepoDir: context.remoteRepoDir,
-          snapshotId: snapshotId,
-          fileMap: currentFingerprint,
-        );
-      } catch (e) {
-        print('⚠️ Warning: Metadata index could not be saved: $e');
-      }
-
-      final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
-      if (stagingDir.existsSync()) {
-        await stagingDir.delete(recursive: true);
-        print('🧹 Staging area cleared.');
-      }
+      // 7. Actualización final
+      final entry = SnapshotLogEntry(id: snapshotId, message: message, author: author, createdAt: DateTime.now().toUtc().toIso8601String(), fileName: '$snapshotId.vcs', changeSummary: changes.map((e) => e.toTag()).toList(), hash: sha256.convert(encrypted).toString(), notes: amend ? trackData.logs.first.notes : [], parentId: parentId);
+      final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
+      updatedTracks[targetTrackName] = TrackState(logs: amend ? [entry, ...trackData.logs.sublist(1)] : [entry, ...trackData.logs], originSnapshotId: trackData.originSnapshotId, originTrackName: trackData.originTrackName);
+      
+      await _atomicWriteString(metaFile, const JsonEncoder.withIndent(' ').convert(context.remoteMeta.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String(), tracks: updatedTracks).toJson()));
+      
+      try { await IndexService.saveSnapshotIndex(remoteRepoDir: context.remoteRepoDir, snapshotId: snapshotId, fileMap: currentFingerprint); } catch (_) {}
+      try { final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging')); if (await stagingDir.exists()) await stagingDir.delete(recursive: true); } catch (_) {}
 
       print('✅ Snapshot ${amend ? "amended" : "saved"} successfully in track ${targetTrackName.cyan}.');
     });
@@ -6688,7 +6526,6 @@ class PortableVcs {
     }
 
     List<String> paths = [];
-
     final cachedIndex = await IndexService.loadSnapshotIndex(context.remoteRepoDir, targetId);
     
     if (cachedIndex != null) {
@@ -6713,7 +6550,6 @@ class PortableVcs {
     }
 
     final treeStats = TreeStats();
-
     print('\n🌳 ${"SNAPSHOT FILE TREE".black.onCyan}');
     print('═' * 60);
     print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green} (${entry.message.grey})');
@@ -6726,7 +6562,7 @@ class PortableVcs {
       print('  ${"(Empty snapshot)".grey}');
     } else {
       final root = _buildTree(paths);
-      print('${context.remoteMeta.projectName.blue.bold}/'); 
+      print('${'\u{f115}'.yellow} ${context.remoteMeta.projectName.white.bold}/');
       _printTreeNode(root, prefix: '', stats: treeStats);
     }
 
@@ -6737,43 +6573,24 @@ class PortableVcs {
 
   TreeNode _buildTree(List<String> paths) {
     final root = TreeNode('');
-
     for (final rawPath in paths) {
-      final normalized = rawPath.replaceAll('\\', '/');
-      final parts = normalized.split('/');
-
+      final parts = rawPath.replaceAll('\\', '/').split('/');
       var current = root;
       for (var i = 0; i < parts.length; i++) {
         final part = parts[i];
         final isFile = i == parts.length - 1;
-
-        current.children.putIfAbsent(
-          part,
-          () => TreeNode(part, isFile: isFile),
-        );
-
+        current.children.putIfAbsent(part, () => TreeNode(part, isFile: isFile));
         final next = current.children[part]!;
-        if (!isFile) {
-          next.isFile = false;
-        }
-
+        if (!isFile) next.isFile = false;
         current = next;
       }
     }
-
     return root;
   }
 
-  void _printTreeNode(
-    TreeNode node, {
-    required String prefix,
-    required TreeStats stats,
-  }) {
+  void _printTreeNode(TreeNode node, {required String prefix, required TreeStats stats}) {
     final entries = node.children.values.toList()
-      ..sort((a, b) {
-        if (a.isFile != b.isFile) return a.isFile ? 1 : -1;
-        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      });
+      ..sort((a, b) => a.isFile != b.isFile ? (a.isFile ? 1 : -1) : a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     for (var i = 0; i < entries.length; i++) {
       final child = entries[i];
@@ -6783,35 +6600,64 @@ class PortableVcs {
       if (child.isFile) {
         stats.files++;
         final icon = _getFileIcon(child.name);
-        print('$prefix$branch$icon ${child.name.green}');
+        print('$prefix$branch${_getIconForColor(child.name, icon)} ${_colorizeFileName(child.name)}');
       } else {
         stats.directories++;
-        print('$prefix$branch📁 ${child.name.cyan.bold}/');
-        _printTreeNode(
-          child,
-          prefix: '$prefix${isLast ? '    ' : '│   '}',
-          stats: stats,
-        );
+        print('$prefix$branch${'\u{f115}'.yellow} ${child.name.white.bold}/');
+        _printTreeNode(child, prefix: '$prefix${isLast ? '    ' : '│   '}', stats: stats);
       }
     }
   }
 
-  String _getFileIcon(String fileName) {
-    final ext = p.extension(fileName).toLowerCase();
+  String _getFileIcon(String name) {
+    final ext = p.extension(name).toLowerCase();
+    const icons = {
+      'pubspec.yaml': '\u{e62a}', 'dockerfile': '\u{f308}', '.gitignore': '\u{f1d3}',
+      'readme.md': '\u{f48a}', 'license': '\u{f02d}', '.env': '\u{f462}',
+      '.dart': '\u{e798}', '.json': '\u{e60b}', '.yaml': '\u{e60c}', '.toml': '\u{e60c}',
+      '.md': '\u{f48a}', '.txt': '\u{f15c}', '.exe': '\u{f17a}', '.sh': '\u{f489}',
+      '.bat': '\u{e61e}', '.jpg': '\u{f1c5}', '.png': '\u{f1c5}', '.svg': '\u{f1c5}',
+      '.js': '\u{e74e}', '.ts': '\u{e628}', '.py': '\u{e606}', '.java': '\u{e738}',
+      '.cpp': '\u{e61d}', '.html': '\u{f13b}', '.css': '\u{f13c}', '.php': '\u{e73d}',
+      '.sql': '\u{f1c0}', '.zip': '\u{f410}', '.pdf': '\u{f1c1}', '.mp3': '\u{f001}',
+      '.mp4': '\u{f03d}', '.go': '\u{e626}'
+    };
+    return icons[name.toLowerCase()] ?? icons[ext] ?? '\u{f016}';
+  }
+
+  String _getIconForColor(String name, String icon) {
+    final ext = p.extension(name).toLowerCase();
     switch (ext) {
-      case '.dart': return '🎯';
-      case '.json':
-      case '.yaml':
-      case '.toml': return '⚙️';
-      case '.md':   return '📝';
-      case '.txt':  return '📄';
-      case '.exe':
-      case '.sh':
-      case '.bat':  return '⚡';
-      case '.jpg':
-      case '.png':
-      case '.svg':  return '🖼️';
-      default:      return '📄';
+      case '.dart': case '.js': case '.ts': case '.py': case '.java': case '.cpp': case '.go': case '.php': case '.html': case '.css':
+        return icon.cyan;
+      case '.json': case '.yaml': case '.yml': case '.toml': case '.env': case '.sql':
+        return icon.yellow;
+      case '.ps1': case '.sh': case '.bat': case '.exe':
+        return icon.green;
+      case '.jpg': case '.jpeg': case '.png': case '.svg': case '.gif': case '.mp3': case '.mp4':
+        return icon.magenta;
+      case '.md': case '.txt': case '.pdf':
+        return icon.white;
+      default:
+        return icon.grey;
+    }
+  }
+
+  String _colorizeFileName(String name) {
+    final ext = p.extension(name).toLowerCase();
+    switch (ext) {
+      case '.dart': case '.js': case '.ts': case '.py': case '.java': case '.cpp': case '.go': case '.php': case '.html': case '.css':
+        return name.cyan;
+      case '.json': case '.yaml': case '.yml': case '.toml': case '.env': case '.sql':
+        return name.yellow;
+      case '.ps1': case '.sh': case '.bat': case '.exe':
+        return name.green;
+      case '.jpg': case '.jpeg': case '.png': case '.svg': case '.gif': case '.mp3': case '.mp4':
+        return name.magenta;
+      case '.md': case '.txt': case '.pdf':
+        return name.white;
+      default:
+        return name.grey;
     }
   }
 
@@ -7827,12 +7673,11 @@ class PortableVcs {
             return new Promise((resolve) => {
               require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' }});
               require(['vs/editor/editor.main'], function () {
-                // Configuramos el DiffEditor con opciones optimizadas para visualización
                 diffEditor = monaco.editor.createDiffEditor(document.getElementById('monaco-diff-container'), {
                   theme: 'vs-dark',
                   readOnly: true,
                   renderSideBySide: true,
-                  automaticLayout: true, // Crucial para que se adapte al contenedor
+                  automaticLayout: true,
                   minimap: { enabled: true },
                   scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 }
                 });
@@ -8563,6 +8408,9 @@ class PortableVcs {
         return;
       }
 
+      print('🔍 ${"Verifying space availability..."}');
+      _getDirSize(sourceDir);
+
       print('⏳ ${"Step 1/3: Preparing destination..."}');
       destinationDir.createSync(recursive: true);
 
@@ -8596,6 +8444,12 @@ class PortableVcs {
       }
     }
     print('─' * 60 + '\n');
+  }
+
+  int _getDirSize(Directory dir) {
+    return dir.listSync(recursive: true)
+        .whereType<File>()
+        .fold(0, (sum, file) => sum + file.lengthSync());
   }
 
   Future<void> _copyDirectory(Directory source, Directory destination) async {
@@ -9284,7 +9138,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('pull', ArgParser()
       ..addOption('track', abbr: 't', help: 'Pull from a specific track')
       ..addOption('id', help: 'Pull a specific snapshot ID')
-      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot') // <-- NUEVA OPCIÓN
+      ..addOption('file', abbr: 'f', help: 'Pull only a specific file from the snapshot')
       ..addFlag('dry-run', negatable: false, help: 'Preview changes without modifying files'),
     )
     ..addCommand('list')
