@@ -1,5 +1,49 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.8-Experimental.2': r'''
+  # 🌳 TREE, STATUS & BLAME: REAL-TIME AUDIT
+
+  This release focuses on providing instantaneous visibility into your workspace drift, bridging the gap between snapshot history and local filesystem state.
+  ---
+
+  ## 🔍 WORKING TREE INTELLIGENCE [[ TAG: AUDIT ]]
+
+  • **Drift & Payload Monitoring**:
+    - `vcs status` now provides immediate visual feedback on workspace drift.
+    - Added **Large Payload Detection**: Alerts when workspace changes exceed 50MB, suggesting `.gitignore` optimization.
+    - Introduced a **Staleness Semaphore**: A quick 🔴/🟡/🟢 indicator showing how far behind your local workspace is from the last snapshot.
+
+  • **Suspicious Change Detection**:
+    - Real-time monitoring of local changes against `.gitignore` rules, alerting you to files that were accidentally added but shouldn't be tracked.
+
+  ---
+
+  ## 🌳 HIERARCHICAL REAL-TIME TREE [[ TAG: UX-UI ]]
+
+  • **Live Change Indicators**:
+    - The `vcs tree` command now performs a delta-comparison against the current working directory.
+    - Files are now marked with live status indicators:
+      - `✚` (New files pending)
+      - `✹` (Modified files pending)
+    - Reconstructed the recursive printer to provide a unified, color-coded view of the repo's health.
+
+  ---
+
+  ## 🔍 INTELLIGENT BLAME TRACEABILITY [[ TAG: FORENSICS ]]
+
+  • **Hook-Aware Blame**:
+    - Enhanced `vcs blame` to cross-reference historical snapshots with execution logs from `HookManager`.
+    - **Auto-Hook Linking**: The blame report now automatically lists which auto-hooks (linters, formatters, etc.) were triggered during the creation of a specific snapshot.
+    - Improved formatting for multi-hook runs to maintain clarity in high-frequency CI/CD scenarios.
+
+  ---
+
+  ## ⚙️ UNDER THE HOOD [[ TAG: MAINTENANCE ]]
+
+  • **Performance & Reliability**:
+    - Optimized `IndexService` lookups to handle deeper directory structures without impacting performance.
+    - Improved date-time comparison logic in logs to ensure perfect synchronization between execution timestamps and snapshot metadata.
+''',
     '0.4.8-Experimental.1': r'''
   # 🎨 NERD FONTS & CLI POLISH
 

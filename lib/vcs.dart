@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.8-Experimental.1';
+const String vcsBaseVersion = '0.4.8-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -1229,10 +1229,11 @@ class PortableVcs {
 
     final gitignoreFile = File(p.join(_cwd.path, '.gitignore'));
     List<String> explicitlyIgnoredFiles = [];
+    List<IgnoreRule> compiledRules = [];
+
     if (gitignoreFile.existsSync()) {
       try {
         final lines = await gitignoreFile.readAsLines();
-        final List<IgnoreRule> compiledRules = [];
         for (final line in lines) {
           final rule = IgnoreRule.parse(line);
           if (rule != null) compiledRules.add(rule);
@@ -1306,6 +1307,9 @@ class PortableVcs {
     );
 
     final changes = diffFingerprints(cleanLastFingerprint, currentFingerprint);
+    final suspiciousChanges = changes.where((c) {
+      return compiledRules.any((rule) => rule.matches(c.path, p.basename(c.path)));
+    }).toList();
     final lastSnapshotDate = DateTime.parse(lastEntry.createdAt);
     final daysOld = DateTime.now().difference(lastSnapshotDate).inDays;
 
@@ -1320,6 +1324,7 @@ class PortableVcs {
         } catch (_) {}
       }
     }
+
     String sizeLabel = totalBytes < 1024 * 1024 
         ? '${(totalBytes / 1024).toStringAsFixed(1)} KB' 
         : '${(totalBytes / (1024 * 1024)).toStringAsFixed(2)} MB';
@@ -1327,6 +1332,12 @@ class PortableVcs {
     if (hasDrift) {
       print(' ⚠️  ${"DRIFT DETECTED: Workspace is out of sync with HEAD".red.bold}');
       print('    ${"Some files have diverged from the last snapshot.".grey}');
+      if (totalBytes > 50 * 1024 * 1024) {
+        print(' ⚠️  ${"WARNING: Large payload (~$sizeLabel). Consider using .gitignore".yellow.bold}');
+      }
+      if (suspiciousChanges.isNotEmpty) {
+        print(' 🧐 ${"Suspicious: ${suspiciousChanges.length} change(s) match .gitignore rules.".yellow}');
+      }
     } else {
       print('\n✨ ${"Working tree clean.".green}');
       print('${"Your project is up to date with track".grey} ${targetTrackName.cyan}.');
@@ -1396,8 +1407,9 @@ class PortableVcs {
     if (added > 0) summaryParts.add('${added} added'.green);
     if (modified > 0) summaryParts.add('${modified} modified'.yellow);
     if (deleted > 0) summaryParts.add('${deleted} deleted'.red);
+    final stalenessIcon = (daysOld > 7) ? '🔴' : (daysOld > 3 ? '🟡' : '🟢');
     print('  ${"Summary:".cyan} ${summaryParts.join(', ')}');
-    print('  ${"Stale:".magenta} ${"$daysOld days since last snapshot".yellow}');
+    print('  ${"Stale:".magenta} $stalenessIcon ${"$daysOld days since last snapshot".yellow}');
     print('  ${"Impact:".magenta} ${"~$sizeLabel for next push".yellow}');
     print('  ' + '─' * 45 + '\n');
   }
@@ -6539,8 +6551,7 @@ class PortableVcs {
       final snapshot = await readSnapshot(context, targetId, password: password);
       if (snapshot == null) return;
 
-      final files = await _decodeSnapshotFiles(snapshot);
-      paths = files.keys.toList()..sort();
+      paths = snapshot.fingerprint.keys.toList()..sort();
       
       await IndexService.saveSnapshotIndex(
         remoteRepoDir: context.remoteRepoDir, 
@@ -6549,13 +6560,20 @@ class PortableVcs {
       );
     }
 
+    final currentFingerprint = await buildFingerprint(_cwd);
+    final cleanCurrent = currentFingerprint.map((k, v) => MapEntry(p.normalize(k).replaceAll('\\', '/'), v));
+    final changes = diffFingerprints(
+      cachedIndex!.map((k, v) => MapEntry(p.normalize(k).replaceAll('\\', '/'), v.toString())), 
+      cleanCurrent
+    );
+    final Map<String, ChangeKind> changeMap = {for (var c in changes) c.path: c.kind};
+
     final treeStats = TreeStats();
     print('\n🌳 ${"SNAPSHOT FILE TREE".black.onCyan}');
     print('═' * 60);
     print('${"Snapshot:".yellow.padRight(12)} ${entry.id.green} (${entry.message.grey})');
     print('${"Track:".yellow.padRight(12)} ${targetTrackName.magenta.bold}');
     print('${"Created:".yellow.padRight(12)} ${_formatDateForList(entry.createdAt)}');
-    if (cachedIndex != null) print('${"Source:".yellow.padRight(12)} ${"Delta-Index (Instant)".cyan}');
     print('═' * 60);
 
     if (paths.isEmpty) {
@@ -6563,7 +6581,7 @@ class PortableVcs {
     } else {
       final root = _buildTree(paths);
       print('${'\u{f115}'.yellow} ${context.remoteMeta.projectName.white.bold}/');
-      _printTreeNode(root, prefix: '', stats: treeStats);
+      _printTreeNode(root, prefix: '', stats: treeStats, changeMap: changeMap, currentPath: '');
     }
 
     print('─' * 60);
@@ -6588,7 +6606,12 @@ class PortableVcs {
     return root;
   }
 
-  void _printTreeNode(TreeNode node, {required String prefix, required TreeStats stats}) {
+  void _printTreeNode(TreeNode node, {
+    required String prefix, 
+    required TreeStats stats, 
+    required Map<String, ChangeKind> changeMap, 
+    required String currentPath
+  }) {
     final entries = node.children.values.toList()
       ..sort((a, b) => a.isFile != b.isFile ? (a.isFile ? 1 : -1) : a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
@@ -6596,15 +6619,23 @@ class PortableVcs {
       final child = entries[i];
       final isLast = i == entries.length - 1;
       final branch = isLast ? '└── ' : '├── ';
+      
+      final childPath = currentPath.isEmpty ? child.name : '$currentPath/${child.name}';
+      final changeKind = changeMap[childPath];
 
       if (child.isFile) {
         stats.files++;
         final icon = _getFileIcon(child.name);
-        print('$prefix$branch${_getIconForColor(child.name, icon)} ${_colorizeFileName(child.name)}');
+        
+        String statusIndicator = '';
+        if (changeKind == ChangeKind.added) statusIndicator = ' ✚'.green;
+        else if (changeKind == ChangeKind.modified) statusIndicator = ' ✹'.yellow;
+        
+        print('$prefix$branch${_getIconForColor(child.name, icon)} ${_colorizeFileName(child.name)}$statusIndicator');
       } else {
         stats.directories++;
         print('$prefix$branch${'\u{f115}'.yellow} ${child.name.white.bold}/');
-        _printTreeNode(child, prefix: '$prefix${isLast ? '    ' : '│   '}', stats: stats);
+        _printTreeNode(child, prefix: '$prefix${isLast ? '    ' : '│   '}', stats: stats, changeMap: changeMap, currentPath: childPath);
       }
     }
   }
@@ -8021,16 +8052,23 @@ class PortableVcs {
     for (final entry in results) {
       final date = _formatDateForList(entry.createdAt);
       final change = entry.changeSummary.firstWhere((c) => c.endsWith(normalizedPath));
+      final hooksRan = HookManager.findLogsForSnapshot(context.remoteRepoDir.path, entry.createdAt);
       
       String typeLabel = "MODIFIED".yellow;
       if (change.startsWith('[N]')) typeLabel = "CREATED ".green;
       if (change.startsWith('[D]')) typeLabel = "DELETED ".red;
 
       print('${'Snapshot:'.padRight(12)} ${entry.id.cyan}');
-      print('${'Date:'.padRight(12)} $date');
-      print('${'Author:'.padRight(12)} ${entry.author ?? 'unknown'}');
+      print('${'Date:'.padRight(12)} ${date.green}');
+      print('${'Author:'.padRight(12)} ${entry.author ?? 'unknown'.onBlue}');
       print('${'Action:'.padRight(12)} $typeLabel');
-      print('${'Message:'.padRight(12)} ${entry.message}');
+      print('${'Message:'.padRight(12)} ${entry.message.blue}');
+      if (hooksRan.isNotEmpty) {
+        final hookDisplay = hooksRan.length > 3 
+            ? '${hooksRan.take(3).join(', ')}... (+${hooksRan.length - 3})' 
+            : hooksRan.join(', ');
+        print('${'Auto-Hooks:'.padRight(12)} ${hookDisplay.magenta}');
+      }
       print('─' * 60);
     }
   }

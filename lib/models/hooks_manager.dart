@@ -133,6 +133,32 @@ class HookManager {
     }
   }
 
+  static List<String> findLogsForSnapshot(String remoteRepoDir, String snapshotDateStr) {
+    final hooksPath = p.join(remoteRepoDir, 'hooks');
+    final hooksDir = Directory(hooksPath);
+    
+    if (!hooksDir.existsSync()) return [];
+
+    final snapshotDate = DateTime.parse(snapshotDateStr);
+    final List<String> foundHooks = [];
+
+    final logFiles = hooksDir.listSync().where((f) => f.path.endsWith('.log'));
+
+    for (final file in logFiles) {
+      final File logFile = File(file.path);
+      final modDate = logFile.statSync().modified;
+
+      final difference = modDate.difference(snapshotDate).inMinutes.abs();
+      
+      if (difference <= 2) {
+        final hookName = p.basenameWithoutExtension(logFile.path);
+        foundHooks.add(hookName);
+      }
+    }
+
+    return foundHooks;
+  }
+
   static Future<void> _openEmbeddedEditor(File file) async {
     final completer = Completer<void>();
     Timer? heartbeatTimer;
