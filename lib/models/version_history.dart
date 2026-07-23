@@ -1,5 +1,37 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.9-Experimental.1': r'''
+  # 🍒 CHERRY-PICK & DISK AUDITING
+
+  This release introduces selective snapshot merging along with physical storage intelligence, giving you granular control over both your code history and disk space.
+  ---
+
+  ## 🍒 PRECISION CHERRY-PICK [[ TAG: WORKFLOW ]]
+
+  • **Selective File & Snapshot Injection**:
+    - Introduced `vcs cherry-pick` to pull specific changes or individual files from any snapshot across tracks.
+    - Added option `-s, --snapshot <id>` to target historical states or friendly tags.
+    - Added option `-t, --track <name>` to pull changes from alternative tracks (defaults to active).
+    - Added option `-f, --file <path>` to extract a single file cleanly into your current workspace.
+    - Supported `--dry-run` and interactive Vault password prompts for secure, zero-destructive restorations.
+
+  ---
+
+  ## 📊 PHYSICAL STORAGE AUDITING [[ TAG: MAINTENANCE ]]
+
+  • **Granular Disk Usage Breakdown**:
+    - Introduced `vcs disk-usage` featuring ID-friendly labels for direct physical folder navigation.
+    - Added detailed volumetric analysis categorized by tracks, encrypted blobs, and automation hooks.
+    - Improved storage impact reporting to help identify space hogs and optimize vault portability.
+
+  ---
+
+  ## ⚙️ UNDER THE HOOD [[ TAG: MAINTENANCE ]]
+
+  • **Integrity & Security**:
+    - Integrated SHA-256 integrity verification directly into the `cherry-pick` flow to prevent applying corrupted data from external media.
+    - Optimized path normalization and filtering to ensure cross-platform compatibility when targeting files.
+''',
     '0.4.8-Experimental.2': r'''
   # 🌳 TREE, STATUS & BLAME: REAL-TIME AUDIT
 

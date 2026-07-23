@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.7--experimental.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.9--experimental.1-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -182,6 +182,7 @@ vcs log
 <img width="533" height="713" alt="Captura de pantalla 2026-04-14 200227" src="https://github.com/user-attachments/assets/6b18c421-c70e-4715-b58f-f5d3acc7086e" />
 
 Or you can see the history of the one unique file using:
+
 ```bash
 vcs blame <File>
 ```
@@ -191,20 +192,27 @@ vcs blame <File>
 ```bash
 vcs pull
 ```
-**Especific file restore**
+**Specific file restore**
 ```bash
 vcs pull --file <File>
 ```
 > [!WARNING]
-> You need use the full path of file.
+> You must use the full path of the file.
 
-### 7. View Diff
+### 7. Cherry-Pick a Specific File
+Extract changes or individual files from another snapshot or track without a full workspace reset:
+
+```bash
+vcs cherry-pick -s <snapshot-id> -t <track> -f <file>
+```
+
+### 8. View Diff
 ```bash
 vcs diff 1776186005719 1776184573501
 ```
 <img width="634" height="938" alt="Captura de pantalla 2026-04-14 200339" src="https://github.com/user-attachments/assets/8246c0a3-8a02-47ea-9af8-5bcb0d20923e" />
 
-### 8. Preview Git Publish Changes
+### 9. Preview Git Publish Changes
 ```bash
 vcs git-diff --branch main
 ```
@@ -212,25 +220,31 @@ Shows exactly what would change in Git before publishing.
 
 <img width="846" height="987" alt="Captura de pantalla 2026-04-15 205958" src="https://github.com/user-attachments/assets/1e38c28e-a0ed-4bc6-9bf3-a30dc5dc1ccb" />
 
-### 9. View VCS diagnostics
+### 10. View VCS diagnostics
 ```bash
 vcs doctor
 ```
 <img width="428" height="603" alt="Captura de pantalla 2026-04-14 200356" src="https://github.com/user-attachments/assets/184b8914-59f8-4f14-b65d-a98ce773c9f4" />
 
-### 10. View VCS repo stats
+or analyze yout physical storage consumption:
+
+```bash
+vcs disk-usage
+```
+
+### 11. View VCS repo stats
 ```bash
 vcs stats
 ```
 <img width="355" height="246" alt="Captura de pantalla 2026-04-14 200413" src="https://github.com/user-attachments/assets/d46becf9-f5f3-41b7-8374-8933fa7d0977" />
 
-### 11. View Track list
+### 12. View Track list
 ```bash
 vcs track list
 ```
 <img width="444" height="121" alt="Captura de pantalla 2026-04-15 210828" src="https://github.com/user-attachments/assets/d683b86f-1853-422b-8f5f-2e29a908bca1" />
 
-### 12. View Track switch
+### 13. View Track switch
 ```bash
 vcs track switch Experimental
 ```
@@ -526,6 +540,8 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs pull [--track name]` | Restore latest snapshot from a specific or active track. |
 | | `vcs pull [--file, -f <File>]` | Pull only a specific file from the snapshot. | 
 | | `vcs pull --dry-run` | Preview changes without applying |
+| | `vcs cherry-pick -s <id>` | Extract specific changes or individual files from another snapshot without a full workspace reset. |
+| | `vcs cherry-pick -s <id> -t <track> -f <file>` | Cherry-pick a specific file from an alternative track with dry-run support. |
 | | `vcs merge-apply <track>` | Merge a target track into the active one using 3-way conflict resolution. |
 | | `vcs merge-apply --id <id>` | Force a manual ancestor ID for 3-way merge resolution. |
 | | `vcs revert <snapshot_id>` | Restore a specific snapshot from the active track. |
@@ -587,6 +603,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs doctor --rebuild/-r` | Physically scan the .vcs files to reconstruct the meta.json if it is lost. |
 | | `vcs doctor --reindex/-i` | Retroactively regenerate missing Fast-Diff indices for legacy snapshots. |
 | | `vcs stats` | Show size, snapshot count, and storage statistics. |
+| | `vcs disk-usage` | Analyze physical storage breakdown by tracks, encrypted blobs, and hooks using ID-friendly labels. |
 | | `vcs prune --keep N` | Keep only the newest N snapshots in the **active track**. |
 | | `vcs prune --oldr-than N` | Delete snapshots older than N days. |
 | | `vcs prune --garbage` | Deep clean: Remove orphaned data blobs. |

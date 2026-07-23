@@ -47,7 +47,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.8-Experimental.2';
+const String vcsBaseVersion = '0.4.9-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -387,6 +387,12 @@ class PortableVcs {
       - `-t, --track <name>` Source snapshot from a specific track.
       - `-f, --file <path>` Pull only a specific file from the snapshot.
       - `--dry-run` Preview changes without applying.
+    - `cherry-pick` Extract specific changes from another snapshot without overwriting the entire workspace.
+      - `-s, --snapshot <id>` Target snapshot ID or tag to cherry-pick from.
+      - `-t, --track <name>` Source track name (defaults to active track).
+      - `-f, --file <path>` Cherry-pick only a specific file path.
+      - `--dry-run` Preview changes without applying them.
+      - `-p, --password <pwd>` Vault password.
     - `merge-apply <track>` Merge a target track into the active one.
       - `--id <id>` Specify a manual ancestor ID for 3-way merge.
       - Uses temporary sandboxes for 3-way conflict resolution and auditing.
@@ -504,6 +510,7 @@ class PortableVcs {
     - `clean` Purge all temporary audit sandboxes from the system.
     - `storage-check` Hardware diagnostic and latency test of the device.
       - `--full` Perform a more intensive read|write integrity check.
+    - `disk-usage` Analyze physical storage breakdown by tracks, blobs, and hooks.
     - `migrate` Move your vault to a new drive or NAS:
       - `--to <path>` Target destination path for migration.
       - `--delete-source` Remove data from old drive after success.
@@ -886,6 +893,118 @@ class PortableVcs {
     print('💡 ${"Total:".cyan} ${repos.length} repositories found.');
     print('🚀 ${"To clone:".grey} ${"vcs clone <id_or_index>".green}');
     print('');
+  }
+
+  Future<void> diskUsage(dynamic context) async {
+    if (context == null) {
+      print('❌ Error: No active repository context found.');
+      return;
+    }
+
+    final currentRepoDir = context.remoteRepoDir is Directory 
+        ? context.remoteRepoDir 
+        : Directory(context.remoteRepoDir.path);
+        
+    final parentDir = currentRepoDir.parent;
+
+    if (!parentDir.existsSync()) {
+      print('❌ Error: Storage root directory does not exist at: ${parentDir.path}');
+      return;
+    }
+
+    print('\n📊 ${"CALCULATING GLOBAL STORAGE USAGE (USB/VAULT)...".black.onCyan}\n');
+
+    int grandTotalBytes = 0;
+    final List<Map<String, dynamic>> repoDetails = [];
+
+    int getDirectorySize(Directory dir) {
+      if (!dir.existsSync()) return 0;
+      int size = 0;
+      try {
+        for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+          if (entity is File) {
+            try {
+              size += entity.statSync().size;
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      return size;
+    }
+
+    try {
+      for (final entity in parentDir.listSync(followLinks: false)) {
+        if (entity is Directory) {
+          final folderName = p.basename(entity.path);
+          if (folderName.startsWith('.')) continue;
+
+          final repoSize = getDirectorySize(entity);
+          grandTotalBytes += repoSize;
+
+          String displayName = folderName;
+          final metaFile = File(p.join(entity.path, 'meta.json'));
+          
+          if (metaFile.existsSync()) {
+            try {
+              final content = metaFile.readAsStringSync();
+              final Map<String, dynamic> metaJson = jsonDecode(content);
+              if (metaJson.containsKey('project_name') && metaJson['project_name'] != null) {
+                displayName = metaJson['project_name'].toString();
+              } else if (metaJson.containsKey('project_name') && metaJson['project_name'] != null) {
+                displayName = metaJson['project_name'].toString();
+              }
+            } catch (_) {
+              // If there is an error during decoding, it keeps the folder name.
+            }
+          }
+
+          final isCurrent = folderName == p.basename(currentRepoDir.path);
+
+          repoDetails.add({
+            'displayName': displayName,
+            'folderName': folderName,
+            'size': repoSize,
+            'isCurrent': isCurrent,
+          });
+        }
+      }
+    } catch (e) {
+      print('⚠️ Warning while scanning storage root: $e');
+    }
+
+    String formatBytes(int bytes) {
+      if (bytes < 1024) return '$bytes B';
+      if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(2)} KB';
+      if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    }
+
+    print('═' * 65);
+    print('📁 ${"GLOBAL STORAGE BREAKDOWN REPORT".bold}');
+    print('═' * 65);
+    print('${'Storage Root Path:'.padRight(22)} ${parentDir.path}');
+    print('${'Total Used Space:'.padRight(22)} ${formatBytes(grandTotalBytes).cyan.bold}');
+    print('═' * 65);
+    print('📦 ${"REPOSITORIES / VAULTS DETAILED:".bold}');
+
+    if (repoDetails.isEmpty) {
+      print('   ${"No repositories found in storage.".italic}');
+    } else {
+      repoDetails.sort((a, b) => (b['size'] as int).compareTo(a['size'] as int));
+
+      for (final repo in repoDetails) {
+      final name = repo['displayName'] as String;
+      final folderName = repo['folderName'] as String;
+      final size = repo['size'] as int;
+      final isCurrent = repo['isCurrent'] as bool;
+      
+      final marker = isCurrent ? ' (current)'.green : '';
+      
+      final label = '$name [$folderName]';
+      print('   • ${label.padRight(45)} : ${formatBytes(size).green}$marker');
+      }
+    }
+    print('═' * 65 + '\n');
   }
 
   Future<String?> _readLocalRepoId() async {
@@ -2080,7 +2199,6 @@ class PortableVcs {
     final context = await loadRepoContext();
     if (context == null) return;
 
-    // 1. Manejo de Staging
     if (fileToStage != null) {
       final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
       if (!stagingDir.existsSync()) stagingDir.createSync(recursive: true);
@@ -2097,7 +2215,6 @@ class PortableVcs {
       return;
     }
 
-    // 2. Validación de Metadata y Contexto
     final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
     try {
       if (metaFile.existsSync()) jsonDecode(await metaFile.readAsString());
@@ -2146,7 +2263,6 @@ class PortableVcs {
     }
 
     await _withLock(context.remoteRepoDir, () async {
-      // 3. Fingerprinting y Diff
       final cacheFile = File(p.join(context.remoteRepoDir.path, '.vcs_cache.json'));
       Map<String, String>? cache;
       if (cacheFile.existsSync()) {
@@ -2177,7 +2293,6 @@ class PortableVcs {
         return;
       }
 
-      // 4. Empaquetado y Vista Previa
       print('📦 Packing and encrypting...');
       final result = await _createZipFromCurrentProject(sourcePath: workingDir);
       final zipBytes = result.bytes;
@@ -2210,7 +2325,6 @@ class PortableVcs {
         if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
       }
 
-      // 5. Preparación de Amend y Hooks
       String? parentId = amend ? (trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId) : (trackData.logs.isNotEmpty ? trackData.logs.first.id : trackData.originSnapshotId);
       
       if (amend) {
@@ -2224,7 +2338,6 @@ class PortableVcs {
       if (!(await HookManager.runAutoHooks(context, extraEnv: hookContext))) { print('❌ Push aborted by automation hook.'); return; }
       await HookManager.clearLogs(context.remoteRepoDir.path);
 
-      // 6. Integridad y Escritura
       try {
         print('🛡️ Running integrity verification...');
         ZipDecoder().decodeBytes(zipBytes, verify: true);
@@ -2242,7 +2355,6 @@ class PortableVcs {
       );
       await finalFile.openWrite().addStream(Stream.value(encrypted).withProgress(visualizer));
       
-      // 7. Actualización final
       final entry = SnapshotLogEntry(id: snapshotId, message: message, author: author, createdAt: DateTime.now().toUtc().toIso8601String(), fileName: '$snapshotId.vcs', changeSummary: changes.map((e) => e.toTag()).toList(), hash: sha256.convert(encrypted).toString(), notes: amend ? trackData.logs.first.notes : [], parentId: parentId);
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
       updatedTracks[targetTrackName] = TrackState(logs: amend ? [entry, ...trackData.logs.sublist(1)] : [entry, ...trackData.logs], originSnapshotId: trackData.originSnapshotId, originTrackName: trackData.originTrackName);
@@ -3313,7 +3425,7 @@ class PortableVcs {
     bool isJsonClean(List<int> bytes) {
       if (bytes.isEmpty) return false;
       if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return false;
-      return bytes[0] == 123; // '{'
+      return bytes[0] == 123;
     }
 
     final snapshotsLackingIndex = <String>[];
@@ -4242,6 +4354,169 @@ class PortableVcs {
     } catch (e) {
       print('\n❌ ${'CRITICAL ERROR during pull:'.red} $e');
       print('ℹ️  Suggestion: Verify your drive connection and try pulling again.');
+    }
+  }
+
+  Future<void> cherryPick({
+    required String snapshotId,
+    String? track,
+    String? password,
+    bool dryRun = false,
+    String? fileFilter,
+  }) async {
+    final context = await loadRepoContext();
+    if (context == null) return;
+
+    final targetTrackName = track ?? context.remoteMeta.activeTrack;
+    final trackData = context.remoteMeta.tracks[targetTrackName];
+
+    if (trackData == null) {
+      print('❌ Track "$targetTrackName" not found.');
+      return;
+    }
+
+    String finalSnapshotId = snapshotId;
+    if (context.remoteMeta.tags.containsKey(snapshotId)) {
+      final resolvedId = context.remoteMeta.tags[snapshotId]!;
+      print('🏷️ Tag detected: ${snapshotId.cyan} -> Resolving to $resolvedId');
+      finalSnapshotId = resolvedId;
+    }
+
+    final entry = trackData.logs.firstWhere(
+      (e) => e.id == finalSnapshotId,
+      orElse: () => SnapshotLogEntry(id: '', message: '', createdAt: '', fileName: '', author: '', changeSummary: []),
+    );
+
+    if (entry.id.isEmpty) {
+      print('❌ Snapshot ID "$finalSnapshotId" not found in track "$targetTrackName".');
+      return;
+    }
+
+    final headerLabel = dryRun ? '--- CHERRY-PICK DRY RUN (PREVIEW) ---' : '--- CHERRY-PICK PREVIEW ---';
+    print('\n${headerLabel.black.onCyan}');
+    print('${'Source Track:'.padRight(15)} $targetTrackName');
+    print('${'Snapshot ID:'.padRight(15)} ${entry.id.green}');
+    print('${'Message:'.padRight(15)} ${entry.message.yellow}');
+    print('${'Author:'.padRight(15)} ${entry.author ?? 'Unknown'}');
+    print('');
+
+    final snapshotFile = File(p.join(context.remoteRepoDir.path, 'snapshots', entry.fileName));
+
+    if (!snapshotFile.existsSync()) {
+      print('❌ ${"CRITICAL:".red} Snapshot file missing at ${snapshotFile.path.grey}');
+      return;
+    }
+
+    if (entry.hash != null) {
+      stdout.write('🛡️ Verifying snapshot integrity... ');
+      final bytes = await snapshotFile.readAsBytes();
+      final currentHash = sha256.convert(bytes).toString();
+
+      if (currentHash != entry.hash) {
+        print('\n\n❌ ${'INTEGRITY CHECK FAILED'.red.bold}');
+        print('Expected: ${entry.hash?.grey}');
+        print('Actual:   ${currentHash.red}');
+        print('\n🚫 Cherry-pick aborted to prevent applying corrupted data.');
+        return;
+      }
+      print('${"OK".green}');
+    }
+
+    if (entry.changeSummary.isEmpty) {
+      print('   ${"(No file changes recorded)".grey.italic}');
+    } else {
+      print('📦 ${"Changes to apply via Cherry-Pick:".bold}');
+      
+      if (fileFilter != null) {
+        final normalizedFilter = p.normalize(fileFilter).replaceAll('\\', '/');
+        final match = entry.changeSummary.firstWhere(
+          (c) => c.substring(3).trim() == normalizedFilter,
+          orElse: () => ''
+        );
+        
+        if (match.isNotEmpty) {
+          final c = match;
+          if (c.startsWith('[N]')) print('   ${'[+]'.green} ${c.substring(3).trim()}');
+          else if (c.startsWith('[M]')) print('   ${'[~]'.yellow} ${c.substring(3).trim()}');
+          else if (c.startsWith('[D]')) print('   ${'[-]'.red} ${c.substring(3).trim()}');
+          else print('   $c');
+        } else {
+          print('   ${'ℹ️'.cyan} No changes recorded for ${fileFilter.grey} in this snapshot.');
+        }
+      } else {
+        for (final c in entry.changeSummary) {
+          if (c.startsWith('[N]')) print('   ${'[+]'.green} ${c.substring(3).trim()}');
+          else if (c.startsWith('[M]')) print('   ${'[~]'.yellow} ${c.substring(3).trim()}');
+          else if (c.startsWith('[D]')) print('   ${'[-]'.red} ${c.substring(3).trim()} (Skipped in cherry-pick unless forced)');
+          else print('   $c');
+        }
+      }
+    }
+
+    if (dryRun) {
+      print('\n${'ℹ️  INFO:'.cyan} Dry run mode enabled. No files were touched.\n');
+      return;
+    }
+
+    print('\n${'⚠️  WARNING:'.red.bold} This will apply changes from snapshot $finalSnapshotId into your current workspace.');
+    stdout.write('Proceed with cherry-pick? (y/N): ');
+    String? confirm = stdin.readLineSync()?.trim().toLowerCase();
+
+    if (confirm != 'y' && confirm != 'yes') {
+      print('🚫 Cherry-pick aborted.');
+      return;
+    }
+
+    final finalPassword = password ?? askPassword();
+    if (finalPassword == null || finalPassword.isEmpty) {
+      print('❌ Password required.');
+      return;
+    }
+
+    print('\n🍒 Applying Cherry-pick from snapshot ${finalSnapshotId.green}...');
+
+    try {
+      final snapshot = await readSnapshot(context, finalSnapshotId, password: finalPassword);
+      if (snapshot == null) {
+        print('❌ Failed to read or decrypt snapshot data. Check your password.');
+        return;
+      }
+
+      final filesInSnapshot = await _decodeSnapshotFiles(snapshot);
+      
+      final Map<String, List<int>> filesToApply = {};
+      if (fileFilter != null) {
+        final normalizedFilter = p.normalize(fileFilter).replaceAll('\\', '/');
+        final found = filesInSnapshot.entries.where((e) => e.key == normalizedFilter);
+        if (found.isEmpty) {
+          print('❌ File "$fileFilter" not found in snapshot.');
+          return;
+        }
+        filesToApply.addAll(Map.fromEntries(found));
+      } else {
+        filesToApply.addAll(filesInSnapshot);
+      }
+
+      int appliedCount = 0;
+      for (final sEntry in filesToApply.entries) {
+        final path = sEntry.key;
+        final bytes = Uint8List.fromList(sEntry.value.cast<int>());
+        final file = File(path);
+
+        final directory = Directory(file.parent.path);
+        if (!await directory.exists()) {
+          await directory.create(recursive: true);
+        }
+
+        await file.writeAsBytes(bytes, flush: true);
+        appliedCount++;
+        print('   ${'[+]'.green} Applied $path');
+      }
+
+      print('\n✅ Cherry-pick complete!');
+      print('   ${appliedCount.toString().green} files successfully cherry-picked into current workspace.\n');
+    } catch (e) {
+      print('\n❌ ${'CRITICAL ERROR during cherry-pick:'.red} $e');
     }
   }
 
@@ -9139,6 +9414,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('storage-check', ArgParser()
       ..addFlag('full', negatable: false, help: 'Perform a more intensive read check')
     )
+    ..addCommand('disk-usage')
     ..addCommand('roadmap', ArgParser()
       ..addOption('task-tag', abbr: 'g', help: 'Set tag for task insertion (e.g. CORE, PERF)')
     )
@@ -9148,6 +9424,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addFlag('remove', abbr: 'r', negatable: false, help: 'Remove a note')
       ..addOption('index', abbr: 'i', help: 'Index of the note to remove')
       ..addFlag('all', negatable: false, help: 'Remove all notes from the snapshot')
+    )
+    ..addCommand('cherry-pick', ArgParser()
+      ..addOption('snapshot', abbr: 's', help: 'Target snapshot ID or tag to cherry-pick from')
+      ..addOption('track', abbr: 't', help: 'Source track name')
+      ..addOption('file', abbr: 'f', help: 'Cherry-pick only a specific file path')
+      ..addFlag('dry-run', negatable: false, help: 'Preview changes')
+      ..addOption('password', abbr: 'p', help: 'Vault password')
     )
     ..addCommand('tag', ArgParser()
       ..addOption('id', abbr: 'i', help: 'Specific snapshot ID to tag')
@@ -9360,6 +9643,34 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'purge': await app.purge(); break;
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
+      case 'disk-usage': await app.diskUsage(context); break;
+
+      case 'cherry-pick':
+        final subResult = result.command;
+        if (subResult == null) {
+          print('❌ Error: Missing subcommand arguments.');
+          return;
+        }
+
+        final snapshotId = subResult['snapshot'] as String?;
+        if (snapshotId == null || snapshotId.isEmpty) {
+          print('❌ Error: You must specify a target snapshot ID using --snapshot or -s.');
+          return;
+        }
+
+        final track = subResult['track'] as String?;
+        final fileFilter = subResult['file'] as String?;
+        final dryRun = subResult['dry-run'] as bool;
+        final password = subResult['password'] as String?;
+
+        await app.cherryPick(
+          snapshotId: snapshotId,
+          track: track,
+          fileFilter: fileFilter,
+          dryRun: dryRun,
+          password: password,
+        );
+        break;
 
       case 'blame':
         final argResults = result.command;
