@@ -1,7 +1,7 @@
 # Portable VCS
 
 ![Dart](https://img.shields.io/badge/language-Dart-blue)
-![Version](https://img.shields.io/badge/version-0.4.9--experimental.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.9--experimental.2-blue)
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -533,6 +533,13 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs clone [id] [--into dir]` | Clone a repository from USB into a specific local folder (with extraction feedback). |
 | | `vcs bind [id]` | Bind the current folder to an existing remote repository. |
 | | `vcs open` | Smart, context-unbound opener tool. Execute from any terminal path without requiring a local initialized repository. |
+| **Dotfiles** | `vcs dot init [-n name]` | Initialize a local folder as a dotfiles repository for system configuration sync. |
+| | `vcs dot add [-a alias] [-f path]` | Register a file or directory to track as a dotfile with a friendly alias. |
+| | `vcs dot push [-m msg] [-a aut]` | Encrypt and push current local dotfiles state into a secure snapshot. |
+| | `vcs dot pull` | Restore and deploy dotfiles from the repository to local system paths. |
+| | `vcs dot list` | List all registered dotfiles in the repository. |
+| | `vcs dot status` | Compare registered dotfiles against current local system files. |
+| | `vcs dot log` | Show snapshot history of the dotfiles repository. |
 | **Workflow** | `vcs push "msg" [-a aut] [--track t]` | Create an encrypted snapshot (defaults to active track). |
 | | `vcs push --file <path>` | Add a specific file to the staging area before push. |
 | | `vcs tag <name>` | Assign a friendly label to a snapshot |
@@ -571,6 +578,7 @@ This flow ensures that when you finally say **"Feature Complete"** in Git, the c
 | | `vcs log --full` | Show extended details (IDs, dates, metadata). |
 | | `vcs log --standard` | Show summary with 5-file change preview. |
 | | `vcs log --summary` | (Default) Show only statistics and message. |
+| | `vcs loc` | Count lines of code and analyze file statistics in the workspace. |
 | | `vcs show --track/-t <id>` | Displays detailed information about a snapshot in the **active track** or in a **specific track**. |
 | | `vcs tree [id]` | Displays the file tree structure of a snapshot in the **active track** or in a **specific track**. |
 | | `vcs search <query>` | Search text inside encrypted snapshots with **smart context display**. |

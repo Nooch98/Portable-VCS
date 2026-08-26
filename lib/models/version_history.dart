@@ -1,5 +1,35 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.9-Experimental.2': r'''
+  # 📊 METRICS, JSON SUPPORT, TERMINAL ROBUSTNESS & DOTFILES
+
+  This release brings extended programmatic output support, a new code metrics command, bulletproof cross-platform terminal compatibility, and advanced dotfiles management.
+  ---
+
+  ## 📈 METRICS & PROGRAMMATIC OUTPUT [[ TAG: FEATURES ]]
+
+  • **JSON Support & Code Statistics**:
+    - Added flag `-j, --json` to `stats`, `status`, `doctor`, and `verify` commands for machine-readable output.
+    - Introduced the new `loc` command to quickly analyze code lines and file statistics.
+
+  ## 🌐 DOTFILES REPO MANAGEMENT [[ TAG: FEATURES ]]
+
+  • **Encrypted Dotfiles Sync & Robustness**:
+    - **Purpose**: Designed to easily configure systems across different machines and securely transport sensitive files containing API keys, credentials, or secrets through fully encrypted snapshots.
+    - Added `dot` command suite to initialize, manage, and snapshot system configurations.
+    - Features `list`, `status`, and `log` commands for better visibility into configuration tracking.
+    - Implemented plaintext metadata (`meta.json`) for efficiency, keeping sensitive payload snapshots encrypted.
+    - **Enhanced Packaging & UX**: Refactored `push` and `pull` using in-memory archive processing for foolproof cross-platform file handling, alongside fully localized CLI feedback logs.
+
+  ---
+
+  ## 🛡️ CROSS-PLATFORM STABILITY [[ TAG: FIXES ]]
+
+  • **Terminal TTY & Windows Emulator Fixes**:
+    - Resolved input hanging issues on Windows emulators (such as Alacritty and Winpty) by shifting to raw byte reading for interactive inputs.
+    - Fixed interactive confirmations and password prompts to work seamlessly across alternative terminals without buffering blocks.
+    - Improved repository lock handling and resilience during failed or interrupted flows.
+''',
     '0.4.9-Experimental.1': r'''
   # 🍒 CHERRY-PICK & DISK AUDITING
 

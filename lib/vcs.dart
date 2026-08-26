@@ -38,16 +38,18 @@ import 'package:vcs/models/version_history.dart';
 import 'package:highlight/highlight.dart';
 import 'package:highlight/languages/all.dart';
 import 'package:vcs/services/cleanup_service.dart';
+import 'package:vcs/services/dotfiles_service.dart';
 import 'package:vcs/services/history_parser.dart';
 import 'package:vcs/services/release_service.dart';
 import 'package:vcs/services/roadmap_manager.dart';
 import 'package:vcs/services/snapshot_snadbox.dart';
+import 'package:vcs/utils/file_stats.dart';
 import 'package:vcs/utils/progress_visualizer.dart';
 import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.9-Experimental.1';
+const String vcsBaseVersion = '0.4.9-Experimental.2';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -142,7 +144,7 @@ class PortableVcs {
               print('🚀 ${"Local version ($localV) is ahead of GitHub ($detectedRemoteV).".magenta}');
             }
             
-            stdout.write('Force re-download and re-compile? (y/n): ');
+            if (!promptConfirm('Force re-download and re-compile?: ')) return;
             final force = stdin.readLineSync();
             if (force?.toLowerCase() != 'y') return;
           } else {
@@ -364,6 +366,25 @@ class PortableVcs {
       - `usb`            Opens the root of the connected Vault drive.
       - `<name>`         Scans /USB/Local. If found on USB, opens the encrypted folder (even with random IDs).
 
+    ## 🌐 DOTFILES (Global System Configs)
+    - `dot init` Initialize a global encrypted repository for system dotfiles on the vault.
+      - `-n, --name <name>` Name for the dotfiles repository (default: 'dotfiles').
+      - `-p, --password <pwd>` Vault password.
+    - `dot add` Register and make a local system file/folder portable.
+      - `-a, --alias <name>` Alias name for the dotfile (e.g., `alacritty`).
+      - `-f, --path <path>` Absolute path to the file or directory.
+      - `-d, --description <desc>` Optional description.
+    - `dot push` Take an encrypted snapshot of all registered dotfiles and upload to vault.
+      - `-m, --message <msg>` Commit message for the snapshot.
+      - `-a, --author <name>` Author name.
+      - `-p, --password <pwd>` Vault password.
+    - `dot pull` Restore and deploy dotfiles from the vault to local system paths.
+      - `-p, --password <pwd>` Vault password.
+    - `dot list` View all registered dotfiles, their aliases, and portable paths.
+    - `dot status` Check the status of registered dotfiles and verify if they exist locally.
+    - `dot log` View the history of snapshot pushes (commits) for the repository.
+      - `-t, --track <track>` Specific track name to view logs from (optional).
+
     ## 🛤️ TRACKS MANAGEMENT
     - `track list` List all available tracks.
     - `track current` Show the name of the active track.
@@ -447,6 +468,7 @@ class PortableVcs {
     - `ui` Launch the Web Dashboard (Split-view diff support).
     - `inspect [id]` Deep audit of a snapshot's metadata, changes, and notes.
     - `status` Compare local tree vs latest of the active track.
+      - `--json, -j` Show status info on JSON format
     - `di` Inspect the pre-computed **Delta-Index** of a snapshot.
       - `-i, --id <id>` Target a specific snapshot (defaults to latest).
       - `-e, --ext <.ext>` Filter files by type (e.g., `vcs di --ext .dart`).
@@ -477,7 +499,11 @@ class PortableVcs {
       - `--summary` (Default) Show only statistics and message.
     - `show <id|tag>` Show details of a specific snapshot (including all notes).
     - `tree [id|tag]` Show visual file tree representation.
+    - `loc` Analyze lines of code (LOC) breakdown by file type (respects `.gitignore`).
+      - `-t, --track <name>` Target a specific track for analysis.
+      - `-i, --id <id>` Target a specific snapshot ID instead of working tree.
     - `verify <id|--all>` Verify cryptographic integrity and **index health**.
+      - `--json, -j` Show al verify cryptographic integrity info in JSON format
 
     ## ⌨️ ALIASES (USB Portable)
     - `alias --list, -l` List all custom shortcuts saved in the USB.
@@ -499,7 +525,9 @@ class PortableVcs {
     - `doctor` Run repository diagnostics, health checks and **meta-recovery**.
       - `--rebuild, -r` Physically scan the USB to reconstruct meta.json or missing indices.
       - `--reindex, -i` Retroactively regenerate missing Fast-Diff indices for legacy snapshots.
+      - `--json, -j` Show doctor command results on JSON fomrat
     - `stats` Show global repo metrics, track breakdown and **index coverage**.
+      - `--json, -j` Show stats info on JSON format
     - `benchmark` Performance stress test (IOPS, Crypto & Transfer speed).
       - `-i, --intensive` Run a high-load test with larger data buffers.
     - `prune` Clean up old snapshots (Ancestry-safe):
@@ -578,6 +606,155 @@ class PortableVcs {
     print(_renderMarkdown(changelogMarkdown));
   }
 
+  Future<void> handleLoc(
+    List<String> args, {
+    String? track,
+    String? snapshotId,
+    bool isJson = false,
+  }) async {
+    final targetDir = Directory.current;
+    if (!isJson) {
+      print('📊 Analyzing lines of code in: ${targetDir.path}\n'.cyan);
+    }
+
+    final ignorePatterns = <String>[
+      '.vcs',
+      '.staging',
+      '.git'
+    ];
+
+    final gitignoreFile = File('${targetDir.path}/.gitignore');
+    if (gitignoreFile.existsSync()) {
+      try {
+        final lines = gitignoreFile.readAsLinesSync();
+        for (var line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.isNotEmpty && !trimmed.startsWith('#')) {
+            ignorePatterns.add(trimmed.replaceAll(RegExp(r'^/|/$'), ''));
+          }
+        }
+      } catch (_) {}
+    }
+
+    final statsByExtension = <String, FileStats>{};
+    int totalFiles = 0;
+    int totalLines = 0;
+
+    try {
+      for (var entity in targetDir.listSync(recursive: true, followLinks: false)) {
+        if (entity is File) {
+          final relativePath = _getRelativePath(targetDir.path, entity.path);
+          
+          if (_isIgnored(relativePath, ignorePatterns)) {
+            continue;
+          }
+
+          final ext = _getFileExtension(entity.path);
+          
+          try {
+            final lines = entity.readAsLinesSync();
+            final lineCount = lines.length;
+            
+            statsByExtension.putIfAbsent(ext, () => FileStats(ext));
+            statsByExtension[ext]!.fileCount++;
+            statsByExtension[ext]!.lineCount += lineCount;
+            
+            totalFiles++;
+            totalLines += lineCount;
+          } catch (_) {}
+        }
+      }
+
+      final sortedStats = statsByExtension.values.toList()
+        ..sort((a, b) => b.lineCount.compareTo(a.lineCount));
+
+      if (isJson) {
+        final jsonOutput = {
+          'path': targetDir.path,
+          'totalFiles': totalFiles,
+          'totalLines': totalLines,
+          'breakdown': sortedStats.map((stat) {
+            final percentage = totalLines > 0 ? double.parse(((stat.lineCount / totalLines) * 100).toStringAsFixed(1)) : 0.0;
+            return {
+              'extension': stat.extension,
+              'files': stat.fileCount,
+              'lines': stat.lineCount,
+              'percentage': percentage,
+            };
+          }).toList(),
+        };
+        print(jsonEncode(jsonOutput));
+        return;
+      }
+
+      print('--------------------------------------------------'.grey);
+      print(' EXTENSION     FILES       LINES      % OF CODE   '.bold.yellow);
+      print('--------------------------------------------------'.grey);
+
+      for (var stat in sortedStats) {
+        final percentage = totalLines > 0 ? ((stat.lineCount / totalLines) * 100).toStringAsFixed(1) : '0.0';
+        final extLabel = stat.extension.padRight(12).green;
+        final filesLabel = stat.fileCount.toString().padRight(11);
+        final linesLabel = stat.lineCount.toString().padRight(11);
+        final pctLabel = '$percentage%'.cyan;
+        
+        print(' $extLabel $filesLabel $linesLabel $pctLabel');
+      }
+
+      print('--------------------------------------------------'.grey);
+      print(' Total Files: $totalFiles'.bold);
+      print(' Total Lines: $totalLines LOC'.bold.green);
+      print('==================================================\n'.grey);
+
+    } catch (e) {
+      if (isJson) {
+        print(jsonEncode({'error': e.toString()}));
+      } else {
+        print('[ERROR] Failed to analyze lines of code: $e'.red);
+      }
+    }
+  }
+
+  String _getFileExtension(String path) {
+    final index = path.lastIndexOf('.');
+    if (index == -1 || index == path.length - 1) {
+      return '(no ext)';
+    }
+    return path.substring(index).toLowerCase();
+  }
+
+  String _getRelativePath(String base, String fullPath) {
+    if (fullPath.startsWith(base)) {
+      var rel = fullPath.substring(base.length);
+      if (rel.startsWith(Platform.pathSeparator)) {
+        rel = rel.substring(1);
+      }
+      return rel.replaceAll('\\', '/');
+    }
+    return fullPath;
+  }
+
+  bool _isIgnored(String relativePath, List<String> patterns) {
+    final segments = relativePath.split('/');
+    
+    for (var pattern in patterns) {
+      if (segments.contains(pattern)) {
+        return true;
+      }
+      if (pattern.startsWith('*.')) {
+        final ext = pattern.substring(1);
+        if (relativePath.endsWith(ext)) return true;
+      }
+      if (pattern.endsWith('/') && relativePath.startsWith(pattern)) {
+        return true;
+      }
+      if (relativePath == pattern) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<void> setupDrive() async {
     print('\n🔍 ${"SCANNING FOR EXTERNAL DRIVES".black.onCyan}');
     
@@ -633,11 +810,11 @@ class PortableVcs {
     if (isUpgrade) {
       print('\n✨ ${"UPGRADE MODE:".black.onCyan} This drive already has a VCS marker.');
       print('Metadata will be updated to v0.3 (Host, Date, OS) without touching your repositories.');
-      stdout.write('Proceed with metadata upgrade? (y/N): ');
+      if (!promptConfirm('Proceed with metadata upgrade? (y/N): '.bold)) return;
     } else {
       print('\n⚠️  ${"PROVISIONING MODE:".black.onYellow} You are about to prepare a new VCS drive.');
       print('This will create the marker and the ${remoteReposDir.cyan} directory.');
-      stdout.write('Confirm provisioning? (y/N): ');
+      if (!promptConfirm('Confirm provisioning? (y/N): '.bold)) return;
     }
 
     final confirm = stdin.readLineSync()?.toLowerCase();
@@ -1319,15 +1496,17 @@ class PortableVcs {
     print('✅ ${all ? "All notes" : "Note"} removed from snapshot ${idToFind.cyan}.');
   }
 
-  Future<void> status({String? password, showIgnored = false}) async {
+  Future<void> status({
+  String? password, 
+  bool showIgnored = false,
+  Map<String, dynamic>? command,
+  List<String> args = const [],
+}) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
     final targetTrackName = context.remoteMeta.activeTrack;
     final trackData = context.remoteMeta.tracks[targetTrackName];
-
-    print('\n🔍 ${"WORKING TREE STATUS".black.onCyan}');
-    print('${"On track:".yellow} ${targetTrackName.magenta.bold}');
 
     final rawFingerprint = await buildFingerprint(_cwd);
     var currentFingerprint = <String, String>{};
@@ -1384,53 +1563,59 @@ class PortableVcs {
       }
     }
 
+    List<FileChange> changes = [];
+    bool isEmptyProject = false;
+
     if (trackData == null || trackData.logs.isEmpty) {
       if (currentFingerprint.isEmpty) {
-        print('\n✨ ${"Empty project. Nothing to track.".grey}');
-        return;
+        isEmptyProject = true;
+      } else {
+        changes = currentFingerprint.keys.map((path) => FileChange(
+          ChangeKind.added,
+          path,
+        )).toList();
       }
-      print('\n${"Untracked files (Initial commit):".bold}');
-      print('  ${"(use \"vcs push <message>\" to create the initial snapshot)".grey}');
-      for (final path in (currentFingerprint.keys.toList()..sort())) {
-        print('    ${'NEW'.black.onGreen.padRight(7)} $path');
+    } else {
+      final lastEntry = trackData.logs.first;
+      Map<String, String>? lastFingerprint = await IndexService.loadSnapshotIndex(
+        context.remoteRepoDir, 
+        lastEntry.id
+      );
+
+      if (lastFingerprint == null) {
+        String? finalPassword = password;
+        if (finalPassword == null && context.remoteMeta.formatVersion >= 3) {
+          finalPassword = askPassword();
+        }
+        if (finalPassword == null && context.remoteMeta.formatVersion >= 3) {
+          print('❌ ${"Password required for legacy snapshots in v3+ repositories.".red}');
+          return;
+        }
+        final snapshot = await readSnapshot(context, lastEntry.id, password: finalPassword ?? '');
+        if (snapshot == null) {
+          print('❌ ${"Could not read snapshot data for comparison.".red}');
+          return;
+        }
+        lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
       }
-      return;
+
+      final cleanLastFingerprint = lastFingerprint.map(
+        (key, value) => MapEntry(p.normalize(key).replaceAll('\\', '/'), value)
+      );
+
+      changes = diffFingerprints(cleanLastFingerprint, currentFingerprint);
     }
 
-    final lastEntry = trackData.logs.first;
-    Map<String, String>? lastFingerprint = await IndexService.loadSnapshotIndex(
-      context.remoteRepoDir, 
-      lastEntry.id
-    );
-
-    if (lastFingerprint == null) {
-      print('ℹ️  ${"Fast-index missing. Reconstructing from snapshot...".grey}');
-      String? finalPassword = password;
-      if (finalPassword == null && context.remoteMeta.formatVersion >= 3) {
-        finalPassword = askPassword();
-      }
-      if (finalPassword == null && context.remoteMeta.formatVersion >= 3) {
-        print('❌ ${"Password required for legacy snapshots in v3+ repositories.".red}');
-        return;
-      }
-      final snapshot = await readSnapshot(context, lastEntry.id, password: finalPassword ?? '');
-      if (snapshot == null) {
-        print('❌ ${"Could not read snapshot data for comparison.".red}');
-        return;
-      }
-      lastFingerprint = Map<String, String>.from(snapshot.fingerprint);
-    }
-
-    final cleanLastFingerprint = lastFingerprint.map(
-      (key, value) => MapEntry(p.normalize(key).replaceAll('\\', '/'), value)
-    );
-
-    final changes = diffFingerprints(cleanLastFingerprint, currentFingerprint);
     final suspiciousChanges = changes.where((c) {
       return compiledRules.any((rule) => rule.matches(c.path, p.basename(c.path)));
     }).toList();
-    final lastSnapshotDate = DateTime.parse(lastEntry.createdAt);
-    final daysOld = DateTime.now().difference(lastSnapshotDate).inDays;
+    
+    final lastSnapshotDate = trackData != null && trackData.logs.isNotEmpty 
+        ? DateTime.parse(trackData.logs.first.createdAt) 
+        : DateTime.now();
+    final timeDifference = DateTime.now().difference(lastSnapshotDate);
+    final hoursOld = timeDifference.inHours;
+    final daysOld = timeDifference.inDays;
 
     bool hasDrift = changes.isNotEmpty;
 
@@ -1448,6 +1633,57 @@ class PortableVcs {
         ? '${(totalBytes / 1024).toStringAsFixed(1)} KB' 
         : '${(totalBytes / (1024 * 1024)).toStringAsFixed(2)} MB';
 
+    int added = 0, modified = 0, deleted = 0;
+    for (var c in changes) {
+      if (c.kind == ChangeKind.added) added++;
+      if (c.kind == ChangeKind.modified) modified++;
+      if (c.kind == ChangeKind.deleted) deleted++;
+    }
+
+    final bool isJsonMode = command?['json'] == true || args.contains('--json');
+
+    if (isJsonMode) {
+      final statusMap = {
+        'track': targetTrackName,
+        'hasDrift': hasDrift,
+        'isEmptyProject': isEmptyProject,
+        'summary': {
+          'added': added,
+          'modified': modified,
+          'deleted': deleted,
+          'totalChanges': changes.length,
+          'estimatedPayloadBytes': totalBytes,
+          'estimatedPayloadFormatted': sizeLabel,
+        },
+        'changes': changes.map((c) => {
+          'path': c.path,
+          'kind': c.kind.name,
+        }).toList(),
+        'ignoredFiles': showIgnored ? (explicitlyIgnoredFiles..sort()) : null,
+        'suspiciousChangesCount': suspiciousChanges.length,
+      };
+
+      print(const JsonEncoder.withIndent('  ').convert(statusMap));
+      return;
+    }
+
+    print('\n🔍 ${"WORKING TREE STATUS".black.onCyan}');
+    print('${"On track:".yellow} ${targetTrackName.magenta.bold}');
+
+    if (isEmptyProject) {
+      print('\n✨ ${"Empty project. Nothing to track.".grey}');
+      return;
+    }
+
+    if (trackData == null || trackData.logs.isEmpty) {
+      print('\n${"Untracked files (Initial commit):".bold}');
+      print('  ${"(use \"vcs push <message>\" to create the initial snapshot)".grey}');
+      for (final change in (changes..sort((a, b) => a.path.compareTo(b.path)))) {
+        print('    ${'NEW'.black.onGreen.padRight(7)} ${change.path.green}');
+      }
+      return;
+    }
+
     if (hasDrift) {
       print(' ⚠️  ${"DRIFT DETECTED: Workspace is out of sync with HEAD".red.bold}');
       print('    ${"Some files have diverged from the last snapshot.".grey}');
@@ -1460,6 +1696,11 @@ class PortableVcs {
     } else {
       print('\n✨ ${"Working tree clean.".green}');
       print('${"Your project is up to date with track".grey} ${targetTrackName.cyan}.');
+      
+      if (hoursOld >= 4) {
+        final timeStr = hoursOld < 24 ? '${hoursOld} hours' : '${daysOld} days';
+        print(' 💡 ${"Reminder:".cyan} ${"No snapshots taken in $timeStr on track '$targetTrackName'.".yellow}\n');
+      }
       return;
     }
 
@@ -1503,7 +1744,7 @@ class PortableVcs {
     print('\n${"Changes not yet pushed:".bold}');
     print('  ${"(use \"vcs push <message>\" to save these changes)".grey}\n');
 
-    int added = 0, modified = 0, deleted = 0;
+    int countedAdded = 0, countedModified = 0, countedDeleted = 0;
     groups.forEach((groupName, groupChanges) {
       if (groupChanges.isEmpty) return;
       print('  $groupName'.bold.underline);
@@ -1512,9 +1753,9 @@ class PortableVcs {
         String label;
         String coloredPath;
         switch (change.kind) {
-          case ChangeKind.added: label = 'NEW'.black.onGreen; coloredPath = change.path.green; added++; break;
-          case ChangeKind.modified: label = 'MOD'.black.onYellow; coloredPath = change.path.yellow; modified++; break;
-          case ChangeKind.deleted: label = 'DEL'.black.onRed; coloredPath = change.path.red; deleted++; break;
+          case ChangeKind.added: label = 'NEW'.black.onGreen; coloredPath = change.path.green; countedAdded++; break;
+          case ChangeKind.modified: label = 'MOD'.black.onYellow; coloredPath = change.path.yellow; countedModified++; break;
+          case ChangeKind.deleted: label = 'DEL'.black.onRed; coloredPath = change.path.red; countedDeleted++; break;
         }
         print('    ${label.padRight(7)} $coloredPath');
       }
@@ -1523,12 +1764,17 @@ class PortableVcs {
 
     print('  ' + '─' * 45);
     List<String> summaryParts = [];
-    if (added > 0) summaryParts.add('${added} added'.green);
-    if (modified > 0) summaryParts.add('${modified} modified'.yellow);
-    if (deleted > 0) summaryParts.add('${deleted} deleted'.red);
+    if (countedAdded > 0) summaryParts.add('${countedAdded} added'.green);
+    if (countedModified > 0) summaryParts.add('${countedModified} modified'.yellow);
+    if (countedDeleted > 0) summaryParts.add('${countedDeleted} deleted'.red);
+    
     final stalenessIcon = (daysOld > 7) ? '🔴' : (daysOld > 3 ? '🟡' : '🟢');
+    final staleLabelText = hoursOld < 24 
+        ? '${hoursOld}h ago' 
+        : '$daysOld days ago';
+
     print('  ${"Summary:".cyan} ${summaryParts.join(', ')}');
-    print('  ${"Stale:".magenta} $stalenessIcon ${"$daysOld days since last snapshot".yellow}');
+    print('  ${"Stale:".magenta} $stalenessIcon ${staleLabelText.yellow} ${"($targetTrackName)".grey}');
     print('  ${"Impact:".magenta} ${"~$sizeLabel for next push".yellow}');
     print('  ' + '─' * 45 + '\n');
   }
@@ -1630,7 +1876,7 @@ class PortableVcs {
     }
 
     print('\n🚀 ${" PROCEED TO DEEP SEARCH? ".black.onYellow}');
-    stdout.write(cleanQuery != null ? 'Search for content? (y/N): ' : 'Check legacy snapshots for files? (y/N): ');
+    if (!promptConfirm(cleanQuery != null ? 'Search for content?' : 'Check legacy snapshots for files?')) return;
     if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') return;
 
     final password = askPassword();
@@ -2130,6 +2376,25 @@ class PortableVcs {
     return null;
   }
 
+  bool promptConfirm(String message, {bool defaultYes = false}) {
+    final suffix = defaultYes ? '(Y/n)' : '(y/N)';
+    stdout.write('\n$message $suffix: ');
+
+    String input = '';
+    try {
+      input = stdin.readLineSync()?.trim().toLowerCase() ?? '';
+    } catch (_) {
+      print('\n⚠️ Interactive confirmation not supported in this terminal.');
+      return defaultYes;
+    }
+
+    if (input.isEmpty) {
+      return defaultYes;
+    }
+    
+    return input == 'y';
+  }
+
   Future<bool> _hasEnoughStorageSpace(Directory targetDir, int requiredBytes) async {
     try {
       final path = targetDir.absolute.path;
@@ -2286,6 +2551,7 @@ class PortableVcs {
           }
         } catch (_) {}
       }
+
       final changes = diffFingerprints(lastFingerprint, currentFingerprint);
 
       if (changes.isEmpty && trackData.logs.isNotEmpty && !amend) {
@@ -2321,8 +2587,7 @@ class PortableVcs {
         print('${added.toString().green} added, ${modified.toString().yellow} modified, ${deleted.toString().red} deleted.');
         print('${'Estimated size:'.padRight(15)} ${(result.bytes.length / 1024).toStringAsFixed(2)} KB');
         
-        stdout.write('\n${'Do you want to proceed?'.bold} (y/N): ');
-        if ((stdin.readLineSync()?.trim().toLowerCase() ?? 'n') != 'y') return;
+        if (!promptConfirm('Do you want to proceed?'.bold)) return;
       }
 
       String? parentId = amend ? (trackData.logs.length > 1 ? trackData.logs[1].id : trackData.originSnapshotId) : (trackData.logs.isNotEmpty ? trackData.logs.first.id : trackData.originSnapshotId);
@@ -3203,14 +3468,25 @@ class PortableVcs {
     String? snapshotId,
     bool verifyAll = false,
     bool deep = false,
+    Map<String, dynamic>? command,
+    List<String> args = const [],
   }) async {
     final context = await loadRepoContext();
     if (context == null) return;
 
+    final bool isJsonMode = command?['json'] == true || args.contains('--json') || args.contains('-j');
+
     if (deep && snapshotId == null) {
       snapshotId = context.remoteMeta.tracks[context.remoteMeta.activeTrack]?.logs.firstOrNull?.id;
       if (snapshotId == null) {
-        print('❌ No snapshots found to perform deep verification.');
+        if (isJsonMode) {
+          print(const JsonEncoder.withIndent('  ').convert({
+            'success': false,
+            'error': 'No snapshots found to perform deep verification.'
+          }));
+        } else {
+          print('❌ No snapshots found to perform deep verification.');
+        }
         return;
       }
     }
@@ -3218,17 +3494,24 @@ class PortableVcs {
     if (verifyAll) {
       final password = askPassword();
       if (password == null) return;
-      await _verifyAllSnapshots(context, password);
+      await _verifyAllSnapshots(context, password, isJsonMode: isJsonMode);
       return;
     }
 
     if (snapshotId == null || snapshotId.trim().isEmpty) {
-      print('❌ ${"Usage: vcs verify <snapshot_id> [--all] [--deep]".red}');
+      if (isJsonMode) {
+        print(const JsonEncoder.withIndent('  ').convert({
+          'success': false,
+          'error': 'Usage: vcs verify <snapshot_id> [--all] [--deep]'
+        }));
+      } else {
+        print('❌ ${"Usage: vcs verify <snapshot_id> [--all] [--deep]".red}');
+      }
       return;
     }
 
     if (deep) {
-      await _verifyDeep(context, snapshotId);
+      await _verifyDeep(context, snapshotId, isJsonMode: isJsonMode);
     } else {
       final password = askPassword();
       if (password == null) return;
@@ -3243,14 +3526,32 @@ class PortableVcs {
 
       try {
         ZipDecoder().decodeBytes(snapshot.zipBytes, verify: true);
-        print('✅ ${"Snapshot $snapshotId is valid and decryptable.".green}');
+        if (isJsonMode) {
+          print(const JsonEncoder.withIndent('  ').convert({
+            'success': true,
+            'snapshotId': snapshotId,
+            'status': 'valid',
+            'message': 'Snapshot $snapshotId is valid and decryptable.'
+          }));
+        } else {
+          print('✅ ${"Snapshot $snapshotId is valid and decryptable.".green}');
+        }
       } catch (e) {
-        print('❌ ${"Snapshot verification failed:".red} $e');
+        if (isJsonMode) {
+          print(const JsonEncoder.withIndent('  ').convert({
+            'success': false,
+            'snapshotId': snapshotId,
+            'status': 'invalid',
+            'error': e.toString()
+          }));
+        } else {
+          print('❌ ${"Snapshot verification failed:".red} $e');
+        }
       }
     }
   }
 
-  Future<void> _verifyDeep(RepoContext context, String id) async {
+  Future<void> _verifyDeep(RepoContext context, String id, {bool isJsonMode = false}) async {
     final indexPath = p.normalize(
       p.join(context.remoteRepoDir.path, 'index', '$id.json')
     );
@@ -3258,13 +3559,24 @@ class PortableVcs {
     final indexFile = File(indexPath);
 
     if (!indexFile.existsSync()) {
-      print('ℹ️  ${"Note:".blue} Snapshot $id was created with a legacy version (no delta-index).');
-      print('    Looked in: ${indexFile.path.grey}');
+      if (isJsonMode) {
+        print(const JsonEncoder.withIndent('  ').convert({
+          'success': false,
+          'snapshotId': id,
+          'status': 'legacy',
+          'error': 'Snapshot was created with a legacy version (no delta-index).'
+        }));
+      } else {
+        print('ℹ️  ${"Note:".blue} Snapshot $id was created with a legacy version (no delta-index).');
+        print('    Looked in: ${indexFile.path.grey}');
+      }
       return;
     }
 
-    print('\n🔍 ${"Deep Verification:".cyan} Comparing live files against index ${id.yellow}');
-    print('─' * 60);
+    if (!isJsonMode) {
+      print('\n🔍 ${"Deep Verification:".cyan} Comparing live files against index ${id.yellow}');
+      print('─' * 60);
+    }
 
     try {
       final content = await indexFile.readAsString();
@@ -3273,13 +3585,23 @@ class PortableVcs {
       final Map<String, dynamic>? fingerprint = indexData['file_map'];
 
       if (fingerprint == null || fingerprint.isEmpty) {
-        print('⚠️  ${"Index found but file_map is empty.".yellow}');
+        if (isJsonMode) {
+          print(const JsonEncoder.withIndent('  ').convert({
+            'success': false,
+            'snapshotId': id,
+            'status': 'empty_index',
+            'error': 'Index found but file_map is empty.'
+          }));
+        } else {
+          print('⚠️  ${"Index found but file_map is empty.".yellow}');
+        }
         return;
       }
 
       int ok = 0;
       int modified = 0;
       int missing = 0;
+      List<Map<String, String>> discrepancies = [];
 
       for (var entry in fingerprint.entries) {
         final relativePath = entry.key;
@@ -3288,8 +3610,9 @@ class PortableVcs {
         final localFile = File(p.normalize(p.join(Directory.current.path, relativePath)));
 
         if (!localFile.existsSync()) {
-          print('  ${"Missing:".red} $relativePath');
+          if (!isJsonMode) print('  ${"Missing:".red} $relativePath');
           missing++;
+          discrepancies.add({'path': relativePath, 'status': 'missing'});
           continue;
         }
 
@@ -3299,47 +3622,73 @@ class PortableVcs {
           ok++;
         } else {
           modified++;
-          print('  ${"Modified:".yellow} $relativePath');
+          if (!isJsonMode) print('  ${"Modified:".yellow} $relativePath');
+          discrepancies.add({'path': relativePath, 'status': 'modified'});
         }
       }
 
-      print('─' * 60);
-      print('📊 ${"Deep Scan Result:".bold} $ok OK | $modified Modified | $missing Missing');
-
-      if (modified == 0 && missing == 0) {
-        print('\n✨ ${"Local files match the snapshot perfectly.".green.bold}');
+      if (isJsonMode) {
+        print(const JsonEncoder.withIndent('  ').convert({
+          'success': modified == 0 && missing == 0,
+          'snapshotId': id,
+          'summary': {
+            'ok': ok,
+            'modified': modified,
+            'missing': missing,
+            'totalFilesChecked': fingerprint.length,
+          },
+          'discrepancies': discrepancies,
+        }));
       } else {
-        print('\n⚠️ ${"Discrepancies found between disk and snapshot.".yellow}');
+        print('─' * 60);
+        print('📊 ${"Deep Scan Result:".bold} $ok OK | $modified Modified | $missing Missing');
+
+        if (modified == 0 && missing == 0) {
+          print('\n✨ ${"Local files match the snapshot perfectly.".green.bold}');
+        } else {
+          print('\n⚠️ ${"Discrepancies found between disk and snapshot.".yellow}');
+        }
       }
     } catch (e) {
-      print('❌ ${"Error during deep verification:".red} $e');
+      if (isJsonMode) {
+        print(const JsonEncoder.withIndent('  ').convert({
+          'success': false,
+          'snapshotId': id,
+          'error': e.toString(),
+        }));
+      } else {
+        print('❌ ${"Error during deep verification:".red} $e');
+      }
     }
   }
 
   Future<void> _verifyAllSnapshots(
     RepoContext context,
-    String password,
-  ) async {
+    String password, {
+    bool isJsonMode = false,
+  }) async {
     final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
     final snapshotsDir = Directory(p.join(context.remoteRepoDir.path, 'snapshots'));
     final indexDir = Directory(p.join(context.remoteRepoDir.path, 'index'));
 
-    print('\n🔍 ${"Verifying ${allLogs.length} snapshots...".cyan}');
-    print('═' * 60);
+    if (!isJsonMode) {
+      print('\n🔍 ${"Verifying ${allLogs.length} snapshots...".cyan}');
+      print('═' * 60);
+    }
 
     int valid = 0;
     int failed = 0;
     int legacy = 0;
 
     final expectedFiles = <String>{};
+    final List<Map<String, dynamic>> snapshotResults = [];
 
     for (final entry in allLogs) {
       expectedFiles.add(entry.fileName);
       
       final indexFile = File(p.normalize(p.join(indexDir.path, '${entry.id}.json')));
-
-      if (indexFile.existsSync()) {
-      } else {
+      bool hasIndex = indexFile.existsSync();
+      if (!hasIndex) {
         legacy++;
       }
 
@@ -3347,7 +3696,12 @@ class PortableVcs {
 
       if (!vcsFile.existsSync()) {
         failed++;
-        print('${"[MISSING]".red} ${entry.id.yellow}');
+        snapshotResults.add({
+          'id': entry.id,
+          'status': 'missing',
+          'hasIndex': hasIndex,
+        });
+        if (!isJsonMode) print('${"[MISSING]".red} ${entry.id.yellow}');
         continue;
       }
 
@@ -3358,11 +3712,24 @@ class PortableVcs {
         ZipDecoder().decodeBytes(snapshot.zipBytes, verify: true);
 
         valid++;
-        final suffix = indexFile.existsSync() ? "" : " (Legacy)".grey;
-        print('${"[OK]".green} ${entry.id.green}$suffix');
+        snapshotResults.add({
+          'id': entry.id,
+          'status': 'valid',
+          'hasIndex': hasIndex,
+        });
+        if (!isJsonMode) {
+          final suffix = hasIndex ? "" : " (Legacy)".grey;
+          print('${"[OK]".green} ${entry.id.green}$suffix');
+        }
       } catch (e) {
         failed++;
-        print('${"[FAIL]".red} ${entry.id.yellow} -> $e');
+        snapshotResults.add({
+          'id': entry.id,
+          'status': 'fail',
+          'error': e.toString(),
+          'hasIndex': hasIndex,
+        });
+        if (!isJsonMode) print('${"[FAIL]".red} ${entry.id.yellow} -> $e');
       }
     }
 
@@ -3390,37 +3757,55 @@ class PortableVcs {
       }
     }
 
-    print('═' * 60);
-    print('${"Snapshots checked:".yellow.padRight(20)} ${allLogs.length}');
-    print('${"Valid:".green.padRight(20)} $valid');
-    if (legacy > 0) print('${"Legacy (no index):".blue.padRight(20)} $legacy');
-    print('${"Failed:".red.padRight(20)} $failed');
-    print('${"Orphan files:".yellow.padRight(20)} ${orphanFiles.length}');
-
-    if (orphanFiles.isNotEmpty) {
-      print('\n🗂️ ${"Orphan files found:".yellow}');
-      for (final orphan in orphanFiles) {
-        print('  ${orphan.yellow}');
-      }
-    }
-
-    if (failed == 0) {
-      print('\n✅ ${"Repository verification complete.".green}');
+    if (isJsonMode) {
+      print(const JsonEncoder.withIndent('  ').convert({
+        'success': failed == 0,
+        'summary': {
+          'totalChecked': allLogs.length,
+          'valid': valid,
+          'legacy': legacy,
+          'failed': failed,
+          'orphanFilesCount': orphanFiles.length,
+        },
+        'snapshots': snapshotResults,
+        'orphanFiles': orphanFiles,
+      }));
     } else {
-      print('\n⚠️ ${"Repository verification completed with errors.".yellow}');
+      print('═' * 60);
+      print('${"Snapshots checked:".yellow.padRight(20)} ${allLogs.length}');
+      print('${"Valid:".green.padRight(20)} $valid');
+      if (legacy > 0) print('${"Legacy (no index):".blue.padRight(20)} $legacy');
+      print('${"Failed:".red.padRight(20)} $failed');
+      print('${"Orphan files:".yellow.padRight(20)} ${orphanFiles.length}');
+
+      if (orphanFiles.isNotEmpty) {
+        print('\n🗂️ ${"Orphan files found:".yellow}');
+        for (final orphan in orphanFiles) {
+          print('   ${orphan.yellow}');
+        }
+      }
+
+      if (failed == 0) {
+        print('\n✅ ${"Repository verification complete.".green}');
+      } else {
+        print('\n⚠️ ${"Repository verification completed with errors.".yellow}');
+      }
     }
   }
 
-  Future<void> doctor({bool rebuildMode = false, bool reindexMode = false}) async {
+  Future<void> doctor({bool rebuildMode = false, bool reindexMode = false, Map<String, dynamic>? command, List<String> args = const []}) async {
+    final bool isJsonMode = command?['json'] == true || args.contains('--json');
+    
     final stopwatch = Stopwatch()..start();
     final reporter = DoctorReporter();
     final reportTimestamp = DateTime.now().millisecondsSinceEpoch;
     final fileName = 'vcs_doctor_report_$reportTimestamp.md';
 
-    reporter.log('# 🛠️ VCS Diagnostic Report\n*Generated on: ${DateTime.now().toLocal()}*\n');
-
-    print('\n🔬 ${"Repository diagnostics".cyan}');
-    print('═' * 60);
+    if (!isJsonMode) {
+      reporter.log('# 🛠️ VCS Diagnostic Report\n*Generated on: ${DateTime.now().toLocal()}*\n');
+      print('\n🔬 ${"Repository diagnostics".cyan}');
+      print('═' * 60);
+    }
 
     bool isJsonClean(List<int> bytes) {
       if (bytes.isEmpty) return false;
@@ -3433,13 +3818,35 @@ class PortableVcs {
     var warnCount = 0;
     var corruptCount = 0;
 
+    final jsonDiagnostics = <String, dynamic>{
+      'checks': <Map<String, dynamic>>[],
+      'summary': {},
+    };
+
     String stripAnsi(String input) {
       return input.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '');
     }
 
-    void check(bool ok, String label, {String? details, bool isInfo = false}) {
+    void recordCheck(bool ok, String label, {String? details, bool isInfo = false}) {
       final cleanLabel = stripAnsi(label);
       final cleanDetails = details != null ? stripAnsi(details) : null;
+
+      String status = 'ok';
+      if (!ok) {
+        if (isInfo) {
+          status = 'info';
+        } else {
+          status = 'warning';
+        }
+      }
+
+      jsonDiagnostics['checks'].add({
+        'label': cleanLabel,
+        'status': status,
+        'details': cleanDetails,
+      });
+
+      if (isJsonMode) return;
 
       if (ok) {
         okCount++;
@@ -3460,24 +3867,29 @@ class PortableVcs {
       }
     }
 
-    print('\n${"Local project".yellow}');
-    print('─' * 60);
+    if (!isJsonMode) print('\n${"Local project".yellow}');
+    if (!isJsonMode) print('─' * 60);
+    
     final localInitialized = _localRepoFile.existsSync();
-    check(localInitialized, 'Local repository metadata', 
+    recordCheck(localInitialized, 'Local repository metadata', 
         details: localInitialized ? _localRepoFile.path : 'Run "vcs init" to start.');
 
     final gitignoreExists = _gitignoreFile.existsSync();
-    check(gitignoreExists, '.gitignore detected', 
+    recordCheck(gitignoreExists, '.gitignore detected', 
         details: gitignoreExists ? null : 'VCS will snapshot EVERYTHING without a .gitignore.');
 
     final usb = await findUsbDrive();
     if (usb == null) {
-      print('\n${"USB / Remote storage".red}');
-      print('─' * 60);
-      check(false, 'Drive availability', details: 'No drive with "$driveMarkerFile" found.');
+      if (!isJsonMode) {
+        print('\n${"USB / Remote storage".red}');
+        print('─' * 60);
+      }
+      recordCheck(false, 'Drive availability', details: 'No drive with "$driveMarkerFile" found.');
     } else {
-      print('\n${"Drive Identity".yellow}');
-      print('─' * 60);
+      if (!isJsonMode) {
+        print('\n${"Drive Identity".yellow}');
+        print('─' * 60);
+      }
       
       final markerFile = File(p.normalize(p.join(usb.path, driveMarkerFile)));
       try {
@@ -3489,35 +3901,40 @@ class PortableVcs {
         final provisionedAt = markerMap['provisionedAt'];
 
         if (provisionedBy != null && provisionedAt != null) {
-          check(true, 'VCS Marker valid', details: 'Linked to host: ${provisionedBy.cyan} (at $provisionedAt)');
+          recordCheck(true, 'VCS Marker valid', details: 'Linked to host: $provisionedBy (at $provisionedAt)');
         } else {
-          check(false, 'Legacy Marker detected', isInfo: true, details: 'This drive is v0.1. Run "vcs setup" to upgrade metadata.');
+          recordCheck(false, 'Legacy Marker detected', isInfo: true, details: 'This drive is v0.1. Run "vcs setup" to upgrade metadata.');
         }
       } catch (e) {
-        check(false, 'VCS Marker readable', details: 'Marker file is corrupt or unreadable.');
+        recordCheck(false, 'VCS Marker readable', details: 'Marker file is corrupt or unreadable.');
       }
 
       final reposDirPath = p.normalize(p.join(usb.path, remoteReposDir));
       final reposDir = Directory(reposDirPath);
-      check(reposDir.existsSync(), 'Vault directory structure', details: reposDir.path);
+      recordCheck(reposDir.existsSync(), 'Vault directory structure', details: reposDir.path);
 
       final aliasMgr = AliasManager(reposDir);
       try {
         await aliasMgr.loadAliases();
-        check(true, 'Alias System', details: 'Portable shortcuts are accessible.');
+        recordCheck(true, 'Alias System', details: 'Portable shortcuts are accessible.');
       } catch (e) {
-        check(false, 'Alias System', details: 'Error reading vcs_aliases.json');
+        recordCheck(false, 'Alias System', details: 'Error reading vcs_aliases.json');
       }
     }
 
     if (localInitialized && usb != null) {
-      print('\n${"Remote Repository Integrity".yellow}');
-      print('─' * 60);
+      if (!isJsonMode) {
+        print('\n${"Remote Repository Integrity".yellow}');
+        print('─' * 60);
+      }
 
       try {
         final context = await loadRepoContext();
         if (context == null) {
-          check(false, 'Repository Context', details: 'Could not load local or remote repository context.');
+          recordCheck(false, 'Repository Context', details: 'Could not load local or remote repository context.');
+          if (isJsonMode) {
+            print(const JsonEncoder.withIndent('  ').convert(jsonDiagnostics));
+          }
           return;
         }
 
@@ -3529,12 +3946,12 @@ class PortableVcs {
         if (metaFile.existsSync()) {
           final metaBytes = await metaFile.readAsBytes();
           final isClean = isJsonClean(metaBytes);
-          check(isClean, 'Metadata encoding health', 
+          recordCheck(isClean, 'Metadata encoding health', 
               details: isClean ? 'File structure is clean.' : '⚠️ Corruption detected: Invalid header or hidden characters found.');
         }
 
         if (!remoteRepoDir.existsSync()) {
-          check(false, 'Remote repository binding', details: 'Repo ID "$repoId" not found on this drive.');
+          recordCheck(false, 'Remote repository binding', details: 'Repo ID "$repoId" not found on this drive.');
         } else {
           final backupFile = File('${metaFile.path}.bak');
           final snapshotsDir = Directory(p.normalize(p.join(remoteRepoDir.path, 'snapshots')));
@@ -3546,7 +3963,7 @@ class PortableVcs {
 
           if (!metaFile.existsSync() || rebuildMode) {
             if (rebuildMode && snapshotsDir.existsSync()) {
-              print('  ${"🔧".magenta} Recovery Mode: Executing physical parser scanner...');
+              if (!isJsonMode) print('  ${"🔧".magenta} Recovery Mode: Executing physical parser scanner...');
               final files = snapshotsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.vcs'));
               Map<String, List<SnapshotLogEntry>> recoveredTracks = {};
 
@@ -3601,7 +4018,7 @@ class PortableVcs {
                 rebuildSuccess = true;
               }
             } else if (backupFile.existsSync()) {
-              print('  ${"🔧".magenta} Main metadata missing. Restoring from backup...');
+              if (!isJsonMode) print('  ${"🔧".magenta} Main metadata missing. Restoring from backup...');
               meta = RepoMeta.fromJson(jsonDecode(await backupFile.readAsString()));
               await metaFile.writeAsString(jsonEncode(meta), flush: true);
               restoredFromBackup = true;
@@ -3611,7 +4028,7 @@ class PortableVcs {
               meta = RepoMeta.fromJson(jsonDecode(await metaFile.readAsString()));
             } catch (e) {
               if (backupFile.existsSync()) {
-                print('  ${"🔧".magenta} Primary metadata corrupt. Rescuing from backup...');
+                if (!isJsonMode) print('  ${"🔧".magenta} Primary metadata corrupt. Rescuing from backup...');
                 meta = RepoMeta.fromJson(jsonDecode(await backupFile.readAsString()));
                 await metaFile.writeAsString(jsonEncode(meta), flush: true);
                 restoredFromBackup = true;
@@ -3620,12 +4037,12 @@ class PortableVcs {
           }
 
           if (meta == null) {
-            check(false, 'Metadata availability', details: 'Critical: Meta, backup and rebuild failed.');
+            recordCheck(false, 'Metadata availability', details: 'Critical: Meta, backup and rebuild failed.');
           } else {
             String metaLabel = 'Metadata healthy';
             if (rebuildSuccess) metaLabel = 'Metadata rebuilt from physical files';
             if (restoredFromBackup) metaLabel = 'Metadata restored from backup';
-            check(true, metaLabel, details: '${meta.tracks.length} tracks registered.');
+            recordCheck(true, metaLabel, details: '${meta.tracks.length} tracks registered.');
 
             final Map<String, String?> expectedHashes = {};
             final allLogIds = <String>{};
@@ -3641,7 +4058,7 @@ class PortableVcs {
               int verifiedCount = 0;
               snapshotsLackingIndex.clear();
 
-              print('  ${"⚙".cyan} Scanning snapshot blocks hashes...');
+              if (!isJsonMode) print('  ${"⚙".cyan} Scanning snapshot blocks hashes...');
               
               for (var file in snapshotsFiles) {
                 final name = p.basename(file.path);
@@ -3650,11 +4067,11 @@ class PortableVcs {
                 if (expectedHashes.containsKey(name)) {
                   final savedHash = expectedHashes[name];
                   if (savedHash != null) {
-                    stdout.write('.'.grey); 
+                    if (!isJsonMode) stdout.write('.'.grey); 
                     final currentHash = (await sha256.bind(file.openRead()).first).toString();
                     if (currentHash != savedHash) {
                       corruptCount++;
-                      print('\n  ${"❌".red} Integrity fail: ${name.grey} (Hash mismatch)');
+                      if (!isJsonMode) print('\n  ${"❌".red} Integrity fail: $name (Hash mismatch)');
                     } else {
                       verifiedCount++;
                     }
@@ -3667,13 +4084,13 @@ class PortableVcs {
                   }
                 }
               }
-              if (verifiedCount > 0) stdout.write('\n');
+              if (!isJsonMode && verifiedCount > 0) stdout.write('\n');
 
-              check(corruptCount == 0, 'Data Content Health', 
+              recordCheck(corruptCount == 0, 'Data Content Health', 
                   details: corruptCount > 0 ? 'Found $corruptCount corrupt files!' : 'Verified $verifiedCount snapshots securely.');
 
               if (snapshotsLackingIndex.isNotEmpty) {
-                if (reindexMode) {
+                if (reindexMode && !isJsonMode) {
                   final finalPassword = askPassword();
                   if (finalPassword == null || finalPassword.isEmpty) {
                     print('❌ ${"Reindexing Aborted:".red} Password required.');
@@ -3698,12 +4115,12 @@ class PortableVcs {
                       }
                     }));
                   }
-                  check(true, 'Fast-Diff Optimization', details: 'All missing delta indices regenerated.');
+                  recordCheck(true, 'Fast-Diff Optimization', details: 'All missing delta indices regenerated.');
                 } else {
-                  check(false, 'Fast-Diff Optimization', details: '${snapshotsLackingIndex.length} snapshots lack indices. Run "vcs doctor --reindex".');
+                  recordCheck(false, 'Fast-Diff Optimization', details: '${snapshotsLackingIndex.length} snapshots lack indices. Run "vcs doctor --reindex".');
                 }
               } else {
-                check(true, 'Fast-Diff Optimization', details: 'All snapshots have valid delta indices.');
+                recordCheck(true, 'Fast-Diff Optimization', details: 'All snapshots have valid delta indices.');
               }
 
               final List<File> indexFiles = indexDir.existsSync() ? indexDir.listSync().whereType<File>().toList() : [];
@@ -3720,23 +4137,41 @@ class PortableVcs {
               }
 
               if (orphans.isNotEmpty) {
-                check(false, 'Storage optimization', details: 'Found ${orphans.length} orphans. Run "vcs prune --garbage".');
+                recordCheck(false, 'Storage optimization', details: 'Found ${orphans.length} orphans. Run "vcs prune --garbage".');
               } else {
-                check(true, 'Storage optimized', details: 'No orphan files detected.');
+                recordCheck(true, 'Storage optimized', details: 'No orphan files detected.');
               }
             }
           }
         }
       } catch (e) {
-        check(false, 'Critical Diagnosis Error', details: e.toString());
+        recordCheck(false, 'Critical Diagnosis Error', details: e.toString());
       }
     }
 
-    print('\n${"Summary".yellow}');
-    print('─' * 60);
-    print('   ${"OK:".green} $okCount');
-    print('   ${"Warnings/Errors:".red} $warnCount');
-    
+    if (!isJsonMode) {
+      print('\n${"Summary".yellow}');
+      print('─' * 60);
+      print('   ${"OK:".green} $okCount');
+      print('   ${"Warnings/Errors:".red} $warnCount');
+    }
+
+    final int finalOkCount = jsonDiagnostics['checks'].where((c) => c['status'] == 'ok').length;
+    final int finalWarnCount = jsonDiagnostics['checks'].where((c) => c['status'] == 'warning').length;
+
+    jsonDiagnostics['summary'] = {
+      'okCount': isJsonMode ? finalOkCount : okCount,
+      'warnCount': isJsonMode ? finalWarnCount : warnCount,
+      'corruptCount': corruptCount,
+      'snapshotsLackingIndexCount': snapshotsLackingIndex.length,
+      'isHealthy': (isJsonMode ? finalWarnCount : warnCount) == 0,
+    };
+
+    if (isJsonMode) {
+      print(const JsonEncoder.withIndent('  ').convert(jsonDiagnostics));
+      return;
+    }
+
     reporter.log('\n---\n### 📊 Summary');
     reporter.log('- ✅ **Total OK:** $okCount');
     reporter.log('- ⚠️ **Total Issues:** $warnCount');
@@ -3751,10 +4186,10 @@ class PortableVcs {
       
       print('\n${"Next Steps:".magenta}');
       if (snapshotsLackingIndex.isNotEmpty) {
-        print('  ${'▶'.gray} Ejecuta ${'vcs doctor --reindex'.bold} para reparar los índices.');
+        print('   ${'▶'.gray} Ejecuta ${'vcs doctor --reindex'.bold} para reparar los índices.');
       }
       if (corruptCount > 0) {
-        print('  ${'▶'.gray} Revisa el log detallado: ${fileName.underline}');
+        print('   ${'▶'.gray} Revisa el log detallado: ${fileName.underline}');
       }
     }
 
@@ -3840,6 +4275,62 @@ class PortableVcs {
     await scanForOrphans(snapshotsDir, 'snapshots');
     await scanForOrphans(indexDir, 'index');
 
+    final totalLogs = context.remoteMeta.tracks.values.fold(0, (prev, t) => prev + t.logs.length);
+    final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
+    
+    double growthRate = 0.0;
+    if (totalLogs > 0) {
+      allLogs.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final firstDate = DateTime.parse(allLogs.first.createdAt);
+      final lastDate = DateTime.parse(allLogs.last.createdAt);
+      final diffDays = lastDate.difference(firstDate).inDays;
+      growthRate = diffDays > 0 ? totalLogs / diffDays : totalLogs.toDouble();
+    }
+
+    final bool isJsonMode = command?['json'] == true || args.contains('--json');
+
+    if (isJsonMode) {
+      final statsMap = {
+        'general': {
+          'projectName': context.remoteMeta.projectName,
+          'activeTrack': context.remoteMeta.activeTrack,
+          'formatVersion': context.remoteMeta.formatVersion,
+        },
+        'storage': {
+          'totalSnapshots': totalLogs,
+          'snapshotDataBytes': totalBytes,
+          'snapshotDataFormatted': _formatBytes(totalBytes),
+          'indexBytes': indexBytes,
+          'indexCount': indexCount,
+        },
+        'predictive': {
+          'avgItemSizeBytes': totalLogs > 0 ? totalBytes ~/ totalLogs : 0,
+          'growthRateSnapshotsPerDay': growthRate,
+          'metadataOverheadRatio': totalBytes > 0 ? (indexBytes / totalBytes) : 0.0,
+          'integrityCoveragePercent': totalLogs > 0 ? (verifiedWithHash / totalLogs) * 100 : 100.0,
+          'largestSnapshotId': largestId,
+          'largestSnapshotBytes': largestBytes,
+        },
+        'health': {
+          'orphanCount': orphanCount,
+          'orphanBytes': orphanBytes,
+          'isHealthy': orphanCount == 0,
+        },
+        'tracks': trackSizes.map((key, value) => MapEntry(key, {
+          'logsCount': context.remoteMeta.tracks[key]?.logs.length ?? 0,
+          'sizeBytes': value,
+        })),
+        'timeline': {
+          'lastActivity': allLogs.isNotEmpty ? allLogs.last.createdAt : null,
+          'vaultCreation': allLogs.isNotEmpty ? allLogs.first.createdAt : null,
+        },
+        'vaultLocation': context.remoteRepoDir.path,
+      };
+
+      print(const JsonEncoder.withIndent('  ').convert(statsMap));
+      return;
+    }
+
     print('\n📊 ${" REPOSITORY STATISTICS ".black.onCyan}');
     print('═' * 60);
 
@@ -3849,18 +4340,10 @@ class PortableVcs {
     print('${"Format Version:".yellow.padRight(22)} v${context.remoteMeta.formatVersion}');
 
     print('\n${"STORAGE SUMMARY".bold.cyan}');
-    final totalLogs = context.remoteMeta.tracks.values.fold(0, (prev, t) => prev + t.logs.length);
     print('${"Total Snapshots:".yellow.padRight(22)} ${totalLogs.toString().green}');
     print('${"Snapshot Data:".yellow.padRight(22)} ${_formatBytes(totalBytes).green}');
     
     if (totalLogs > 0) {
-      final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
-      allLogs.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      final firstDate = DateTime.parse(allLogs.first.createdAt);
-      final lastDate = DateTime.parse(allLogs.last.createdAt);
-      final diffDays = lastDate.difference(firstDate).inDays;
-      final growthRate = diffDays > 0 ? totalLogs / diffDays : totalLogs.toDouble();
-
       print('\n${"PREDICTIVE ANALYSIS".bold.cyan}');
       print('${"Avg. Item Size:".yellow.padRight(22)} ${_formatBytes(totalBytes ~/ totalLogs).white}');
       print('${"Growth Trend:".yellow.padRight(22)} ${growthRate.toStringAsFixed(2)} snapshots/day'.green);
@@ -3951,7 +4434,6 @@ class PortableVcs {
     }
 
     print('\n${"TIMELINE".bold.cyan}');
-    final allLogs = context.remoteMeta.tracks.values.expand((t) => t.logs).toList();
     if (allLogs.isNotEmpty) {
       allLogs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       print('${"Last Activity:".yellow.padRight(22)} ${_formatDateForList(allLogs.first.createdAt)}');
@@ -4244,7 +4726,7 @@ class PortableVcs {
     }
 
     print('\n${'⚠️  WARNING:'.red.bold} This will overwrite local files and delete those not present in the snapshot.');
-    stdout.write('Proceed with pull? (y/N): ');
+    if (!promptConfirm('Proceed with pull? (y/N): '.bold)) return;
     String? confirm = stdin.readLineSync()?.trim().toLowerCase();
 
     if (confirm != 'y' && confirm != 'yes') {
@@ -4459,7 +4941,7 @@ class PortableVcs {
     }
 
     print('\n${'⚠️  WARNING:'.red.bold} This will apply changes from snapshot $finalSnapshotId into your current workspace.');
-    stdout.write('Proceed with cherry-pick? (y/N): ');
+    if (!promptConfirm('Proceed with cherry-pick? (y/N): '.bold)) return;
     String? confirm = stdin.readLineSync()?.trim().toLowerCase();
 
     if (confirm != 'y' && confirm != 'yes') {
@@ -4615,7 +5097,7 @@ class PortableVcs {
 
     final dest = Directory(targetDir);
     if (dest.existsSync() && dest.listSync().isNotEmpty) {
-      stdout.write('⚠️ Target directory is not empty. Continue? (y/N): ');
+      if (!promptConfirm('⚠️ Target directory is not empty. Continue?')) return;
       if ((stdin.readLineSync() ?? '').trim().toLowerCase() != 'y') {
         print('Cancelled.');
         return;
@@ -4632,10 +5114,11 @@ class PortableVcs {
     if (context == null) return;
 
     print('\n⚠️  ${"WARNING:".red.bold} This will delete ALL snapshots from ALL tracks.');
-    stdout.write('Type the project name "${context.remoteMeta.projectName.green}" to confirm: ');
-    
-    if (stdin.readLineSync()?.trim() != context.remoteMeta.projectName) {
-      print('🚫 Confirmation failed. Aborting.');
+    final projectName = context.remoteMeta.projectName;
+    final input = promptText('Type the project name "${projectName.green}" to confirm:');
+
+    if (input != projectName) {
+      print('❌ Project name mismatch. Action cancelled.');
       return;
     }
 
@@ -6076,15 +6559,59 @@ class PortableVcs {
     await _copyTrackedFiles(_cwd, backupDir);
   }
 
+  bool _isProcessAlive(int pidToCheck) {
+    try {
+      if (Platform.isWindows) {
+        final result = Process.runSync(
+          'powershell',
+          ['-Command', 'if (Get-Process -Id $pidToCheck -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }'],
+        );
+        return result.exitCode == 0;
+      } else {
+        final result = Process.runSync('kill', ['-0', pidToCheck.toString()]);
+        return result.exitCode == 0;
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _withLock(Directory repoDir, Future<void> Function() action) async {
     final lockFile = File(p.join(repoDir.path, lockFileName));
+    
     if (lockFile.existsSync()) {
-      final age = DateTime.now().difference(lockFile.statSync().modified);
-      if (age.inMinutes < 30) {
+      bool isStale = false;
+      try {
+        final age = DateTime.now().difference(lockFile.statSync().modified);
+        
+        if (age.inMinutes > 3) {
+          isStale = true;
+        } else {
+          final content = await lockFile.readAsString();
+          final data = jsonDecode(content);
+          final int? lockedPid = data['pid'] is int ? data['pid'] : int.tryParse(data['pid']?.toString() ?? '');
+          
+          if (lockedPid != null) {
+            if (!_isProcessAlive(lockedPid)) {
+              print('⚠️ ${"Stale lock found (Associated process PID $lockedPid is dead). Removing orphan lock...".yellow}');
+              isStale = true;
+            } else {
+              isStale = false;
+            }
+          } else {
+            isStale = true;
+          }
+        }
+      } catch (_) {
+        isStale = true;
+      }
+
+      if (!isStale) {
         throw Exception('Active lock found. Another operation may be running.');
       } else {
-        print('⚠️ Stale lock found. Removing it.');
-        lockFile.deleteSync();
+        try {
+          lockFile.deleteSync();
+        } catch (_) {}
       }
     }
 
@@ -6100,7 +6627,9 @@ class PortableVcs {
       await action();
     } finally {
       if (lockFile.existsSync()) {
-        lockFile.deleteSync();
+        try {
+          lockFile.deleteSync();
+        } catch (_) {}
       }
     }
   }
@@ -6124,7 +6653,19 @@ class PortableVcs {
     }
 
     stdout.write('🔑 Project password: ');
-    final password = _readHiddenLine().trim();
+
+    String password = '';
+    
+    try {
+      password = _readHiddenLine().trim();
+    } catch (_) {
+      try {
+        password = (stdin.readLineSync() ?? '').trim();
+      } catch (_) {
+        password = '';
+      }
+    }
+
     stdout.writeln();
 
     if (password.isEmpty) {
@@ -6155,17 +6696,101 @@ class PortableVcs {
   }
 
   String _readHiddenLine() {
+    bool previousLineMode = true;
+    bool previousEchoMode = true;
+    
     try {
-      stdin.echoMode = false;
+      previousLineMode = stdin.lineMode;
+      previousEchoMode = stdin.echoMode;
+      
+      stdin.lineMode = false;
+      
+      final bool isModernTerminal = !Platform.isWindows || 
+                                    Platform.environment.containsKey('WT_SESSION') || 
+                                    Platform.environment.containsKey('TERM_PROGRAM');
+      if (isModernTerminal) {
+        stdin.echoMode = false;
+      }
     } catch (_) {}
-    
-    final line = stdin.readLineSync() ?? '';
+
+    final buffer = StringBuffer();
     
     try {
+      while (true) {
+        final charCode = stdin.readByteSync();
+        
+        if (charCode == -1 || charCode == 10 || charCode == 13) {
+          break;
+        }
+        
+        if (charCode == 8 || charCode == 127) {
+          if (buffer.isNotEmpty) {
+            String current = buffer.toString();
+            buffer.clear();
+            buffer.write(current.substring(0, current.length - 1));
+            stdout.write('\b \b');
+          }
+          continue;
+        }
+
+        buffer.write(String.fromCharCode(charCode));
+      }
+    } catch (_) {} finally {
+      try {
+        stdin.lineMode = previousLineMode;
+        stdin.echoMode = previousEchoMode;
+      } catch (_) {}
+    }
+
+    stdout.writeln();
+    return buffer.toString();
+  }
+
+  String promptText(String message) {
+    stdout.write('$message ');
+
+    bool previousLineMode = true;
+    bool previousEchoMode = true;
+
+    try {
+      previousLineMode = stdin.lineMode;
+      previousEchoMode = stdin.echoMode;
+      stdin.lineMode = false;
       stdin.echoMode = true;
     } catch (_) {}
-    
-    return line;
+
+    final buffer = StringBuffer();
+    try {
+      while (true) {
+        final charCode = stdin.readByteSync();
+        
+        if (charCode == -1 || charCode == 10 || charCode == 13) {
+          break;
+        }
+        
+        if (charCode == 8 || charCode == 127) {
+          if (buffer.isNotEmpty) {
+            String current = buffer.toString();
+            buffer.clear();
+            buffer.write(current.substring(0, current.length - 1));
+            stdout.write('\b \b');
+          }
+          continue;
+        }
+
+        final char = String.fromCharCode(charCode);
+        buffer.write(char);
+        stdout.write(char);
+      }
+    } catch (_) {} finally {
+      try {
+        stdin.lineMode = previousLineMode;
+        stdin.echoMode = previousEchoMode;
+      } catch (_) {}
+    }
+
+    stdout.writeln();
+    return buffer.toString().trim();
   }
 
   Future<void> gitPrepare({
@@ -6263,7 +6888,9 @@ class PortableVcs {
         print('If you publish now, the Git push will fail.');
         print('👉 ${"Recommendation:".bold} Run "git pull $remote $branch" before publishing.');
         
-        stdout.write('\nDo you want to ignore this and try anyway? (y/N): ');
+        if (!promptConfirm('\nDo you want to ignore this and try anyway? (y/N): ')) {
+          return;
+        }
         if ((stdin.readLineSync() ?? '').toLowerCase() != 'y') return;
         
       } else if (status == RemoteStatus.diverged) {
@@ -9395,8 +10022,14 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('setup')
     ..addCommand('init')
     ..addCommand('inspect', ArgParser())
+    ..addCommand('loc', ArgParser()
+      ..addOption('track', abbr: 't', help: 'Target a specific track for analysis.')
+      ..addOption('id', abbr: 'i', help: 'Analyze a specific snapshot ID instead of working tree.')
+      ..addFlag('json', abbr: 'j', help: 'Output loc info in JSON format')
+    )
     ..addCommand('status', ArgParser()
       ..addFlag('ignored', abbr: 'i', help: 'List all files currently bypassed by active exclusion structures.', negatable: false)
+      ..addFlag('json', abbr: 'j', help: 'Output status in JSON format.')
     )
     ..addCommand('export', ArgParser()
       ..addOption('to', abbr: 'o', help: 'The destination path for the exported .zip file.')
@@ -9465,11 +10098,12 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('list')
     ..addCommand('doctor', ArgParser()
       ..addFlag('rebuild', abbr: 'r', negatable: false, help: 'Physically scan the .vcs files to reconstruct the meta.json if it is lost.',)
-      ..addFlag('reindex', abbr: 'i', negatable: false, help: 'Retroactively regenerate missing Fast-Diff indices for legacy snapshots.',
-    )
+      ..addFlag('reindex', abbr: 'i', negatable: false, help: 'Retroactively regenerate missing Fast-Diff indices for legacy snapshots.',)
+      ..addFlag('json', abbr: 'j', negatable: false, help: 'Output doctor results in JSON format')
     )
     ..addCommand('stats', ArgParser()
       ..addFlag('charts', abbr: 'c', help: 'Show file distribution charts.', negatable: false)
+      ..addFlag('json', abbr: 'j', help: 'Output repository statistics in JSON format.', negatable: false)
     )
     ..addCommand('summary', ArgParser()
       ..addOption('track', abbr: 't', help: 'Get summary from a specific track')
@@ -9481,6 +10115,7 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('verify', ArgParser()
       ..addFlag('all', negatable: false, help: 'Verify all snapshots in the repository.')
       ..addFlag('deep', abbr: 'd', negatable: false, help: 'Deep check: compare live files vs delta-index.')
+      ..addFlag('json', abbr: 'j', help: 'Output veryfi info of the snapshot in JSON format.')
     )
     ..addCommand('bind')
     ..addCommand('diff', ArgParser(allowTrailingOptions: true)
@@ -9577,6 +10212,37 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       ..addOption('remote', defaultsTo: 'origin', abbr: 'r')
       ..addFlag('dry-run', negatable: false)
       ..addFlag('verify', defaultsTo: true, help: 'Run security hooks before publishing'),
+    )
+    ..addCommand('dot', ArgParser()
+      ..addOption('repo', abbr: 'r', help: 'Name of the dotfiles repository', defaultsTo: 'dotfiles')
+      ..addCommand('init', ArgParser()
+        ..addOption('name', abbr: 'n', help: 'Name for the dotfiles repository')
+        ..addOption('password', abbr: 'p', help: 'Vault password')
+      )
+      ..addCommand('add', ArgParser()
+        ..addOption('alias', abbr: 'a', help: 'Alias name for the dotfile (e.g. alacritty)')
+        ..addOption('path', abbr: 'f', help: 'Absolute path to the file or directory')
+        ..addOption('description', abbr: 'd', help: 'Optional description')
+        ..addOption('password', abbr: 'p', help: 'Vault password (optional)')
+      )
+      ..addCommand('push', ArgParser()
+        ..addOption('message', abbr: 'm', help: 'Commit message for the snapshot')
+        ..addOption('author', abbr: 'a', help: 'Author name')
+        ..addOption('password', abbr: 'p', help: 'Vault password')
+      )
+      ..addCommand('pull', ArgParser()
+        ..addOption('password', abbr: 'p', help: 'Vault password')
+      )
+      ..addCommand('list', ArgParser()
+        ..addOption('password', abbr: 'p', help: 'Vault password (optional)')
+      )
+      ..addCommand('status', ArgParser()
+        ..addOption('password', abbr: 'p', help: 'Vault password (optional)')
+      )
+      ..addCommand('log', ArgParser()
+        ..addOption('track', abbr: 't', help: 'Specific track name to view logs from')
+        ..addOption('password', abbr: 'p', help: 'Vault password (optional)')
+      )
     );
 
   if (args.isEmpty) {
@@ -9644,6 +10310,189 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'storage-check': await app.checkStorageHealth(); break;
       case 'benchmark': await app.runBenchmark(); break;
       case 'disk-usage': await app.diskUsage(context); break;
+
+      case 'dot':
+        final subCmd = command?.command;
+        if (subCmd == null) {
+          print('❌ ${"Usage:".red} vcs dot <init|add|push|pull|list|status|log> [options]');
+          break;
+        }
+
+        final usb = await app.findUsbDrive();
+        if (usb == null) {
+          print('❌ ${"No prepared USB drive found.".red}');
+          print('   ${"Please connect your vault drive or run".grey} ${"vcs setup".yellow}');
+          break;
+        }
+
+        final dotVaultDir = Directory(p.join(usb.path, 'dots'));        
+        final repoName = command!['repo']?.toString() ?? 'dotfiles';
+        final repoDir = Directory(p.join(dotVaultDir.path, repoName));
+        final pass = subCmd['password'] ?? app.currentWebPassword ?? '';
+
+        switch (subCmd.name) {
+          case 'init':
+            if (pass.isEmpty) {
+              print('❌ ${"Password required.".red} Use --password <pass>');
+              break;
+            }
+            try {
+              final info = await DotfilesService.initDotRepo(
+                vaultDir: dotVaultDir,
+                repoName: repoName,
+                password: pass,
+              );
+              print('✅ ${"Dotfiles repository initialized:".green} ${info.meta.projectName}');
+              print('💾 ${"Storage:".yellow} ${info.repoDir.path.grey}');
+            } catch (e) {
+              print('❌ ${"Error initializing dot repo:".red} $e');
+            }
+            break;
+
+          case 'add':
+            final alias = subCmd['alias']?.toString();
+            final path = subCmd['path']?.toString();
+            final desc = subCmd['description']?.toString();
+
+            if (alias == null || path == null) {
+              print('❌ ${"Usage:".red} vcs dot add --alias <name> --path <absolute-path>');
+            } else {
+              try {
+                await DotfilesService.addEntry(
+                  repoDir: repoDir,
+                  alias: alias,
+                  absolutePath: path,
+                  description: desc,
+                );
+                print('✅ Dotfile alias ${alias.green} registered and made portable successfully.');
+              } catch (e) {
+                print('❌ ${"Error adding dotfile:".red} $e');
+              }
+            }
+            break;
+
+          case 'push':
+            final message = subCmd['message']?.toString() ?? 'Update dotfiles snapshot';
+            final author = subCmd['author']?.toString() ?? 'User';
+
+            if (pass.isEmpty) {
+              print('❌ ${"Password required.".red} Use --password <pass>');
+            } else {
+              try {
+                await DotfilesService.pushDotRepo(
+                  repoDir: repoDir,
+                  password: pass,
+                  message: message,
+                  author: author,
+                );
+                print('✅ ${"Dotfiles snapshot created, encrypted, and pushed successfully.".green}');
+              } catch (e) {
+                print('❌ ${"Error pushing dotfiles:".red} $e');
+              }
+            }
+            break;
+
+          case 'pull':
+            if (pass.isEmpty) {
+              print('❌ ${"Password required.".red} Use --password <pass>');
+            } else {
+              try {
+                await DotfilesService.pullDotRepo(
+                  repoDir: repoDir,
+                  password: pass,
+                );
+                print('✅ ${"Dotfiles pulled and deployed to local system paths.".green}');
+              } catch (e) {
+                print('❌ ${"Error pulling dotfiles:".red} $e');
+              }
+            }
+            break;
+
+          case 'list':
+            try {
+              final contents = await DotfilesService.listContents(repoDir);
+              if (contents.isEmpty) {
+                print('ℹ️ ${"No dotfiles registered in this repository.".yellow}');
+              } else {
+                print('📦 ${"Registered Dotfiles Contents:".green}\n');
+                contents.forEach((alias, data) {
+                  print('• Alias: ${alias.yellow}');
+                  print('  Path: ${data['portable_path']}');
+                  print('  Absolute: ${data['absolute_path'].toString().grey}');
+                  print('  Type: ${data['is_directory'] == true ? 'Directory' : 'File'}');
+                  if (data['description'] != null) {
+                    print('  Description: ${data['description']}');
+                  }
+                  print('');
+                });
+              }
+            } catch (e) {
+              print('❌ ${"Error listing dotfiles contents:".red} $e');
+            }
+            break;
+
+          case 'status':
+            try {
+              final status = await DotfilesService.statusDotRepo(repoDir);
+              print('📊 ${"Dotfile Repository Status:".green}');
+              print('  Project: ${status['project_name'].toString().yellow}');
+              print('  Active Track: ${status['active_track']}');
+              print('  Total Entries: ${status['total_entries']}\n');
+              
+              final entries = status['entries'] as List;
+              if (entries.isEmpty) {
+                print('  ${"No entries found.".grey}');
+              } else {
+                for (var entry in entries) {
+                  final exists = entry['exists_locally'] == true;
+                  final statusIcon = exists ? '🟢'.green : '🔴'.red;
+                  print('  $statusIcon [${entry['alias']}]');
+                  print('      Path: ${entry['path']}');
+                  print('      Local Exists: ${exists ? 'Yes' : 'No'}');
+                }
+              }
+            } catch (e) {
+              print('❌ ${"Error getting dot repo status:".red} $e');
+            }
+            break;
+
+          case 'log':
+            final trackName = subCmd['track']?.toString();
+            try {
+              final logs = await DotfilesService.getLog(repoDir, trackName: trackName);
+              if (logs.isEmpty) {
+                print('ℹ️ ${"No logs/snapshots found in this track.".yellow}');
+              } else {
+                print('📜 ${"Snapshot History (Logs):".green}\n');
+                for (var log in logs) {
+                  print('commit ${log.id.yellow}');
+                  print('Author: ${log.author}');
+                  print('Date:   ${log.timestamp}');
+                  print('Files:  ${log.fileCount}');
+                  print('\n    ${log.message}\n');
+                  print('----------------------------------------');
+                }
+              }
+            } catch (e) {
+              print('❌ ${"Error getting dot repo logs:".red} $e');
+            }
+            break;
+
+          default:
+            print('❌ Unknown dot command. Use <init|add|push|pull|list|status|log>');
+        }
+        break;
+
+      case 'loc':
+        final argResults = result.command;
+        final rest = argResults?.rest ?? [];
+        
+        final track = argResults?['track'] as String?;
+        final snapshotId = argResults?['id'] as String?;
+        final isJson = argResults?['json'] == true;
+        
+        await app.handleLoc(rest, track: track, snapshotId: snapshotId, isJson: isJson);
+        break;
 
       case 'cherry-pick':
         final subResult = result.command;
@@ -9777,7 +10626,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'status':
         final statusCommand = result.command;        
         final isIgnoredActive = statusCommand != null && statusCommand['ignored'] == true;
-        await app.status(showIgnored: isIgnoredActive); 
+        final statusOptions = statusCommand != null ? { for (var key in statusCommand.options) key : statusCommand[key] } : null;
+        
+        await app.status(
+          showIgnored: isIgnoredActive,
+          command: statusOptions,
+          args: args,
+        ); 
         break;
 
       case 'roadmap':
@@ -9863,10 +10718,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
       case 'doctor':
         final rebuild = result.command?['rebuild'] == true;
         final reindex = result.command?['reindex'] == true;
+        final doctorOptions = result.command != null ? { for (var key in result.command!.options) key : result.command![key] } : null;
         
         await app.doctor(
           rebuildMode: rebuild, 
           reindexMode: reindex,
+          command: doctorOptions,
+          args: args,
         );
         break;
 
@@ -9975,10 +10833,15 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
         break;
 
       case 'verify':
+        final verifyCommand = result.command;
+        final verifyOptions = verifyCommand != null ? { for (var key in verifyCommand.options) key : verifyCommand[key] } : null;
+
         await app.verify(
-            snapshotId: command!.rest.isNotEmpty ? command.rest.first : null,
-            verifyAll: command['all'] == true,
-            deep: command['deep'] == true,
+            snapshotId: verifyCommand != null && verifyCommand.rest.isNotEmpty ? verifyCommand.rest.first : null,
+            verifyAll: verifyCommand != null && verifyCommand['all'] == true,
+            deep: verifyCommand != null && verifyCommand['deep'] == true,
+            command: verifyOptions,
+            args: args,
         );
         break;
 
