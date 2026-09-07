@@ -1,5 +1,9 @@
 class VersionHistory {
   static const Map<String, String> updates = {
+    '0.4.9-Experimental.3': r'''
+  # Hot fix
+  Fix pull function
+''',
     '0.4.9-Experimental.2': r'''
   # 📊 METRICS, JSON SUPPORT, TERMINAL ROBUSTNESS & DOTFILES
 

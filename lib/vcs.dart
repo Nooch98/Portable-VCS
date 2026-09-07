@@ -49,7 +49,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.9-Experimental.2';
+const String vcsBaseVersion = '0.4.9-Experimental.3';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -4726,10 +4726,7 @@ class PortableVcs {
     }
 
     print('\n${'⚠️  WARNING:'.red.bold} This will overwrite local files and delete those not present in the snapshot.');
-    if (!promptConfirm('Proceed with pull? (y/N): '.bold)) return;
-    String? confirm = stdin.readLineSync()?.trim().toLowerCase();
-
-    if (confirm != 'y' && confirm != 'yes') {
+    if (!promptConfirm('Proceed with pull? (y/N): '.bold)) {
       print('🚫 Pull aborted.');
       return;
     }
