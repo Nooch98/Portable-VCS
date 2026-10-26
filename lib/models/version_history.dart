@@ -8,7 +8,7 @@ class VersionHistory {
 
   ## 🌐 GITHUB SYNC & SMART DIFF [[ TAG: FEATURES ]]
 
-  • **Precise Remote Synchronization**:
+  **Precise Remote Synchronization**:
     - **Purpose**: Prevent redundant uploads and ensure only actually modified files are synchronized with GitHub repositories.
     - Implemented a robust metadata-driven **Smart Diff** mechanism comparing local sizes and remote trees to eliminate false positives and CRLF cross-platform hashing mismatches.
     - **Authentication Requirement**: Requires a valid `GITHUB_TOKEN` environment variable configured in your system (supported on both Windows and Linux environments) to authorize API requests.
@@ -16,14 +16,14 @@ class VersionHistory {
 
   ## 🔒 SECURITY & ENCRYPTION [[ TAG: IMPROVEMENTS ]]
 
-  • **Advanced Cryptographic Standard**:
+  **Advanced Cryptographic Standard**:
     - Upgraded core vault encryption hardening to leverage a high-security standard utilizing **600,000 iterations**, substantially strengthening protection for sensitive payloads and credentials.
 
   ---
 
   ## 🛡️ CORE STABILITY [[ TAG: FIXES ]]
 
-  • **Initialization & VCS Reliability**:
+  **Initialization & VCS Reliability**:
     - Fixed repository and dotfile initialization flows (`init`) to ensure proper setup and metadata generation across components (`lib/models/repo_meta_dots.dart`, `lib/models/version_history.dart`).
     - Resolved synchronization edge cases across `lib/vcs.dart`, `release_service.dart`, and `snapshot_snadbox.dart`.
 ''',
