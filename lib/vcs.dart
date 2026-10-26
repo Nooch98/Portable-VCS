@@ -5541,36 +5541,28 @@ class PortableVcs {
         return;
       }
 
-      final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
-      if (!await metaFile.exists()) {
-        print('❌ Error: Repository metadata file (meta.json) not found in vault.');
-        return;
-      }
-
-      String remoteRepo;
-      String branch;
-      String resolvedAuthor = Platform.environment['USER'] ?? 
-                             Platform.environment['USERNAME'] ?? 
-                             'Anonymous VCS User';
-
-      final metaContent = await metaFile.readAsString();
-      final metaData = jsonDecode(metaContent) as Map<String, dynamic>;
-
-      final remoteConfig = metaData['remote_git'] as Map<String, dynamic>?;
-      if (remoteConfig == null || remoteConfig['repository'] == null) {
+      final ghConfigFile = File(p.join(context.remoteRepoDir.path, 'github_config.json'));
+      if (!await ghConfigFile.exists()) {
         print('❌ Error: No GitHub remote configured for this repository.');
         print('   Please configure it first using: vcs gh-config <owner/repo>');
         return;
       }
 
-      remoteRepo = remoteConfig['repository'] as String;
-      branch = (remoteConfig['branch'] as String?) ?? 'main';
+      final configContent = await ghConfigFile.readAsString();
+      final remoteConfig = jsonDecode(configContent) as Map<String, dynamic>;
 
-      if (remoteConfig['author'] != null) {
-        resolvedAuthor = remoteConfig['author'].toString();
-      } else if (metaData['author'] != null) {
-        resolvedAuthor = metaData['author'].toString();
+      final remoteRepo = remoteConfig['repository'] as String?;
+      if (remoteRepo == null || remoteRepo.isEmpty) {
+        print('❌ Error: Invalid GitHub repository configuration.');
+        return;
       }
+
+      final branch = (remoteConfig['branch'] as String?) ?? 'main';
+      
+      String resolvedAuthor = remoteConfig['author']?.toString() ?? 
+                              Platform.environment['USER'] ?? 
+                              Platform.environment['USERNAME'] ?? 
+                              'Anonymous VCS User';
 
       final token = await _resolveGitHubToken();
       if (token == null || token.isEmpty) {
@@ -5591,8 +5583,8 @@ class PortableVcs {
       print('\n🌐 GITHUB SYNC PREVIEW [Target: ${preview.owner}/${preview.repo} -> ${preview.branch}]');
       print('════════════════════════════════════════════════════════════');
       print('📋 Commit Details:');
-      print('   • Message:     $message');
-      print('   • Author:      $resolvedAuthor');
+      print('   • Message:    $message');
+      print('   • Author:     $resolvedAuthor');
       print('   • Remote HEAD: ${preview.currentHeadSha ?? 'None (New Branch)'}');
       print('────────────────────────────────────────────────────────────');
       print('📦 Files to Synchronize (${preview.changes.length} changes):');
@@ -5637,48 +5629,50 @@ class PortableVcs {
         return;
       }
 
-      final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
-      
-      if (!await metaFile.exists()) {
-        print('❌ ${"Error: Repository metadata file (meta.json) not found in vault.".red}');
-        return;
-      }
-
-      final metaContent = await metaFile.readAsString();
-      final metaData = jsonDecode(metaContent) as Map<String, dynamic>;
+      final ghConfigFile = File(p.join(context.remoteRepoDir.path, 'github_config.json'));
 
       if (restArgs.isEmpty) {
-        final remoteConfig = metaData['remote_git'] as Map<String, dynamic>?;
-        if (remoteConfig == null || remoteConfig.isEmpty) {
+        if (!await ghConfigFile.exists()) {
           print('ℹ️ ${"No GitHub remote configured for this repository.".grey}');
           print('   Usage: vcs gh-config <owner/repo> [--branch <name>] [--author <name>]');
-        } else {
-          print('\n🌐 ${"GitHub Remote Configuration:".bold.cyan}');
-          print('   • Repository: ${remoteConfig['repository'].toString().yellow}');
-          print('   • Branch:     ${remoteConfig['branch'] ?? 'main'}');
-          print('   • Author:     ${remoteConfig['author'] ?? metaData['author'] ?? 'System User'}');
+          return;
         }
+
+        final configContent = await ghConfigFile.readAsString();
+        final remoteConfig = jsonDecode(configContent) as Map<String, dynamic>;
+
+        print('\n🌐 ${"GitHub Remote Configuration:".bold.cyan}');
+        print('   • Repository: ${remoteConfig['repository'].toString().yellow}');
+        print('   • Branch:     ${remoteConfig['branch'] ?? 'main'}');
+        print('   • Author:     ${remoteConfig['author'] ?? 'System User'}');
         return;
       }
 
       final repoTarget = restArgs.first;
       final targetBranch = branchOption ?? 'main';
 
-      final existingRemote = metaData['remote_git'] as Map<String, dynamic>? ?? {};
-      existingRemote['repository'] = repoTarget;
-      existingRemote['branch'] = targetBranch;
-      if (authorOption != null) {
-        existingRemote['author'] = authorOption;
+      final Map<String, dynamic> remoteConfig = {};
+      if (await ghConfigFile.exists()) {
+        try {
+          final existing = jsonDecode(await ghConfigFile.readAsString()) as Map<String, dynamic>;
+          remoteConfig.addAll(existing);
+        } catch (_) {}
       }
-      existingRemote['updated_at'] = DateTime.now().toUtc().toIso8601String();
 
-      metaData['remote_git'] = existingRemote;
+      remoteConfig['repository'] = repoTarget;
+      remoteConfig['branch'] = targetBranch;
+      if (authorOption != null) {
+        remoteConfig['author'] = authorOption;
+      }
+      remoteConfig['updated_at'] = DateTime.now().toUtc().toIso8601String();
 
-      await metaFile.writeAsString(jsonEncode(metaData));
+      const encoder = JsonEncoder.withIndent('  ');
+      await ghConfigFile.writeAsString(encoder.convert(remoteConfig));
+      
       print('✨ ${"Successfully configured GitHub remote:".green} ${repoTarget.yellow} (Branch: ${targetBranch.cyan})');
 
     } catch (e) {
-      print('❌ ${"Error reading or updating repository metadata:".red} $e');
+      print('❌ ${"Error reading or updating GitHub configuration:".red} $e');
     }
   }
 
