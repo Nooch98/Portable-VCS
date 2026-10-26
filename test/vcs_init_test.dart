@@ -69,7 +69,7 @@ void main() {
 
       expect(localJson.containsKey('repo_id'), isTrue);
       expect(localJson['project_name'], equals('project'));
-      expect(localJson['format_version'], equals(1));
+      expect(localJson['format_version'], equals(2));
 
       final repoId = localJson['repo_id'] as String;
       expect(repoId.isNotEmpty, isTrue);
@@ -102,7 +102,7 @@ void main() {
 
       expect(remoteJson['repo_id'], equals(repoId));
       expect(remoteJson['project_name'], equals('project'));
-      expect(remoteJson['logs'], isEmpty);
+      expect(remoteJson['tracks']['main']['logs'], isEmpty);
     });
 
     test('init should not overwrite existing initialized repo', () async {
@@ -137,5 +137,10 @@ class PortableVcsTestable extends PortableVcs {
   @override
   Future<Directory?> findUsbDrive() async {
     return fakeUsb;
+  }
+
+  @override
+  bool confirmAction(String message) {
+    return true;
   }
 }

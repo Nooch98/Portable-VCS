@@ -16,23 +16,27 @@ $patterns = @(
 
 $totalFound = 0
 
+# Lista ampliada de basura y dependencias
 $excludeList = @(
     ".vcs", ".git", ".dart_tool", "node_modules", "build", 
     ".gradle", ".idea", ".vscode", "bin", "obj", "vendor",
     "debug", "release", "__pycache__", ".ipynb_checkpoints"
 )
 
+# Extensiones de archivos binarios/multimedia
 $excludeExt = @(".exe", ".zip", ".png", ".jpg", ".jpeg", ".gif", ".dll", ".pck", ".pdf", ".iso", ".bin")
 
 $files = Get-ChildItem -Recurse -File | Where-Object { 
     $path = $_.FullName
     $ext = $_.Extension.ToLower()
     
+    # Filtrar por carpetas prohibidas
     $isExcludedDir = $false
     foreach ($exclude in $excludeList) { 
         if ($path -like "*\$exclude\*") { $isExcludedDir = $true; break } 
     }
     
+    # Filtrar por extensiones
     $isBinary = $excludeExt -contains $ext
     
     !$isExcludedDir -and !$isBinary

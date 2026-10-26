@@ -39,10 +39,12 @@ class ReleaseService {
     final nonce = base64Decode(wrapper['nonce_b64']);
     final cipherText = base64Decode(wrapper['cipher_b64']);
     final mac = base64Decode(wrapper['mac_b64']);
+    
+    final int iterations = (wrapper['iterations'] as num?)?.toInt() ?? 120000;
 
     final algorithm = crypto_alg.Pbkdf2(
       macAlgorithm: crypto_alg.Hmac.sha256(),
-      iterations: 120000,
+      iterations: iterations,
       bits: 256,
     );
     final secretKey = await algorithm.deriveKeyFromPassword(password: password, nonce: salt);

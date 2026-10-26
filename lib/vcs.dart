@@ -39,6 +39,7 @@ import 'package:highlight/highlight.dart';
 import 'package:highlight/languages/all.dart';
 import 'package:vcs/services/cleanup_service.dart';
 import 'package:vcs/services/dotfiles_service.dart';
+import 'package:vcs/services/github_sync_service.dart';
 import 'package:vcs/services/history_parser.dart';
 import 'package:vcs/services/release_service.dart';
 import 'package:vcs/services/roadmap_manager.dart';
@@ -49,7 +50,7 @@ import 'package:vcs/utils/reporter.dart';
 
 enum LogViewMode { summary, standard, full}
 enum RemoteStatus { synced, ahead, behind, diverged, unknown }
-const String vcsBaseVersion = '0.4.9-Experimental.3';
+const String vcsBaseVersion = '0.5.0-Experimental.1';
 
 class PortableVcs {
   static const String driveMarkerFile = '.vcs_drive';
@@ -510,7 +511,7 @@ class PortableVcs {
     - `alias --set "name=cmd"` Create a shortcut (e.g., `alias -s "st=status"`).
     - `alias --rm <name>` Remove a specific alias from the storage.
 
-    ## 🐙 GIT INTEGRATION
+    ## 🐙 GIT & GITHUB INTEGRATION
     - `git-prepare [id|tag]` Prepare current Git repo from a snapshot.
     - `publish [id|tag]` Safe commit & push with remote conflict check.
       - `--branch <name>` Specify target branch for the push.
@@ -519,6 +520,10 @@ class PortableVcs {
     - `stash` Manage Git stash (save current Git changes):
       - `--pop` Restore and remove last stash.
       - `--list` Show all currently stashed changes.
+    - `gh-config <owner/repo>` Configure the GitHub remote repository target and branch.
+      - `--branch <name>` Specify the target branch (default: main).
+      - `--author <name>` Override the author name for the commit.
+    - `gh-push "message"` Generate preview and push changes directly to GitHub via Git Data API (Smart Diff).
 
     ## 🛠️ MAINTENANCE
     - `update` Download latest source from GitHub and recompile.
@@ -774,7 +779,7 @@ class PortableVcs {
       final status = isWritable ? 'READY'.green : 'READ-ONLY'.red;
       final type = markerExists ? ' [VCS DRIVE]'.cyan : ' [NEW]'.grey;
       
-      print('  ${"[$i]".green.bold} ${drive.path.white.padRight(20)} $status$type');
+      print('   ${"[$i]".green.bold} ${drive.path.white.padRight(20)} $status$type');
     }
     print('═' * 70);
 
@@ -807,18 +812,18 @@ class PortableVcs {
       return;
     }
 
+    bool shouldProceed = false;
     if (isUpgrade) {
       print('\n✨ ${"UPGRADE MODE:".black.onCyan} This drive already has a VCS marker.');
       print('Metadata will be updated to v0.3 (Host, Date, OS) without touching your repositories.');
-      if (!promptConfirm('Proceed with metadata upgrade? (y/N): '.bold)) return;
+      shouldProceed = promptConfirm('Proceed with metadata upgrade? (y/N): '.bold);
     } else {
       print('\n⚠️  ${"PROVISIONING MODE:".black.onYellow} You are about to prepare a new VCS drive.');
       print('This will create the marker and the ${remoteReposDir.cyan} directory.');
-      if (!promptConfirm('Confirm provisioning? (y/N): '.bold)) return;
+      shouldProceed = promptConfirm('Confirm provisioning? (y/N): '.bold);
     }
 
-    final confirm = stdin.readLineSync()?.toLowerCase();
-    if (confirm != 'y' && confirm != 'yes') {
+    if (!shouldProceed) {
       print('🚫 Operation cancelled.');
       return;
     }
@@ -883,50 +888,74 @@ class PortableVcs {
     }
 
     final Map<String, String> languageTemplates = {
-      'pubspec.yaml': '.dart_tool/\n.packages\n.pub-cache/\nbuild/\n*.exe\n*.zip',
-      'lib/main.dart': '.dart_tool/\n.packages\n.pub-cache/\nbuild/\n*.exe\n*.apk\n*.ipa',
-      'package.json': 'node_modules/\ndist/\nbuild/\n.env\n*.log\ncoverage/',
-      'requirements.txt': '__pycache__/\n*.pyc\n.venv/\nvenv/\n.env\n.pytest_cache/',
-      'pom.xml': 'target/\n.settings/\n.project\n.classpath\n.idea/',
-      'go.mod': 'bin/\nobj/\n*.exe\n*.test\n*.out',
-      'Cargo.toml': 'target/\ndebug/\nrelease/\n*.rs.bk',
-      'build.gradle': '.gradle/\nbuild/\n.settings/\n.project',
-      'composer.json': 'vendor/\n.env\n*.log',
-      'index.php': 'vendor/\nnode_modules/\n.env\n*.log',
-      'CMakeLists.txt': 'build/\n*.o\n*.a\n*.so\n*.out',
-      'Makefile': '*.o\n*.out\n*.exe\nbuild/',
-      'Gemfile': '.bundle/\nvendor/bundle/\nlog/\n*.log\n.env',
-      '*.csproj': 'bin/\nobj/\n*.user\n*.suo\n.vs/',
-      'docker-compose.yml': '.env\n*.log\ndata/\nvolumes/',
-      'Assets/': 'Library/\nTemp/\nObj/\nBuild/\nLogs/',
-      'pyproject.toml': '.venv/\n.pytest_cache/\n.tox/\nbuild/\ndist/',
-      'tsconfig.json': 'node_modules/\ndist/\nbuild/\n*.tsbuildinfo',
-      'podfile': 'Pods/\n*.framework\n*.xcworkspace/',
-      'app.json': '.expo/\n.next/\nout/\n.env',
-      '*.sql': '*.log\n*.dump\n*.sqlite\n*.sqlite-journal',
-      'nuxt.config.js': '.nuxt/\n.output/\n.env\nnode_modules/',
-      'next.config.js': '.next/\nout/\n.env*\n*.local\nnode_modules/\nbuild/',
-      'svelte.config.js': '.svelte-kit/\nbuild/\n.env\nnode_modules/',
-      'rust-toolchain': 'target/\n*.rs.bk\n*.log',
-      'mix.exs': '_build/\ndeps/\n.elixir_ls/\ncover/\n*.log',
-      'deno.json': 'target/\nvendor/\n.deno_cache/',
-      'vite.config.ts': 'node_modules/\ndist/\n.output/\n.env*',
-      'tailwind.config.js': 'node_modules/\n.cache/\n.output/',
-      'requirements-dev.txt': '.venv/\nvenv/\n__pycache__/\n.pytest_cache/\n.coverage',
+      'pubspec.yaml': '.dart_tool/\n.packages\n.pub-cache/\nbuild/\n.flutter-plugins\n.idea/\n.vscode/\n.DS_Store\n*.exe\n*.apk\n*.ipa\n*.zip',
+      'lib/main.dart': '.dart_tool/\n.packages\n.pub-cache/\nbuild/\n.idea/\n.vscode/\n.DS_Store\n*.exe\n*.apk\n*.ipa',
+      'package.json': 'node_modules/\ndist/\nbuild/\n.next/\n.env\n*.log\ncoverage/\n.idea/\n.vscode/\n.DS_Store',
+      'requirements.txt': '__pycache__/\n*.pyc\n.venv/\nvenv/\n.env\n.pytest_cache/\nbuild/\ndist/\n.idea/\n.vscode/\n.DS_Store',
+      'pom.xml': 'target/\n.settings/\n.project\n.classpath\n.idea/\n*.iml\n.DS_Store\n*.log',
+      'go.mod': 'bin/\nobj/\n*.exe\n*.test\n*.out\nvendor/\n.idea/\n.vscode/\n.DS_Store',
+      'Cargo.toml': 'target/\ndebug/\nrelease/\n*.rs.bk\nCargo.lock\n.idea/\n.vscode/\n.DS_Store',
+      'build.gradle': '.gradle/\nbuild/\n.settings/\n.project\n.idea/\n*.iml\n.vscode/\n.DS_Store',
+      'composer.json': 'vendor/\n.env\n*.log\n.idea/\n.vscode/\n.DS_Store',
+      'index.php': 'vendor/\nnode_modules/\n.env\n*.log\n.idea/\n.vscode/\n.DS_Store',
+      'CMakeLists.txt': 'build/\nCMakeCache.txt\nCMakeFiles/\n*.o\n*.a\n*.so\n*.out\n*.exe\n.idea/\n.vscode/',
+      'Makefile': '*.o\n*.out\n*.exe\nbuild/\nbin/\n.idea/\n.vscode/\n.DS_Store',
+      'Gemfile': '.bundle/\nvendor/bundle/\nlog/\n*.log\n.env\n.idea/\n.vscode/\n.DS_Store',
+      '*.csproj': 'bin/\nobj/\n*.user\n*.suo\n.vs/\n[Dd]ebug/\n[Rr]elease/',
+      'docker-compose.yml': '.env\n*.log\ndata/\nvolumes/\nsecrets/\n.idea/\n.vscode/',
+      'Assets/': 'Library/\nTemp/\nObj/\nBuild/\nLogs/\nUserSettings/\nobj/\n*.csproj',
+      'pyproject.toml': '.venv/\nvenv/\n__pycache__/\n.pytest_cache/\nbuild/\ndist/\n*.egg-info/\n.env',
+      'tsconfig.json': 'node_modules/\ndist/\nbuild/\n*.tsbuildinfo\n.env\n.idea/\n.vscode/',
+      'podfile': 'Pods/\n*.framework\n*.xcworkspace/\n.idea/\n.vscode/',
+      'app.json': '.expo/\n.next/\nout/\n.env\nnode_modules/\nbuild/',
+      '*.sql': '*.log\n*.dump\n*.sqlite\n*.sqlite-journal\n.idea/\n.vscode/',
+      'nuxt.config.js': '.nuxt/\n.output/\n.env\nnode_modules/\ndist/\n.idea/\n.vscode/',
+      'next.config.js': '.next/\nout/\n.env*\n*.local\nnode_modules/\nbuild/\n.idea/\n.vscode/',
+      'svelte.config.js': '.svelte-kit/\nbuild/\n.env\nnode_modules/\n.idea/\n.vscode/',
+      'rust-toolchain': 'target/\n*.rs.bk\n*.log\n.idea/\n.vscode/',
+      'mix.exs': '_build/\ndeps/\n.elixir_ls/\ncover/\n*.log\n.env',
+      'deno.json': 'target/\nvendor/\n.deno_cache/\n.env',
+      'vite.config.ts': 'node_modules/\ndist/\n.output/\n.env*\n.idea/\n.vscode/',
+      'tailwind.config.js': 'node_modules/\n.cache/\n.output/\n.env',
+      'requirements-dev.txt': '.venv/\nvenv/\n__pycache__/\n.pytest_cache/\n.coverage\n.env',
       'Jenkinsfile': '.jenkins/\nbuild/\n*.log\nnode_modules/',
-      'fastlane/Fastfile': 'fastlane/report.xml\nfastlane/screenshots/\nfastlane/test_output/\n*.log'
+      'fastlane/Fastfile': 'fastlane/report.xml\nfastlane/screenshots/\nfastlane/test_output/\n*.log\n.env'
     };
 
     final gitIgnoreFile = File(p.join(_cwd.path, '.gitignore'));
-    if (!gitIgnoreFile.existsSync()) {
+    if (gitIgnoreFile.existsSync()) {
+      print('ℹ️  ${".gitignore already exists. Skipping template check.".grey}');
+    } else {
       String? detectedTemplate;
       String? detectedLanguage;
 
       for (var entry in languageTemplates.entries) {
-        if (File(p.join(_cwd.path, entry.key)).existsSync()) {
-          detectedLanguage = entry.key;
-          detectedTemplate = entry.value;
-          break;
+        final key = entry.key;
+        
+        if (key.startsWith('*')) {
+          final extension = key.substring(1).toLowerCase();
+          try {
+            final matchFound = _cwd.listSync().any((f) => f is File && f.path.toLowerCase().endsWith(extension));
+            if (matchFound) {
+              detectedLanguage = key;
+              detectedTemplate = entry.value;
+              break;
+            }
+          } catch (_) {}
+        } else if (key.endsWith('/')) {
+          final targetPath = p.join(_cwd.path, key);
+          if (Directory(targetPath).existsSync()) {
+            detectedLanguage = key;
+            detectedTemplate = entry.value;
+            break;
+          }
+        } else {
+          final targetPath = p.join(_cwd.path, key);
+          if (File(targetPath).existsSync()) {
+            detectedLanguage = key;
+            detectedTemplate = entry.value;
+            break;
+          }
         }
       }
 
@@ -936,6 +965,12 @@ class PortableVcs {
           await gitIgnoreFile.writeAsString(detectedTemplate);
           print('✅ ${".gitignore created successfully.".green}');
           print('   ${"Files ignored:".grey} ${detectedTemplate.replaceAll('\n', ', ')}');
+        }
+      } else {
+        if (confirmAction('\nℹ️  No specific project template matched. Generate generic .gitignore (IDEs & OS files)?')) {
+          const genericTemplate = '.env\n*.log\n.idea/\n.vscode/\n.DS_Store\nThumbs.db';
+          await gitIgnoreFile.writeAsString(genericTemplate);
+          print('✅ ${"Generic .gitignore created successfully.".green}');
         }
       }
     }
@@ -4471,7 +4506,7 @@ class PortableVcs {
     final allReferencedFiles = allTrackLogs.map((e) => e.fileName).toSet();
 
     if (garbage) {
-      print('🔍 ${"Scanning for garbage files...".grey}');
+      print('🔍 ${"Scanning for garbage files across all tracks...".grey}');
       
       if (snapshotsDir.existsSync()) {
         final physicalFiles = snapshotsDir.listSync().whereType<File>();
@@ -4502,10 +4537,26 @@ class PortableVcs {
 
     if (snapshotId != null) {
       try {
-        final targetEntry = logs.firstWhere((e) => e.id == snapshotId);
-        toDeleteFromLogs.add(targetEntry);
+        SnapshotLogEntry? targetEntry;
+        try {
+          targetEntry = logs.firstWhere((e) => e.id == snapshotId);
+        } catch (_) {
+          for (final track in context.remoteMeta.tracks.values) {
+            try {
+              targetEntry = track.logs.firstWhere((e) => e.id == snapshotId);
+              break;
+            } catch (_) {}
+          }
+        }
+
+        if (targetEntry != null) {
+          toDeleteFromLogs.add(targetEntry);
+        } else {
+          print('❌ Snapshot ID $snapshotId not found in any track.');
+          return;
+        }
       } catch (_) {
-        print('❌ Snapshot ID $snapshotId not found in active track.');
+        print('❌ Snapshot ID $snapshotId could not be resolved.');
         return;
       }
     } else if (keep != null || olderThanDays != null) {
@@ -4541,14 +4592,14 @@ class PortableVcs {
     for (var entry in toDeleteFromLogs) {
       final snapshotFile = File(p.join(snapshotsDir.path, entry.fileName));
       if (snapshotFile.existsSync()) {
-        if (!toDeleteFiles.any((file) => file.path == snapshotFile.path)) {
+        if (!toDeleteFiles.any((f) => f.path == snapshotFile.path)) {
           toDeleteFiles.add(snapshotFile);
         }
       }
 
       final indexFile = File(p.join(indexDir.path, '${entry.id}.json'));
       if (indexFile.existsSync()) {
-        if (!toDeleteFiles.any((file) => file.path == indexFile.path)) {
+        if (!toDeleteFiles.any((f) => f.path == indexFile.path)) {
           toDeleteFiles.add(indexFile);
         }
       }
@@ -4556,6 +4607,75 @@ class PortableVcs {
 
     if (toDeleteFiles.isEmpty && toDeleteFromLogs.isEmpty && tagsToClean.isEmpty) {
       print('✨ ${"Everything is clean. Nothing to prune.".green}');
+      if (keep == null && olderThanDays == null && !garbage && snapshotId == null) {
+        int orphanFilesCount = 0;
+        int stagingFilesCount = 0;
+        int totalSnapshotsSize = 0;
+        int veryOldSnapshotsCount = 0;
+        
+        final now = DateTime.now().toUtc();
+
+        if (snapshotsDir.existsSync()) {
+          for (final f in snapshotsDir.listSync().whereType<File>()) {
+            totalSnapshotsSize += f.lengthSync();
+            final name = p.basename(f.path);
+            if (name.startsWith('.tmp_') || !allReferencedFiles.contains(name)) {
+              orphanFilesCount++;
+            }
+          }
+        }
+
+        if (indexDir.existsSync()) {
+          orphanFilesCount += indexDir.listSync().whereType<File>().where((f) {
+            final id = p.basenameWithoutExtension(f.path);
+            return !allReferencedIds.contains(id);
+          }).length;
+        }
+
+        final stagingDir = Directory(p.join(context.remoteRepoDir.path, '.staging'));
+        if (stagingDir.existsSync()) {
+          stagingFilesCount = stagingDir.listSync(recursive: true).whereType<File>().length;
+        }
+
+        for (final entry in logs) {
+          final created = DateTime.tryParse(entry.createdAt)?.toUtc();
+          if (created != null && now.difference(created).inDays > 60) {
+            veryOldSnapshotsCount++;
+          }
+        }
+
+        final sizeInMb = (totalSnapshotsSize / (1024 * 1024)).toStringAsFixed(2);
+
+        print('\n💡 ${"Vault Health & Smart Suggestions:".cyan.bold}');
+        
+        if (logs.length > 25) {
+          print('   • Active track contains ${logs.length} snapshots (Total weight: $sizeInMb MB).');
+          print('     ${'Diagnostic:'.bold} High snapshot count detected.');
+          print('     Suggestion: Run ${'vcs prune --keep 25'.yellow} to trim older history.\n');
+        } else {
+          print('   • Active track contains ${logs.length} snapshots ($sizeInMb MB - healthy state).');
+        }
+
+        if (veryOldSnapshotsCount > 0) {
+          print('   • Found $veryOldSnapshotsCount snapshot(s) older than 60 days.');
+          print('     ${'Diagnostic:'.bold} Historical snapshots accumulated over time.');
+          print('     Suggestion: Run ${'vcs prune --older-than 60'.yellow}\n');
+        }
+
+        if (orphanFilesCount > 0) {
+          print('   • Detected $orphanFilesCount orphaned or temporary file(s) in storage.');
+          print('     ${'Diagnostic:'.bold} Unreferenced blobs or incomplete transaction files found.');
+          print('     Suggestion: Run ${'vcs prune --garbage'.yellow}\n');
+        } else {
+          print('   • Storage index and physical blobs are fully synchronized (No garbage).');
+        }
+
+        if (stagingFilesCount > 0) {
+          print('   • Warning: $stagingFilesCount file(s) found inside the .staging buffer.');
+          print('     ${'Diagnostic:'.bold} Uncommitted staged files may consume space.');
+          print('     Suggestion: Review your staging area or complete a push.\n');
+        }
+      }
       return;
     }
 
@@ -4577,7 +4697,7 @@ class PortableVcs {
       updatedTags.removeWhere((name, id) => tagsToClean.contains(name) || toDeleteIds.contains(id));
 
       List<SnapshotLogEntry> repairedLogs = List.from(logs);
-      if (toDeleteFromLogs.isNotEmpty) {
+      if (toDeleteFromLogs.isNotEmpty && snapshotId == null) {
         final deadNodesParents = { for (var e in toDeleteFromLogs) e.id : e.parentId };
         repairedLogs = [];
         for (var entry in logs) {
@@ -4588,6 +4708,8 @@ class PortableVcs {
           }
           repairedLogs.add(entry.copyWith(parentId: currentParentId));
         }
+      } else if (snapshotId != null) {
+        repairedLogs.removeWhere((e) => e.id == snapshotId);
       }
 
       final updatedTracks = Map<String, TrackState>.from(context.remoteMeta.tracks);
@@ -5359,6 +5481,205 @@ class PortableVcs {
       return null;
     }
     return repos[index];
+  }
+
+  Future<String?> _resolveGitHubToken() async {
+    String? token = Platform.environment['GITHUB_TOKEN'];
+    if (token != null && token.isNotEmpty) {
+      return token.trim();
+    }
+
+    if (Platform.isWindows) {
+      try {
+        token = await _readWindowsRegistry(
+          r'HKCU\Environment', 
+          'GITHUB_TOKEN'
+        );
+        if (token != null && token.isNotEmpty) return token.trim();
+
+        token = await _readWindowsRegistry(
+          r'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 
+          'GITHUB_TOKEN'
+        );
+        if (token != null && token.isNotEmpty) return token.trim();
+      } catch (_) {
+        // if fails ignore silently
+      }
+    }
+
+    return null;
+  }
+
+  Future<String?> _readWindowsRegistry(String registryPath, String valueName) async {
+    final result = await Process.run('reg', ['query', registryPath, '/v', valueName]);
+    if (result.exitCode == 0) {
+      final output = result.stdout.toString();
+      final lines = output.split('\n');
+      for (var line in lines) {
+        if (line.contains(valueName)) {
+          final parts = line.trim().split(RegExp(r'\s+'));
+          if (parts.length >= 3) {
+            return parts.sublist(2).join(' ');
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> handleGhPushCommand(List<String> args, Directory currentDir) async {
+    if (args.isEmpty) {
+      print('❌ Error: Missing commit message. Usage: vcs gh-push "Your commit message"');
+      return;
+    }
+    final message = args.first;
+
+    try {
+      final context = await loadRepoContext();
+      if (context == null) {
+        print('❌ Error: Active repository context not found. Initialize or bind the repo first.');
+        return;
+      }
+
+      final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+      if (!await metaFile.exists()) {
+        print('❌ Error: Repository metadata file (meta.json) not found in vault.');
+        return;
+      }
+
+      String remoteRepo;
+      String branch;
+      String resolvedAuthor = Platform.environment['USER'] ?? 
+                             Platform.environment['USERNAME'] ?? 
+                             'Anonymous VCS User';
+
+      final metaContent = await metaFile.readAsString();
+      final metaData = jsonDecode(metaContent) as Map<String, dynamic>;
+
+      final remoteConfig = metaData['remote_git'] as Map<String, dynamic>?;
+      if (remoteConfig == null || remoteConfig['repository'] == null) {
+        print('❌ Error: No GitHub remote configured for this repository.');
+        print('   Please configure it first using: vcs gh-config <owner/repo>');
+        return;
+      }
+
+      remoteRepo = remoteConfig['repository'] as String;
+      branch = (remoteConfig['branch'] as String?) ?? 'main';
+
+      if (remoteConfig['author'] != null) {
+        resolvedAuthor = remoteConfig['author'].toString();
+      } else if (metaData['author'] != null) {
+        resolvedAuthor = metaData['author'].toString();
+      }
+
+      final token = await _resolveGitHubToken();
+      if (token == null || token.isEmpty) {
+        print('❌ Error: GITHUB_TOKEN is not configured.');
+        print('   Please set it in your environment variables or Windows user settings.');
+        return;
+      }
+
+      print('\n🌐 Connecting to GitHub to generate push preview ($remoteRepo @ $branch)...');
+      
+      final preview = await GitHubSyncService.previewPush(
+        repoOwnerAndName: remoteRepo,
+        branch: branch,
+        token: token,
+        projectDir: currentDir,
+      );
+
+      print('\n🌐 GITHUB SYNC PREVIEW [Target: ${preview.owner}/${preview.repo} -> ${preview.branch}]');
+      print('════════════════════════════════════════════════════════════');
+      print('📋 Commit Details:');
+      print('   • Message:     $message');
+      print('   • Author:      $resolvedAuthor');
+      print('   • Remote HEAD: ${preview.currentHeadSha ?? 'None (New Branch)'}');
+      print('────────────────────────────────────────────────────────────');
+      print('📦 Files to Synchronize (${preview.changes.length} changes):');
+      
+      for (var change in preview.changes) {
+        String symbol = '[+]';
+        if (change.status == 'modified') symbol = '[~]';
+        if (change.status == 'deleted') symbol = '[-]';
+        
+        print('   $symbol ${change.path} (${change.sizeBytes} bytes)');
+      }
+      
+      print('────────────────────────────────────────────────────────────');
+      print('⚠️  WARNING: You are about to push changes to remote repository.');
+      
+      stdout.write('\n❓ Do you want to proceed and execute this push to GitHub? (y/N): ');
+      final input = stdin.readLineSync()?.trim().toLowerCase();
+      
+      if (input != 'y' && input != 'yes') {
+        print('❌ Push cancelled safely by user.');
+        return;
+      }
+
+      print('\n🚀 Executing GitHub push...');
+      await GitHubSyncService.executePush(
+        preview: preview,
+        token: token,
+        message: message,
+        authorName: resolvedAuthor,
+      );
+
+    } catch (e) {
+      print('❌ Error during GitHub sync: $e');
+    }
+  }
+
+  Future<void> handleGhConfigCommand(List<String> restArgs, Directory currentDir, {String? branchOption, String? authorOption}) async {
+    try {
+      final context = await loadRepoContext();
+      if (context == null) {
+        print('❌ ${"Error: Active repository context not found. Initialize or bind the repo first.".red}');
+        return;
+      }
+
+      final metaFile = File(p.join(context.remoteRepoDir.path, 'meta.json'));
+      
+      if (!await metaFile.exists()) {
+        print('❌ ${"Error: Repository metadata file (meta.json) not found in vault.".red}');
+        return;
+      }
+
+      final metaContent = await metaFile.readAsString();
+      final metaData = jsonDecode(metaContent) as Map<String, dynamic>;
+
+      if (restArgs.isEmpty) {
+        final remoteConfig = metaData['remote_git'] as Map<String, dynamic>?;
+        if (remoteConfig == null || remoteConfig.isEmpty) {
+          print('ℹ️ ${"No GitHub remote configured for this repository.".grey}');
+          print('   Usage: vcs gh-config <owner/repo> [--branch <name>] [--author <name>]');
+        } else {
+          print('\n🌐 ${"GitHub Remote Configuration:".bold.cyan}');
+          print('   • Repository: ${remoteConfig['repository'].toString().yellow}');
+          print('   • Branch:     ${remoteConfig['branch'] ?? 'main'}');
+          print('   • Author:     ${remoteConfig['author'] ?? metaData['author'] ?? 'System User'}');
+        }
+        return;
+      }
+
+      final repoTarget = restArgs.first;
+      final targetBranch = branchOption ?? 'main';
+
+      final existingRemote = metaData['remote_git'] as Map<String, dynamic>? ?? {};
+      existingRemote['repository'] = repoTarget;
+      existingRemote['branch'] = targetBranch;
+      if (authorOption != null) {
+        existingRemote['author'] = authorOption;
+      }
+      existingRemote['updated_at'] = DateTime.now().toUtc().toIso8601String();
+
+      metaData['remote_git'] = existingRemote;
+
+      await metaFile.writeAsString(jsonEncode(metaData));
+      print('✨ ${"Successfully configured GitHub remote:".green} ${repoTarget.yellow} (Branch: ${targetBranch.cyan})');
+
+    } catch (e) {
+      print('❌ ${"Error reading or updating repository metadata:".red} $e');
+    }
   }
 
   Future<List<IgnoreRule>> _loadGitignoreRules() async {
@@ -6357,6 +6678,7 @@ class PortableVcs {
     String? parentId,
     Map<String, String>? fingerprint,
     String? author,
+    int iterations = 600000,
   }) async {
     final random = Random.secure();
     final salt = Uint8List.fromList(List<int>.generate(16, (_) => random.nextInt(256)));
@@ -6364,7 +6686,7 @@ class PortableVcs {
 
     final algorithm = crypto_alg.Pbkdf2(
       macAlgorithm: crypto_alg.Hmac.sha256(),
-      iterations: 120000,
+      iterations: iterations,
       bits: 256,
     );
     final secretKey = await algorithm.deriveKeyFromPassword(password: password, nonce: salt);
@@ -6385,7 +6707,7 @@ class PortableVcs {
     final wrapper = {
       'alg': 'AES-256-GCM',
       'kdf': 'PBKDF2-HMAC-SHA256',
-      'iterations': 120000,
+      'iterations': iterations,
       'salt_b64': base64Encode(salt),
       'nonce_b64': base64Encode(secretBox.nonce),
       'cipher_b64': base64Encode(secretBox.cipherText),
@@ -6465,7 +6787,8 @@ class PortableVcs {
       final nonce = base64Decode(raw['nonce_b64'] as String);
       final cipher = base64Decode(raw['cipher_b64'] as String);
       final mac = base64Decode(raw['mac_b64'] as String);
-      final iterations = raw['iterations'] as int;
+      
+      final int iterations = (raw['iterations'] as num?)?.toInt() ?? 120000;
 
       final algorithm = crypto_alg.Pbkdf2(
         macAlgorithm: crypto_alg.Hmac.sha256(),
@@ -10147,6 +10470,13 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
     ..addCommand('git-diff', ArgParser()
       ..addOption('branch', defaultsTo: 'main'),
     )
+    ..addCommand('gh-config', ArgParser()
+      ..addOption('branch', abbr: 'b', help: 'Set target branch (default: main)')
+      ..addOption('author', abbr: 'a', help: 'Set default author name for commits'),
+    )
+    ..addCommand('gh-push', ArgParser()
+      ..addFlag('force', negatable: false, help: 'Bypass interactive confirmation preview'),
+    )
     ..addCommand('track', ArgParser()
       ..addCommand('list')
       ..addCommand('current')
@@ -10478,6 +10808,22 @@ Future<void> runWithArgs(List<String> args, PortableVcs app, {String? password})
           default:
             print('❌ Unknown dot command. Use <init|add|push|pull|list|status|log>');
         }
+        break;
+
+      case 'gh-config':
+        final argResults = result.command;
+        final rest = argResults?.rest ?? [];
+        final branch = argResults?['branch'] as String?;
+        final author = argResults?['author'] as String?;
+            
+        await app.handleGhConfigCommand(rest, Directory.current, branchOption: branch, authorOption: author);
+        break;
+
+      case 'gh-push':
+        final argResults = result.command;
+        final rest = argResults?.rest ?? [];
+            
+        await app.handleGhPushCommand(rest, Directory.current);
         break;
 
       case 'loc':

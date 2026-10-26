@@ -15,7 +15,7 @@ class SnapshotSandbox {
 
     final fileMap = await IndexService.loadSnapshotIndex(remoteRepoDir, snapshotId);
     if (fileMap == null) {
-      throw Exception('No se pudo encontrar el índice para el snapshot: $snapshotId');
+      throw Exception('The index for the snapshot could not be found: $snapshotId');
     }
 
     final archive = ZipDecoder().decodeBytes(snapshot.zipBytes, verify: true);

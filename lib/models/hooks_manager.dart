@@ -433,8 +433,15 @@ class HookManager {
       }
     }
 
-    process.stdout.transform(utf8.decoder).listen((data) => handleOutput(data, isError: false));
-    process.stderr.transform(utf8.decoder).listen((data) => handleOutput(data, isError: true));
+    final permissiveDecoder = const Utf8Decoder(allowMalformed: true);
+
+    process.stdout
+        .transform(permissiveDecoder)
+        .listen((data) => handleOutput(data, isError: false));
+        
+    process.stderr
+        .transform(permissiveDecoder)
+        .listen((data) => handleOutput(data, isError: true));
 
     final exitCode = await process.exitCode;
     

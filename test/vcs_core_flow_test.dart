@@ -93,7 +93,7 @@ void main() {
       final metaJson =
           jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
 
-      final logs = metaJson['logs'] as List<dynamic>;
+      final logs = metaJson['tracks']['main']['logs'] as List<dynamic>;
 
       expect(logs.length, equals(1));
       expect(logs.first['message'], equals('Initial snapshot'));
@@ -245,6 +245,32 @@ class PortableVcsTestable extends PortableVcs {
     return injectedPassword;
   }
 
+  @override
+  bool confirmAction(String message) {
+    return true;
+  }
+
+  @override
+  Future<void> push(
+    String message, {
+    String? author,
+    String? track,
+    String? password,
+    String? overrideSourcePath,
+    bool skipConfirm = true,
+    bool amend = false,
+  }) {
+    return super.push(
+      message,
+      author: author,
+      track: track,
+      password: password,
+      overrideSourcePath: overrideSourcePath,
+      skipConfirm: skipConfirm,
+      amend: amend,
+    );
+  }
+
   // Helper method for testing status output
   Future<List<String>> debugStatusChanges() async {
     final changes = <String>[];
@@ -343,7 +369,7 @@ Future<String> latestSnapshotId(
   final metaJson =
       jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
 
-  final logs = metaJson['logs'] as List<dynamic>;
+  final logs = metaJson['tracks']['main']['logs'] as List<dynamic>;
 
   return logs.first['id'] as String;
 }

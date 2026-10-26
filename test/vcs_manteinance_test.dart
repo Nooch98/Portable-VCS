@@ -70,7 +70,7 @@ void main() {
 
       final repoId = await readRepoId(projectDir);
       final meta = await readRemoteMeta(fakeUsb, repoId);
-      final snapshotId = (meta['logs'] as List).first['id'] as String;
+      final snapshotId = (meta['tracks']['main']['logs'] as List).first['id'] as String;
 
       final context = await vcs.loadRepoContext();
       expect(context, isNotNull);
@@ -108,12 +108,12 @@ void main() {
 
       final repoId = await readRepoId(projectDir);
       var meta = await readRemoteMeta(fakeUsb, repoId);
-      expect((meta['logs'] as List).length, equals(3));
+      expect((meta['tracks']['main']['logs'] as List).length, equals(3));
 
       await vcs.prune(keep: 2);
 
       meta = await readRemoteMeta(fakeUsb, repoId);
-      final logs = meta['logs'] as List;
+      final logs = meta['tracks']['main']['logs'] as List;
 
       expect(logs.length, equals(2));
 
@@ -181,10 +181,10 @@ void main() {
 
       final repoId = await readRepoId(projectDir);
       final meta = await readRemoteMeta(fakeUsb, repoId);
-      final snapshotId = (meta['logs'] as List).first['id'] as String;
+      final snapshotId = (meta['tracks']['main']['logs'] as List).first['id'] as String;
 
       final okOutput = await capturePrints(() async {
-        await vcs.verify(snapshotId);
+        await vcs.verify(snapshotId: snapshotId);
       });
 
       expect(
@@ -200,7 +200,7 @@ void main() {
       Directory.current = projectDir.path;
 
       final badOutput = await capturePrints(() async {
-        await wrongPassVcs.verify(snapshotId);
+        await wrongPassVcs.verify(snapshotId: snapshotId);
       });
 
       expect(
@@ -220,10 +220,10 @@ void main() {
         await vcs.doctor();
       });
 
-      expect(output.any((l) => l.contains('Local repository metadata exists')), isTrue);
-      expect(output.any((l) => l.contains('Prepared USB drive available')), isTrue);
-      expect(output.any((l) => l.contains('Remote repository exists on USB')), isTrue);
-      expect(output.any((l) => l.contains('Repository has snapshots')), isTrue);
+      expect(output.any((l) => l.contains('Local repository metadata')), isTrue);
+      expect(output.any((l) => l.contains('Marker')), isTrue);
+      expect(output.any((l) => l.contains('Vault directory structure')), isTrue);
+      expect(output.any((l) => l.contains('Metadata healthy')), isTrue);
     });
 
     // =========================================================
@@ -240,11 +240,10 @@ void main() {
         await vcs.stats();
       });
 
-      expect(output.any((l) => l.contains('Project: project')), isTrue);
-      expect(output.any((l) => l.contains('Snapshot count: 2')), isTrue);
-      expect(output.any((l) => l.contains('Total snapshot size:')), isTrue);
-      expect(output.any((l) => l.contains('Newest snapshot:')), isTrue);
-      expect(output.any((l) => l.contains('Oldest snapshot:')), isTrue);
+      expect(output.any((l) => l.contains('Project Name:')), isTrue);
+      expect(output.any((l) => l.contains('Total Snapshots:')), isTrue);
+      expect(output.any((l) => l.contains('Snapshot Data:')), isTrue);
+      expect(output.any((l) => l.contains('Delta Indices:')), isTrue);
     });
   });
 }
@@ -272,6 +271,27 @@ class PortableVcsTestable extends PortableVcs {
   @override
   String? askPassword() {
     return injectedPassword;
+  }
+
+  @override
+  Future<void> push(
+    String message, {
+    String? author,
+    String? track,
+    String? password,
+    String? overrideSourcePath,
+    bool skipConfirm = true,
+    bool amend = false,
+  }) {
+    return super.push(
+      message,
+      author: author,
+      track: track,
+      password: password,
+      overrideSourcePath: overrideSourcePath,
+      skipConfirm: skipConfirm,
+      amend: amend,
+    );
   }
 
   // IMPORTANT:
